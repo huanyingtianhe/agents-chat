@@ -1,0 +1,24 @@
+{
+  "agents": [
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot CLI",
+      "command": "agency copilot",
+      "args": [
+        "--acp"
+      ],
+      "cwd": "Q:\\Repos\\EventStream-TSG",
+      "yolo": true
+    },
+    {
+      "id": "es-workload-ag",
+      "name": "ES-DEV",
+      "command": "agency copilot",
+      "args": [
+        "--acp"
+      ],
+      "cwd": "Q:\\Repos\\workload-eventstream",
+      "yolo": true
+    }
+  ]
+}

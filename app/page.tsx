@@ -124,7 +124,6 @@ type OrchestrationState = {
 const STORAGE_CHAT_MESSAGES = 'acp_chat_messages_v1';
 const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
-const STORAGE_CHAT_HISTORY = 'acp_chat_history_v1';
 const STORAGE_CURRENT_CHAT_ID = 'acp_chat_current_id_v1';
 const STORAGE_CHAT_PREFIX = 'acp_chat_data_';
 const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
@@ -372,7 +371,7 @@ export default function Page() {
   const [chatCounter, setChatCounter] = useState(1);
   const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
-  const [chatHistory, setChatHistory] = useState<{ id: string; name: string; ts: number; messages: ChatMessage[] }[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ id: string; name: string; ts: number; agentSessions?: Record<string, string> }[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [themeId, setThemeId] = useState<ThemeId>('aurora');
   const [showThemeMenu, setShowThemeMenu] = useState(false);
@@ -397,6 +396,7 @@ export default function Page() {
   const inputHistoryRef = useRef<string[]>([]);
   const inputHistoryIndexRef = useRef(-1);
   const inputDraftRef = useRef('');
+  const needsContextRestoreRef = useRef(false);
 
   /* ── Derived ── */
 
@@ -432,26 +432,61 @@ export default function Page() {
 
   useEffect(() => {
     setMounted(true);
-    const savedMessages = window.localStorage.getItem(STORAGE_CHAT_MESSAGES);
     const savedInput = window.localStorage.getItem(STORAGE_CHAT_INPUT);
     const savedCollapsed = window.localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
-    const savedHistory = window.localStorage.getItem(STORAGE_CHAT_HISTORY);
     const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
-    if (savedMessages) {
-      try {
-        const parsed = JSON.parse(savedMessages);
-        if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
-      } catch { /* ignore */ }
-    }
+
     if (savedInput) setInput(savedInput);
     if (savedCollapsed != null) setSidebarCollapsed(savedCollapsed === '1');
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) setChatHistory(parsed);
-      } catch { /* ignore */ }
-    }
     if (savedChatId) setCurrentChatId(savedChatId);
+
+    // If current chat is an imported shared chat, load from server
+    if (savedChatId && savedChatId.startsWith('shared-')) {
+      fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok && data.chat) {
+            setMessages(data.chat.messages || []);
+            setChatName(data.chat.name || savedChatId);
+            // No agent sessions — first send should include context
+            needsContextRestoreRef.current = true;
+          }
+        })
+        .catch(() => { /* ignore */ });
+    } else {
+      const savedMessages = window.localStorage.getItem(STORAGE_CHAT_MESSAGES);
+      if (savedMessages) {
+        try {
+          const parsed = JSON.parse(savedMessages);
+          if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
+        } catch { /* ignore */ }
+      }
+      // Resume agent sessions for current chat after server restart.
+      // Always set needsContextRestoreRef — if Copilot still has the session,
+      // the prompt works and chatHistory is ignored. If not, auto-recovery
+      // uses chatHistory to inject context.
+      if (savedChatId) {
+        needsContextRestoreRef.current = true;
+        fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.ok && data.chat) {
+              const sessions = data.chat.agentSessions || {};
+              for (const [agentId, sessionId] of Object.entries(sessions)) {
+                if (sessionId) {
+                  acp({ action: 'resume-session', agentId, sessionId }).catch(() => { /* ignore */ });
+                }
+              }
+            }
+          })
+          .catch(() => { /* ignore */ });
+      }
+    }
+
+    // Load chat history from server
+    fetch('/api/chats').then(r => r.json()).then(data => {
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+    }).catch(() => { /* ignore */ });
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
       if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || [];
@@ -547,7 +582,17 @@ export default function Page() {
     run.ptySendStarted = true;
     updateMessage(pendingId, { statusText: 'Connecting', pending: true, ptyPhase: 'loading-environment' });
 
-    const sendResult = await acp({ action: 'send', agentId, text: content });
+    // Include chat history only when session needs context restoration
+    // (after restart, imported chat, etc.)
+    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content };
+    if (needsContextRestoreRef.current) {
+      sendBody.chatHistory = messages
+        .filter(m => m.type === 'user' || m.type === 'agent')
+        .slice(-20)
+        .map(m => ({ type: m.type, content: m.content, agentId: (m as any).agentId }));
+      needsContextRestoreRef.current = false;
+    }
+    const sendResult = await acp(sendBody);
     const current = sessionRunsRef.current[runKey];
     if (!current) return false;
     current.ptyTurnId = sendResult?.turn?.id;
@@ -678,6 +723,8 @@ export default function Page() {
           });
           await acp({ action: 'turn-clear', agentId }).catch(() => null);
           finalizeRun(runKey);
+          // Auto-save chat to persist agent sessions after each turn
+          void saveCurrentChatToHistory();
           return;
         } else {
           const patch: Partial<ChatMessage> = {
@@ -807,14 +854,16 @@ export default function Page() {
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(hist)); } catch { /* ignore */ }
 
     try {
+      const effectiveMessage = message || text;
+
       if (!useOrchestration) {
-        await dispatchToAgent(agentIds[0], message || text, orchestrationId, 'worker');
+        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker');
         return;
       }
       if (orchestrationMode === 'discussion') {
-        await Promise.all(agentIds.map((id) => dispatchToAgent(id, message || text, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
+        await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
       } else {
-        await dispatchToAgent(agentIds[0], message || text, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
+        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
       }
     } catch (err) {
       setIsSending(false);
@@ -932,24 +981,53 @@ export default function Page() {
 
   /* ── New chat ── */
 
-  function saveCurrentChatToHistory() {
+  async function saveCurrentChatToHistory() {
     const userMsgs = messages.filter(m => m.type === 'user');
-    if (userMsgs.length === 0) return; // nothing to save
-    const firstUser = userMsgs[0];
-    const name = firstUser ? firstUser.content.slice(0, 50) : chatName;
+    const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : chatName;
     const persistable = messages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
 
-    setChatHistory(prev => {
-      // Update existing entry or prepend new
-      const existing = prev.find(c => c.id === currentChatId);
-      let updated: typeof prev;
-      if (existing) {
-        updated = prev.map(c => c.id === currentChatId ? { ...c, name, ts: Date.now(), messages: persistable } : c);
-      } else {
-        updated = [{ id: currentChatId, name, ts: Date.now(), messages: persistable }, ...prev];
+    // Get current agent session IDs from backend
+    let agentSessions: Record<string, string> = {};
+
+    // First check if the chat already has saved sessions
+    try {
+      const existing = await fetch(`/api/chats?id=${encodeURIComponent(currentChatId)}`).then(r => r.json());
+      if (existing.ok && existing.chat?.agentSessions && Object.keys(existing.chat.agentSessions).length > 0) {
+        agentSessions = existing.chat.agentSessions;
       }
-      try { window.localStorage.setItem(STORAGE_CHAT_HISTORY, JSON.stringify(updated)); } catch { /* ignore */ }
-      return updated;
+    } catch { /* ignore */ }
+
+    // Only fetch from backend memory if we have no saved sessions
+    if (Object.keys(agentSessions).length === 0) {
+      try {
+        const sessData = await acp({ action: 'get-sessions' });
+        if (sessData.ok && sessData.sessions) {
+          for (const [aid, sid] of Object.entries(sessData.sessions)) {
+            if (sid) agentSessions[aid] = sid as string;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    const chatData = { id: currentChatId, name, ts: Date.now(), messages: persistable, agentSessions };
+
+    // Save to server
+    try {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: chatData }),
+      });
+    } catch { /* ignore */ }
+
+    setChatHistory(prev => {
+      const existing = prev.find(c => c.id === currentChatId);
+      const entry = { id: currentChatId, name, ts: Date.now(), agentSessions };
+      if (existing) {
+        return prev.map(c => c.id === currentChatId ? entry : c);
+      } else {
+        return [entry, ...prev];
+      }
     });
   }
 
@@ -965,20 +1043,33 @@ export default function Page() {
     } catch { /* ignore */ }
   }
 
-  function loadChat(chatId: string) {
+  async function loadChat(chatId: string) {
     if (chatId === currentChatId) {
       setShowChatsPanel(false);
       return;
     }
 
     // Save current chat first
-    saveCurrentChatToHistory();
+    await saveCurrentChatToHistory();
 
-    const target = chatHistory.find(c => c.id === chatId);
-    if (!target) return;
+    // Load target chat from server
+    let targetMessages: ChatMessage[] = [];
+    let targetName = '';
+    let agentSessions: Record<string, string> = {};
+    try {
+      const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
+      const data = await res.json();
+      if (data.ok && data.chat) {
+        targetMessages = data.chat.messages || [];
+        targetName = data.chat.name || chatId;
+        agentSessions = data.chat.agentSessions || {};
+      }
+    } catch { /* ignore */ }
 
-    setMessages(target.messages);
-    setChatName(target.name);
+    if (targetMessages.length === 0) return;
+
+    setMessages(targetMessages);
+    setChatName(targetName);
     setCurrentChatId(chatId);
     setExpandedMessages({});
     setInput('');
@@ -987,10 +1078,25 @@ export default function Page() {
     orchestrationsRef.current = {};
 
     try {
-      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(target.messages));
+      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(targetMessages));
       window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, chatId);
       window.localStorage.removeItem(STORAGE_CHAT_INPUT);
     } catch { /* ignore */ }
+
+    // Resume agent sessions — Copilot persists sessions to disk,
+    // so they survive restarts. If a session is truly invalid,
+    // the backend will auto-recover on the next send.
+    const hasAnySessions = Object.values(agentSessions).some(s => !!s);
+    // Always set needsContextRestoreRef — if Copilot still has the session on disk,
+    // the prompt succeeds and chatHistory is unused. If not, auto-recovery uses it.
+    needsContextRestoreRef.current = true;
+    if (hasAnySessions) {
+      for (const [agentId, sessionId] of Object.entries(agentSessions)) {
+        if (sessionId) {
+          acp({ action: 'resume-session', agentId, sessionId }).catch(() => { /* ignore */ });
+        }
+      }
+    }
 
     setShowChatsPanel(false);
     setShowAgentsPanel(false);
@@ -998,7 +1104,7 @@ export default function Page() {
 
   async function createNewChat() {
     // Save current chat to history
-    saveCurrentChatToHistory();
+    await saveCurrentChatToHistory();
 
     const newCount = chatCounter + 1;
     const newName = `Chat ${newCount}`;
@@ -1011,6 +1117,17 @@ export default function Page() {
 
     try {
       window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, newId);
+    } catch { /* ignore */ }
+
+    // Register the new chat in history immediately so it persists
+    const newEntry = { id: newId, name: newName, ts: Date.now() };
+    setChatHistory(prev => [newEntry, ...prev]);
+    try {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
+      });
     } catch { /* ignore */ }
 
     const errors: string[] = [];
@@ -1034,6 +1151,28 @@ export default function Page() {
 
     setShowChatsPanel(false);
     setShowAgentsPanel(false);
+  }
+
+  async function shareCurrentChat(chatId: string) {
+    // Ensure latest messages are saved first
+    await saveCurrentChatToHistory();
+    try {
+      const res = await fetch('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId }),
+      });
+      const data = await res.json();
+      if (data.ok && data.url) {
+        const fullUrl = `${window.location.origin}${data.url}`;
+        await navigator.clipboard.writeText(fullUrl);
+        addMessage({ type: 'system', content: `🔗 Share link copied to clipboard: ${fullUrl}` });
+      } else {
+        addMessage({ type: 'system', content: `❌ Share failed: ${data.error || 'unknown error'}` });
+      }
+    } catch {
+      addMessage({ type: 'system', content: '❌ Failed to create share link' });
+    }
   }
 
   function selectMention(agentId: string) {
@@ -1104,30 +1243,37 @@ export default function Page() {
         {/* ── Left sidebar: chats ── */}
         <aside className={`participantsSidebar ${showChatsPanel ? 'mobilePanelVisible' : ''}`}>
           <div className="participantsHeader">
-            <span>Chats</span>
-            <button className="sidebarToggle" onClick={() => setSidebarCollapsed((p) => !p)}>
-              {sidebarCollapsed ? '→' : '←'}
-            </button>
+            <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed((p) => !p)}>
+              Chats
+            </span>
           </div>
           {!sidebarCollapsed && (
             <div className="participantsList">
               {isAdmin && <button className="newChatButton" onClick={() => void createNewChat()} disabled={isSending}>+ New Chat</button>}
-              <button className={`chatHistoryItem ${!chatHistory.some(c => c.id === currentChatId) ? 'active' : ''}`} onClick={() => { /* current chat - no-op */ }}>
-                <span className="chatHistoryIcon">💬</span>
-                <span className="chatHistoryText">
-                  <span className="chatHistoryName">{chatName}</span>
-                  <span className="chatHistoryMeta">{messages.filter((m) => m.type === 'user').length} messages</span>
-                </span>
-              </button>
-              {chatHistory.filter(c => c.id !== currentChatId).map((chat) => (
-                <button key={chat.id} className={`chatHistoryItem ${chat.id === currentChatId ? 'active' : ''}`} title={chat.name} onClick={() => loadChat(chat.id)}>
-                  <span className="chatHistoryIcon">📝</span>
-                  <span className="chatHistoryText">
-                    <span className="chatHistoryName">{chat.name}</span>
-                    <span className="chatHistoryMeta" suppressHydrationWarning>{mounted ? new Date(chat.ts).toLocaleDateString() : ''}</span>
-                  </span>
-                </button>
-              ))}
+              {(() => {
+                const allChats = chatHistory.some(c => c.id === currentChatId)
+                  ? chatHistory
+                  : [{ id: currentChatId, name: chatName, ts: Date.now() }, ...chatHistory];
+                return allChats.map((chat) => {
+                  const isActive = chat.id === currentChatId;
+                  return (
+                    <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
+                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isActive ? undefined : loadChat(chat.id)}>
+                        <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
+                        <span className="chatHistoryText">
+                          <span className="chatHistoryName">{isActive ? chatName : chat.name}</span>
+                          <span className="chatHistoryMeta" suppressHydrationWarning>
+                            {isActive
+                              ? `${messages.filter((m) => m.type === 'user').length} messages`
+                              : (mounted ? new Date(chat.ts).toLocaleDateString() : '')}
+                          </span>
+                        </span>
+                      </button>
+                      <button className="chatShareBtn" title="Share chat" onClick={(e) => { e.stopPropagation(); void shareCurrentChat(chat.id); }}>🔗</button>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
         </aside>
@@ -1640,6 +1786,7 @@ export default function Page() {
           padding: 16px 12px;
           min-height: 0;
           overflow-y: auto;
+          overflow-x: hidden;
         }
         .participantsHeader {
           color: var(--text);
@@ -1648,23 +1795,16 @@ export default function Page() {
           padding: 0 8px;
           display: flex;
           align-items: center;
-          justify-content: space-between;
           gap: 8px;
         }
-        .sidebarToggle {
+        .participantsHeaderLabel {
           cursor: pointer;
-          border: 1px solid var(--border);
-          background: var(--panel-soft);
-          color: var(--text-soft);
-          border-radius: 10px;
-          padding: 4px 8px;
-          font-size: 12px;
-          transition: all 160ms ease;
+          font-size: 13px;
+          user-select: none;
+          transition: color 160ms ease;
         }
-        .sidebarToggle:hover {
-          border-color: var(--border-strong);
-          color: var(--text);
-          background: var(--accent-soft);
+        .participantsHeaderLabel:hover {
+          color: var(--accent);
         }
         .participantsList {
           display: grid;
@@ -1718,6 +1858,36 @@ export default function Page() {
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
         .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .chatHistoryMeta { font-size: 11px; color: var(--muted); }
+        .chatHistoryRow {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+          border-radius: 14px;
+        }
+        .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
+        .chatHistoryRow.active { background: var(--panel-soft); border: 1px solid var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
+        .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
+        .chatShareBtn {
+          flex: 0 0 auto;
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--muted);
+          cursor: pointer;
+          font-size: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s ease;
+          margin-right: 2px;
+        }
+        .chatShareBtn:hover {
+          color: var(--accent);
+          background: var(--accent-soft);
+          border-color: var(--border);
+        }
         .agentsSidebar {
           border-left: 1px solid var(--border);
           background: var(--panel-bg);

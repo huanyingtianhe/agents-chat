@@ -2,4 +2,5 @@
 .env*.local
 node_modules/
 .next/
+.data/
 *.OPLOG.md

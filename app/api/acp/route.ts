@@ -577,7 +577,7 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
-function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string): TurnState {
+function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[]): TurnState {
   const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turn: TurnState = {
     id: turnId,
@@ -610,13 +610,55 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         sess.phase = 'idle';
       }
     })
-    .catch((err: Error) => {
-      if (!turn.done) {
-        turn.done = true;
-        turn.phase = 'done';
-        turn.error = err.message;
-        turn.statusText = err.message;
-        sess.phase = 'idle';
+    .catch(async (err: Error) => {
+      // If session/prompt fails, the session may be truly invalid — try to recover
+      const errMsg = err.message || '';
+      console.log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
+      try {
+        const mcpServers = await loadMcpServers(isAdmin);
+        const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+        sess.sessionId = session.sessionId;
+        console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
+
+        // Build context-aware prompt if chat history is available
+        let retryText = prompt;
+        if (chatHistory && chatHistory.length > 0) {
+          const recent = chatHistory.slice(-20);
+          const contextLines = recent.map(m => {
+            const role = m.type === 'user' ? 'User' : (m.agentId || 'Assistant');
+            return `${role}: ${m.content.slice(0, 500)}`;
+          }).join('\n');
+          retryText = `[Previous conversation context — the session was lost, please continue naturally based on this history]\n${contextLines}\n\n[Current message]\n${prompt}`;
+          console.log(`[ACP:${agentId}] Injected ${recent.length} messages as context for recovery`);
+        }
+
+        // Retry the prompt on the new session
+        turn.phase = 'thinking';
+        turn.statusText = 'Reconnected — retrying';
+        turn.events.push({ type: 'thinking', ts: Date.now(), text: '(Session recovered, retrying...)' });
+
+        const retryResult = await proc.rpc!.send('session/prompt', {
+          sessionId: sess.sessionId,
+          prompt: [{ type: 'text', text: retryText }],
+        });
+        const stopReason = retryResult?.stopReason ?? 'unknown';
+        const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
+        console.log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
+        if (!turn.done) {
+          turn.done = true;
+          turn.phase = 'done';
+          turn.statusText = '';
+          sess.phase = 'idle';
+        }
+      } catch (retryErr) {
+        // Recovery also failed — report original error
+        if (!turn.done) {
+          turn.done = true;
+          turn.phase = 'done';
+          turn.error = errMsg || (retryErr instanceof Error ? retryErr.message : String(retryErr));
+          turn.statusText = turn.error;
+          sess.phase = 'idle';
+        }
       }
     });
 
@@ -655,7 +697,9 @@ export async function POST(req: NextRequest) {
     // ─── Config endpoints (no agentId required) ───
 
     if (action === 'list-agents') {
-      const agents = await readAgentsConfig();
+      const allAgents = await readAgentsConfig();
+      const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
+      const agents = isAdminToken(token) ? allAgents : allAgents.filter(a => a.id === 'copilot');
       return NextResponse.json({ ok: true, agents });
     }
 
@@ -664,6 +708,18 @@ export async function POST(req: NextRequest) {
       const agent = await getAgentById(agentId);
       if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
       return NextResponse.json({ ok: true, agent });
+    }
+
+    if (action === 'get-sessions') {
+      // Return current session IDs for all agents for this user
+      const userId = String(body?.userId || 'anonymous');
+      const allAgents = await readAgentsConfig();
+      const sessionMap: Record<string, string | null> = {};
+      for (const agent of allAgents) {
+        const s = getUserSessions().get(userSessionKey(agent.id, userId));
+        sessionMap[agent.id] = s?.sessionId ?? null;
+      }
+      return NextResponse.json({ ok: true, sessions: sessionMap });
     }
 
     // ─── Admin-only actions ───
@@ -802,6 +858,7 @@ export async function POST(req: NextRequest) {
     if (action === 'send') {
       const text = String(body?.text ?? '');
       if (!text) return NextResponse.json({ ok: false, error: 'missing_text' }, { status: 400 });
+      const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
 
       if (!proc.ready) {
         if (!proc.booting) {
@@ -823,7 +880,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
 
-      const turn = sendPrompt(proc, sess, agentId, text);
+      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory);
       return NextResponse.json({ ok: true, phase: sess.phase, turn: serializeTurn(turn) });
     }
 
@@ -890,6 +947,39 @@ export async function POST(req: NextRequest) {
         const msg = err instanceof Error ? err.message : String(err);
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });
       }
+    }
+
+    if (action === 'resume-session') {
+      // Restore a previously saved sessionId. Just assign it to the in-memory session;
+      // the next session/prompt will use it. If Copilot still has it on disk, it works.
+      // If not, sendPrompt's auto-recovery will create a new session with chat history.
+      const savedSessionId = body?.sessionId as string | undefined;
+      if (!savedSessionId) {
+        return NextResponse.json({ ok: false, error: 'missing_sessionId' }, { status: 400 });
+      }
+      if (!proc.ready || !proc.rpc) {
+        // Agent not running — boot it first
+        if (!proc.booting) {
+          try {
+            await bootAgent(agentId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return NextResponse.json({ ok: false, error: msg }, { status: 503 });
+          }
+        } else {
+          const p = getBootPromises().get(agentId);
+          if (p) await p;
+        }
+      }
+      // Close current session if different
+      if (sess.sessionId && sess.sessionId !== savedSessionId && proc.rpc) {
+        try { await proc.rpc.send('session/close', { sessionId: sess.sessionId }); } catch { /* ignore */ }
+      }
+      sess.sessionId = savedSessionId;
+      sess.activeTurn = null;
+      sess.phase = 'idle';
+      console.log(`[ACP:${agentId}] Resumed session ${savedSessionId} for user ${userId}`);
+      return NextResponse.json({ ok: true, sessionId: savedSessionId });
     }
 
     return NextResponse.json({ ok: false, error: 'unsupported_action' }, { status: 400 });

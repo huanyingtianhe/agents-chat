@@ -1249,7 +1249,7 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && (
             <div className="participantsList">
-              {isAdmin && <button className="newChatButton" onClick={() => void createNewChat()} disabled={isSending}>+ New Chat</button>}
+              <button className="newChatButton" onClick={() => void createNewChat()} disabled={isSending}>+ New Chat</button>
               {(() => {
                 const allChats = chatHistory.some(c => c.id === currentChatId)
                   ? chatHistory

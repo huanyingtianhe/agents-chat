@@ -9,8 +9,11 @@ $AppId = "144243eb-8775-41e5-a57d-9bae004dbc7b"
 $DevTunnelName = "acp-chat"
 $DevTunnelUrl = "https://pghzvjm6-3000.asse.devtunnels.ms"
 
-Write-Host "Building..." -ForegroundColor Cyan
+Write-Host "[$ProjectDir] Cleaning .next cache..." -ForegroundColor Cyan
 Set-Location $ProjectDir
+Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue
+
+Write-Host "[$ProjectDir] Building..." -ForegroundColor Cyan
 npm run build
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed" -ForegroundColor Red; exit 1 }
 
@@ -79,6 +82,11 @@ if ($Cloudflare) {
         $lines | Set-Content $envFile
     }
 }
+
+# Kill any existing server on port 3000
+$oldPids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | Where-Object { $_ -ne 0 }
+foreach ($p in $oldPids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+if ($oldPids) { Write-Host "Killed old server on port 3000" -ForegroundColor Yellow; Start-Sleep -Seconds 1 }
 
 Write-Host "Starting Next.js server..." -ForegroundColor Cyan
 $server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden

@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
 import { getToken } from 'next-auth/jwt';
+import { updateChatAgentSession } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -577,7 +578,7 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
-function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[]): TurnState {
+function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string): TurnState {
   const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turn: TurnState = {
     id: turnId,
@@ -619,6 +620,11 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
         console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
+
+        // Persist the new sessionId to SQLite so chat history references stay current
+        if (chatId) {
+          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        }
 
         // Build context-aware prompt if chat history is available
         let retryText = prompt;
@@ -859,6 +865,7 @@ export async function POST(req: NextRequest) {
       const text = String(body?.text ?? '');
       if (!text) return NextResponse.json({ ok: false, error: 'missing_text' }, { status: 400 });
       const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
+      const chatId = body?.chatId as string | undefined;
 
       if (!proc.ready) {
         if (!proc.booting) {
@@ -880,7 +887,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
 
-      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory);
+      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId);
       return NextResponse.json({ ok: true, phase: sess.phase, turn: serializeTurn(turn) });
     }
 

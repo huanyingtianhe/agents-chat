@@ -584,7 +584,7 @@ export default function Page() {
 
     // Include chat history only when session needs context restoration
     // (after restart, imported chat, etc.)
-    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content };
+    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: currentChatId };
     if (needsContextRestoreRef.current) {
       sendBody.chatHistory = messages
         .filter(m => m.type === 'user' || m.type === 'agent')
@@ -1856,7 +1856,7 @@ export default function Page() {
         }
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; word-break: break-word; }
         .chatHistoryMeta { font-size: 11px; color: var(--muted); }
         .chatHistoryRow {
           display: flex;

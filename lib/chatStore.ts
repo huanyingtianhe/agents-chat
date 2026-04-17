@@ -123,6 +123,16 @@ export async function saveChat(userId: string, chat: StoredChat): Promise<void> 
   );
 }
 
+/** Update a single agent's sessionId in an existing chat. */
+export async function updateChatAgentSession(userId: string, chatId: string, agentId: string, sessionId: string): Promise<void> {
+  const db = getDb();
+  const row = db.prepare('SELECT agent_sessions FROM chats WHERE user_id = ? AND chat_id = ?').get(userId, chatId) as any;
+  if (!row) return;
+  const sessions = JSON.parse(row.agent_sessions || '{}');
+  sessions[agentId] = sessionId;
+  db.prepare('UPDATE chats SET agent_sessions = ? WHERE user_id = ? AND chat_id = ?').run(JSON.stringify(sessions), userId, chatId);
+}
+
 /** Delete a chat. */
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
   const db = getDb();

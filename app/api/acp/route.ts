@@ -307,6 +307,8 @@ type AgentProcess = {
   error: string | null;
   config: AgentConfig;
   cachedCwd: string;
+  supportsLoadSession: boolean;
+  knownSessions: Set<string>; // sessions active in agent memory (no need to session/load)
 };
 
 // Per-user per-agent: isolated session and turn state
@@ -354,6 +356,8 @@ function getAgentProcess(agentId: string, config: AgentConfig): AgentProcess {
       error: null,
       config,
       cachedCwd: config.cwd || process.cwd(),
+      supportsLoadSession: false,
+      knownSessions: new Set(),
     };
     procs.set(agentId, proc);
   }
@@ -434,6 +438,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       proc.rpc = null;
       proc.ready = false;
       proc.booting = false;
+      proc.knownSessions.clear();
       // Mark all user sessions for this agent as done
       for (const [key, sess] of getUserSessions()) {
         if (key.startsWith(`${agentId}:`)) {
@@ -524,7 +529,9 @@ async function doBootAgent(agentId: string): Promise<void> {
     };
 
     console.log(`[ACP:${agentId}] Initializing...`);
-    await rpc.send('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    const initResult = await rpc.send('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    proc.supportsLoadSession = !!initResult?.agentCapabilities?.loadSession;
+    console.log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
 
     // No longer create a session at boot — sessions are created per-user on first send
     proc.ready = true;
@@ -575,6 +582,7 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${mcpServers.length})...`);
   const result = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
   sess.sessionId = result.sessionId;
+  proc.knownSessions.add(result.sessionId);
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
@@ -619,6 +627,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         const mcpServers = await loadMcpServers(isAdmin);
         const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
+        proc.knownSessions.add(session.sessionId);
         console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
 
         // Persist the new sessionId to SQLite so chat history references stay current
@@ -928,9 +937,7 @@ export async function POST(req: NextRequest) {
 
     if (action === 'reset') {
       // Reset only this user's session, not the shared process
-      if (sess.sessionId && proc.rpc) {
-        try { await proc.rpc.send('session/close', { sessionId: sess.sessionId }); } catch { /* ignore */ }
-      }
+      // Note: ACP has no session/close method — sessions persist on the agent side
       getUserSessions().delete(userSessionKey(agentId, userId));
       return NextResponse.json({ ok: true });
     }
@@ -940,12 +947,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, skipped: true });
       }
       try {
-        if (sess.sessionId) {
-          try { await proc.rpc.send('session/close', { sessionId: sess.sessionId }); } catch { /* ignore */ }
-        }
+        // Note: ACP has no session/close — old session persists on the agent for future session/load
         const mcpServers = await loadMcpServers(isAdmin);
         const session = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
+        proc.knownSessions.add(session.sessionId);
         sess.activeTurn = null;
         sess.phase = 'idle';
         console.log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}`);
@@ -957,9 +963,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'resume-session') {
-      // Restore a previously saved sessionId. Just assign it to the in-memory session;
-      // the next session/prompt will use it. If Copilot still has it on disk, it works.
-      // If not, sendPrompt's auto-recovery will create a new session with chat history.
+      // Use session/load to restore a previously saved session from disk.
+      // If session/load fails (e.g. session expired or not on disk), fall back to session/new.
       const savedSessionId = body?.sessionId as string | undefined;
       if (!savedSessionId) {
         return NextResponse.json({ ok: false, error: 'missing_sessionId' }, { status: 400 });
@@ -978,19 +983,71 @@ export async function POST(req: NextRequest) {
           if (p) await p;
         }
       }
-      // Close current session if different
-      if (sess.sessionId && sess.sessionId !== savedSessionId && proc.rpc) {
-        try { await proc.rpc.send('session/close', { sessionId: sess.sessionId }); } catch { /* ignore */ }
+      if (!proc.ready || !proc.rpc) {
+        return NextResponse.json({ ok: false, error: 'Agent not ready after boot' }, { status: 503 });
       }
-      sess.sessionId = savedSessionId;
-      sess.activeTurn = null;
-      sess.phase = 'idle';
-      console.log(`[ACP:${agentId}] Resumed session ${savedSessionId} for user ${userId}`);
-      return NextResponse.json({ ok: true, sessionId: savedSessionId });
+      // Detach current session (ACP has no session/close — sessions persist for future session/load)
+      // If this session is known to be active in the agent, just switch to it
+      if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
+        sess.sessionId = savedSessionId;
+        sess.activeTurn = null;
+        sess.phase = 'idle';
+        console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
+        return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+      }
+      // Try session/load if the agent supports it
+      if (proc.supportsLoadSession) {
+        try {
+          const mcpServers = await loadMcpServers(isAdmin);
+          await proc.rpc!.send('session/load', { sessionId: savedSessionId, cwd: proc.cachedCwd, mcpServers });
+          sess.sessionId = savedSessionId;
+          sess.activeTurn = null;
+          sess.phase = 'idle';
+          proc.knownSessions.add(savedSessionId);
+          console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}`);
+          return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+        } catch (loadErr: any) {
+          // If session is already loaded, just reuse it
+          const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
+          let code = loadErr?.data?.code ?? loadErr?.code;
+          if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
+          const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
+          if (alreadyLoaded) {
+            sess.sessionId = savedSessionId;
+            sess.activeTurn = null;
+            sess.phase = 'idle';
+            proc.knownSessions.add(savedSessionId);
+            console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
+            return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+          }
+          console.log(`[ACP:${agentId}] session/load failed for ${savedSessionId}: ${errStr}, falling back to session/new`);
+        }
+      } else {
+        console.log(`[ACP:${agentId}] Agent does not support loadSession, falling back to session/new`);
+      }
+      // Fall back to creating a new session — the frontend will inject chat history on first turn
+      try {
+        const mcpServers = await loadMcpServers(isAdmin);
+        const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+        sess.sessionId = session.sessionId;
+        sess.activeTurn = null;
+        sess.phase = 'idle';
+        proc.knownSessions.add(session.sessionId);
+        // Update SQLite with the new sessionId
+        if (body?.chatId) {
+          updateChatAgentSession(userId, String(body.chatId), agentId, session.sessionId).catch(() => { /* ignore */ });
+        }
+        console.log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
+        return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
+      } catch (newErr) {
+        const msg = newErr instanceof Error ? newErr.message : String(newErr);
+        return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+      }
     }
 
     return NextResponse.json({ ok: false, error: 'unsupported_action' }, { status: 400 });
   } catch (error) {
+    console.error(`[ACP] POST error:`, error instanceof Error ? error.message : String(error));
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : String(error) },
       { status: 500 },

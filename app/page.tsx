@@ -345,7 +345,7 @@ async function acpApi(body: Record<string, unknown>) {
 /* ────────── Page Component ────────── */
 
 export default function Page() {
-  const { data: session } = useSession();
+  const { data: session, status: authStatus } = useSession();
   const isAdmin = (session?.user as any)?.role === 'admin';
   // Derive a stable userId for multi-user session isolation
   const userId = (session?.user as any)?.email || (session?.user as any)?.name || 'anonymous';
@@ -461,26 +461,7 @@ export default function Page() {
           if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
         } catch { /* ignore */ }
       }
-      // Resume agent sessions for current chat after server restart.
-      // Always set needsContextRestoreRef — if Copilot still has the session,
-      // the prompt works and chatHistory is ignored. If not, auto-recovery
-      // uses chatHistory to inject context.
-      if (savedChatId) {
-        needsContextRestoreRef.current = true;
-        fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
-          .then(r => r.json())
-          .then(data => {
-            if (data.ok && data.chat) {
-              const sessions = data.chat.agentSessions || {};
-              for (const [agentId, sessionId] of Object.entries(sessions)) {
-                if (sessionId) {
-                  acp({ action: 'resume-session', agentId, sessionId }).catch(() => { /* ignore */ });
-                }
-              }
-            }
-          })
-          .catch(() => { /* ignore */ });
-      }
+      // Resume agent sessions is handled in a separate effect that waits for auth
     }
 
     // Load chat history from server
@@ -514,6 +495,39 @@ export default function Page() {
     el.style.height = `${nextHeight}px`;
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }, [input]);
+
+  // Resume agent sessions once after auth state is determined
+  const sessionResumedRef = useRef(false);
+  useEffect(() => {
+    if (!mounted || authStatus === 'loading') return;
+    if (sessionResumedRef.current) return;
+    sessionResumedRef.current = true;
+    const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
+    if (!savedChatId) return;
+    needsContextRestoreRef.current = true;
+    fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
+      .then(r => r.json())
+      .then(async (data: any) => {
+        if (data.ok && data.chat) {
+          const sessions = data.chat.agentSessions || {};
+          const entries = Object.entries(sessions).filter(([, sid]) => !!sid);
+          if (entries.length > 0) {
+            const results = await Promise.allSettled(
+              entries.map(([agentId, sessionId]) =>
+                acp({ action: 'resume-session', agentId, sessionId, chatId: savedChatId })
+              )
+            );
+            const allLoaded = results.every(
+              r => r.status === 'fulfilled' && (r as any).value?.loaded === true
+            );
+            if (allLoaded) {
+              needsContextRestoreRef.current = false;
+            }
+          }
+        }
+      })
+      .catch(() => { /* ignore */ });
+  }, [mounted, authStatus, acp]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -986,28 +1000,14 @@ export default function Page() {
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : chatName;
     const persistable = messages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
 
-    // Get current agent session IDs from backend
+    // Get current agent session IDs from SQLite (each chat stores its own sessions)
     let agentSessions: Record<string, string> = {};
-
-    // First check if the chat already has saved sessions
     try {
       const existing = await fetch(`/api/chats?id=${encodeURIComponent(currentChatId)}`).then(r => r.json());
-      if (existing.ok && existing.chat?.agentSessions && Object.keys(existing.chat.agentSessions).length > 0) {
+      if (existing.ok && existing.chat?.agentSessions) {
         agentSessions = existing.chat.agentSessions;
       }
     } catch { /* ignore */ }
-
-    // Only fetch from backend memory if we have no saved sessions
-    if (Object.keys(agentSessions).length === 0) {
-      try {
-        const sessData = await acp({ action: 'get-sessions' });
-        if (sessData.ok && sessData.sessions) {
-          for (const [aid, sid] of Object.entries(sessData.sessions)) {
-            if (sid) agentSessions[aid] = sid as string;
-          }
-        }
-      } catch { /* ignore */ }
-    }
 
     const chatData = { id: currentChatId, name, ts: Date.now(), messages: persistable, agentSessions };
 
@@ -1083,18 +1083,25 @@ export default function Page() {
       window.localStorage.removeItem(STORAGE_CHAT_INPUT);
     } catch { /* ignore */ }
 
-    // Resume agent sessions — Copilot persists sessions to disk,
-    // so they survive restarts. If a session is truly invalid,
-    // the backend will auto-recover on the next send.
+    // Resume agent sessions via session/load. If session/load succeeds,
+    // no history injection is needed. If it fails and falls back to session/new,
+    // the first turn will inject chat history as context.
     const hasAnySessions = Object.values(agentSessions).some(s => !!s);
-    // Always set needsContextRestoreRef — if Copilot still has the session on disk,
-    // the prompt succeeds and chatHistory is unused. If not, auto-recovery uses it.
     needsContextRestoreRef.current = true;
     if (hasAnySessions) {
-      for (const [agentId, sessionId] of Object.entries(agentSessions)) {
-        if (sessionId) {
-          acp({ action: 'resume-session', agentId, sessionId }).catch(() => { /* ignore */ });
-        }
+      const resumeResults = await Promise.allSettled(
+        Object.entries(agentSessions)
+          .filter(([, sessionId]) => !!sessionId)
+          .map(([agentId, sessionId]) =>
+            acp({ action: 'resume-session', agentId, sessionId, chatId })
+          )
+      );
+      // If all sessions were successfully loaded via session/load, skip history injection
+      const allLoaded = resumeResults.every(
+        r => r.status === 'fulfilled' && r.value?.loaded === true
+      );
+      if (allLoaded) {
+        needsContextRestoreRef.current = false;
       }
     }
 
@@ -1108,7 +1115,8 @@ export default function Page() {
 
     const newCount = chatCounter + 1;
     const newName = `Chat ${newCount}`;
-    const newId = `chat-${newCount}`;
+    // Use timestamp-based ID to avoid collisions after reload
+    const newId = `chat-${Date.now()}-${newCount}`;
 
     clearChatMessages();
     setChatName(newName);
@@ -1121,7 +1129,10 @@ export default function Page() {
 
     // Register the new chat in history immediately so it persists
     const newEntry = { id: newId, name: newName, ts: Date.now() };
-    setChatHistory(prev => [newEntry, ...prev]);
+    setChatHistory(prev => {
+      if (prev.some(c => c.id === newId)) return prev;
+      return [newEntry, ...prev];
+    });
     try {
       await fetch('/api/chats', {
         method: 'POST',
@@ -1131,13 +1142,26 @@ export default function Page() {
     } catch { /* ignore */ }
 
     const errors: string[] = [];
+    const newAgentSessions: Record<string, string> = {};
     for (const agent of agents) {
       try {
         const data = await acp({ action: 'new-session', agentId: agent.id });
         if (!data.ok) errors.push(`${agent.id}: ${data.error || 'failed'}`);
+        else if (data.sessionId) newAgentSessions[agent.id] = data.sessionId;
       } catch (err) {
         errors.push(`${agent.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // Immediately save new session IDs to SQLite so each chat has its own sessions
+    if (Object.keys(newAgentSessions).length > 0) {
+      try {
+        await fetch('/api/chats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat: { id: newId, name: newName, ts: Date.now(), messages: [], agentSessions: newAgentSessions } }),
+        });
+      } catch { /* ignore */ }
     }
 
     sessionRunsRef.current = {};
@@ -1151,6 +1175,11 @@ export default function Page() {
 
     setShowChatsPanel(false);
     setShowAgentsPanel(false);
+
+    // Reload chat list from server to ensure old chats are visible
+    fetch('/api/chats').then(r => r.json()).then(data => {
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+    }).catch(() => { /* ignore */ });
   }
 
   async function shareCurrentChat(chatId: string) {
@@ -1173,6 +1202,14 @@ export default function Page() {
     } catch {
       addMessage({ type: 'system', content: '❌ Failed to create share link' });
     }
+  }
+
+  async function deleteChatById(chatId: string) {
+    if (chatId === currentChatId) return; // Can't delete active chat
+    try {
+      await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      setChatHistory(prev => prev.filter(c => c.id !== chatId));
+    } catch { /* ignore */ }
   }
 
   function selectMention(agentId: string) {
@@ -1254,7 +1291,10 @@ export default function Page() {
                 const allChats = chatHistory.some(c => c.id === currentChatId)
                   ? chatHistory
                   : [{ id: currentChatId, name: chatName, ts: Date.now() }, ...chatHistory];
-                return allChats.map((chat) => {
+                // Deduplicate by id (keep first occurrence)
+                const seen = new Set<string>();
+                const uniqueChats = allChats.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+                return uniqueChats.map((chat) => {
                   const isActive = chat.id === currentChatId;
                   return (
                     <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
@@ -1270,6 +1310,7 @@ export default function Page() {
                         </span>
                       </button>
                       <button className="chatShareBtn" title="Share chat" onClick={(e) => { e.stopPropagation(); void shareCurrentChat(chat.id); }}>🔗</button>
+                      {!isActive && <button className="chatDeleteBtn" title="Delete chat" onClick={(e) => { e.stopPropagation(); void deleteChatById(chat.id); }}>🗑️</button>}
                     </div>
                   );
                 });
@@ -1887,6 +1928,27 @@ export default function Page() {
           color: var(--accent);
           background: var(--accent-soft);
           border-color: var(--border);
+        }
+        .chatDeleteBtn {
+          flex: 0 0 auto;
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--muted);
+          cursor: pointer;
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s ease;
+          margin-right: 2px;
+        }
+        .chatDeleteBtn:hover {
+          color: #e53e3e;
+          background: rgba(229, 62, 62, 0.1);
+          border-color: rgba(229, 62, 62, 0.3);
         }
         .agentsSidebar {
           border-left: 1px solid var(--border);

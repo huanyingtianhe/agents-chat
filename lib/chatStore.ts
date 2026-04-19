@@ -129,7 +129,10 @@ export async function updateChatAgentSession(userId: string, chatId: string, age
   const row = db.prepare('SELECT agent_sessions FROM chats WHERE user_id = ? AND chat_id = ?').get(userId, chatId) as any;
   if (!row) return;
   const sessions = JSON.parse(row.agent_sessions || '{}');
-  sessions[agentId] = sessionId;
+  // Store as append-only list; last element is current session
+  const list: string[] = Array.isArray(sessions[agentId]) ? sessions[agentId] : (sessions[agentId] ? [sessions[agentId]] : []);
+  if (list[list.length - 1] !== sessionId) list.push(sessionId);
+  sessions[agentId] = list;
   db.prepare('UPDATE chats SET agent_sessions = ? WHERE user_id = ? AND chat_id = ?').run(JSON.stringify(sessions), userId, chatId);
 }
 

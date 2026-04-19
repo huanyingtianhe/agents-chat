@@ -333,6 +333,13 @@ function parseAgents(text: string, agents: Agent[]) {
 
 /* ────────── ACP API helper ────────── */
 
+/** Extract the current (last) session ID — handles both string and string[] from SQLite. */
+function lastSessionId(val: unknown): string | null {
+  if (Array.isArray(val)) return val.length > 0 ? val[val.length - 1] : null;
+  if (typeof val === 'string' && val) return val;
+  return null;
+}
+
 async function acpApi(body: Record<string, unknown>) {
   const res = await fetch('/api/acp', {
     method: 'POST',
@@ -510,7 +517,9 @@ export default function Page() {
       .then(async (data: any) => {
         if (data.ok && data.chat) {
           const sessions = data.chat.agentSessions || {};
-          const entries = Object.entries(sessions).filter(([, sid]) => !!sid);
+          const entries = Object.entries(sessions)
+            .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
+            .filter(([, sid]) => !!sid) as [string, string][];
           if (entries.length > 0) {
             const results = await Promise.allSettled(
               entries.map(([agentId, sessionId]) =>
@@ -523,10 +532,33 @@ export default function Page() {
             if (allLoaded) {
               needsContextRestoreRef.current = false;
             }
+            // Handle recovered messages and pending user messages from session/load replay
+            for (const r of results) {
+              if (r.status !== 'fulfilled') continue;
+              const val = (r as any).value;
+              // Append recovered agent messages that were in ACP but missing from our DB
+              if (val?.recoveredMessages?.length > 0) {
+                for (const rm of val.recoveredMessages) {
+                  addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
+                }
+                addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
+              }
+              // Auto-resend pending user message that was never answered
+              if (val?.pendingUserMessage) {
+                const agentId = entries[0]?.[0];
+                if (agentId) {
+                  addMessage({ type: 'system', content: '🔄 Re-sending unanswered message from previous session...' });
+                  setIsSending(true);
+                  const orchestrationId = `orch-${makeId()}`;
+                  void dispatchToAgent(agentId, val.pendingUserMessage, orchestrationId, 'worker');
+                }
+              }
+            }
           }
         }
       })
       .catch(() => { /* ignore */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, authStatus, acp]);
 
   useEffect(() => {
@@ -609,6 +641,17 @@ export default function Page() {
     const sendResult = await acp(sendBody);
     const current = sessionRunsRef.current[runKey];
     if (!current) return false;
+
+    // Handle send failures (e.g. turn_in_progress, session errors)
+    if (sendResult && !sendResult.ok) {
+      updateMessage(pendingId, {
+        content: `⚠️ ${sendResult.error || 'Send failed'}`,
+        pending: false,
+      });
+      finalizeRun(runKey);
+      return false;
+    }
+
     current.ptyTurnId = sendResult?.turn?.id;
 
     if (sendResult?.phase === 'booting') {
@@ -666,12 +709,43 @@ export default function Page() {
 
   async function pollAcpAgent(agentId: string) {
     const runKey = `acp:${agentId}`;
+    let consecutiveErrors = 0;
+    const MAX_ERRORS = 10;
+    const POLL_TIMEOUT = 5 * 60_000; // 5 min safety timeout
+    const startTime = Date.now();
 
     while (sessionRunsRef.current[runKey]) {
       const current = sessionRunsRef.current[runKey];
       if (!current) break;
 
-      const result = await acp({ action: 'poll', agentId });
+      // Safety timeout — don't poll forever
+      if (Date.now() - startTime > POLL_TIMEOUT) {
+        updateMessage(current.pendingId, {
+          content: current.currentText || '⚠️ Response timed out',
+          pending: false,
+        });
+        finalizeRun(runKey);
+        return;
+      }
+
+      let result: any;
+      try {
+        result = await acp({ action: 'poll', agentId });
+      } catch (err) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= MAX_ERRORS) {
+          updateMessage(current.pendingId, {
+            content: current.currentText || `⚠️ Lost connection to agent (${err instanceof Error ? err.message : 'network error'})`,
+            pending: false,
+          });
+          finalizeRun(runKey);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000 * consecutiveErrors));
+        continue;
+      }
+      consecutiveErrors = 0;
+
       const turn = result?.activeTurn as {
         fullText?: string;
         done?: boolean;
@@ -1054,19 +1128,22 @@ export default function Page() {
 
     // Load target chat from server
     let targetMessages: ChatMessage[] = [];
-    let targetName = '';
+    let targetName = chatHistory.find(c => c.id === chatId)?.name || chatId;
     let agentSessions: Record<string, string> = {};
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
       if (data.ok && data.chat) {
         targetMessages = data.chat.messages || [];
-        targetName = data.chat.name || chatId;
+        targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
       }
     } catch { /* ignore */ }
 
-    if (targetMessages.length === 0) return;
+    // If chat has no messages (e.g. newly created), use the welcome message
+    if (targetMessages.length === 0) {
+      targetMessages = [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }];
+    }
 
     setMessages(targetMessages);
     setChatName(targetName);
@@ -1086,15 +1163,16 @@ export default function Page() {
     // Resume agent sessions via session/load. If session/load succeeds,
     // no history injection is needed. If it fails and falls back to session/new,
     // the first turn will inject chat history as context.
-    const hasAnySessions = Object.values(agentSessions).some(s => !!s);
+    const hasAnySessions = Object.values(agentSessions).some(s => !!lastSessionId(s));
     needsContextRestoreRef.current = true;
     if (hasAnySessions) {
+      const sessionEntries = Object.entries(agentSessions)
+        .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
+        .filter(([, sid]) => !!sid) as [string, string][];
       const resumeResults = await Promise.allSettled(
-        Object.entries(agentSessions)
-          .filter(([, sessionId]) => !!sessionId)
-          .map(([agentId, sessionId]) =>
-            acp({ action: 'resume-session', agentId, sessionId, chatId })
-          )
+        sessionEntries.map(([agentId, sessionId]) =>
+          acp({ action: 'resume-session', agentId, sessionId, chatId })
+        )
       );
       // If all sessions were successfully loaded via session/load, skip history injection
       const allLoaded = resumeResults.every(
@@ -1102,6 +1180,26 @@ export default function Page() {
       );
       if (allLoaded) {
         needsContextRestoreRef.current = false;
+      }
+      // Handle recovered messages and pending user messages
+      for (const r of resumeResults) {
+        if (r.status !== 'fulfilled') continue;
+        const val = r.value;
+        if (val?.recoveredMessages?.length > 0) {
+          for (const rm of val.recoveredMessages) {
+            addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
+          }
+          addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
+        }
+        if (val?.pendingUserMessage) {
+          const agentId = sessionEntries[0]?.[0];
+          if (agentId) {
+            addMessage({ type: 'system', content: '🔄 Re-sending unanswered message from previous session...' });
+            setIsSending(true);
+            const orchestrationId = `orch-${makeId()}`;
+            void dispatchToAgent(agentId, val.pendingUserMessage, orchestrationId, 'worker');
+          }
+        }
       }
     }
 
@@ -1114,7 +1212,7 @@ export default function Page() {
     await saveCurrentChatToHistory();
 
     const newCount = chatCounter + 1;
-    const newName = `Chat ${newCount}`;
+    const newName = 'New Chat';
     // Use timestamp-based ID to avoid collisions after reload
     const newId = `chat-${Date.now()}-${newCount}`;
 
@@ -1142,26 +1240,13 @@ export default function Page() {
     } catch { /* ignore */ }
 
     const errors: string[] = [];
-    const newAgentSessions: Record<string, string> = {};
     for (const agent of agents) {
       try {
-        const data = await acp({ action: 'new-session', agentId: agent.id });
+        const data = await acp({ action: 'new-session', agentId: agent.id, chatId: newId });
         if (!data.ok) errors.push(`${agent.id}: ${data.error || 'failed'}`);
-        else if (data.sessionId) newAgentSessions[agent.id] = data.sessionId;
       } catch (err) {
         errors.push(`${agent.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    }
-
-    // Immediately save new session IDs to SQLite so each chat has its own sessions
-    if (Object.keys(newAgentSessions).length > 0) {
-      try {
-        await fetch('/api/chats', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat: { id: newId, name: newName, ts: Date.now(), messages: [], agentSessions: newAgentSessions } }),
-        });
-      } catch { /* ignore */ }
     }
 
     sessionRunsRef.current = {};
@@ -1340,7 +1425,7 @@ export default function Page() {
                 ) : (() => {
                   const hasParts = message.parts && message.parts.length > 0;
                   const isLong = (message.content || '').length > 400 || (message.content || '').split('\n').length > 12;
-                  const isExpanded = !!expandedMessages[message.id];
+                  const isCollapsed = expandedMessages[message.id] === false;
                   return (
                     <>
                       {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{message.statusText}</div> : null}
@@ -1348,7 +1433,7 @@ export default function Page() {
                         const totalText = message.parts!.filter(p => p.kind === 'text').map(p => p.text).join('');
                         const partsLong = totalText.length > 400 || totalText.split('\n').length > 12 || message.parts!.length > 6;
                         return (<>
-                        <div className={`partsStream ${partsLong && !isExpanded && !message.pending ? 'collapsed' : ''}`}>
+                        <div className={`partsStream ${partsLong && isCollapsed && !message.pending ? 'collapsed' : ''}`}>
                           {message.parts!.map((part, pi) => {
                             if (part.kind === 'thinking') {
                               return (
@@ -1386,14 +1471,14 @@ export default function Page() {
                           )}
                         </div>
                         {partsLong && !message.pending && (
-                          <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: !prev[message.id] }))}>
-                            {isExpanded ? 'Collapse' : 'Expand'}
+                          <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
+                            {isCollapsed ? 'Expand' : 'Collapse'}
                           </button>
                         )}
                         </>);
                       })() : (
                         <>
-                          <div className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && !isExpanded ? 'collapsed' : ''}`}>
+                          <div className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
                           </div>
                           {message.pending && message.content && (
@@ -1403,8 +1488,8 @@ export default function Page() {
                             </div>
                           )}
                           {isLong && (
-                            <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: !prev[message.id] }))}>
-                              {isExpanded ? 'Collapse' : 'Expand'}
+                            <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
+                              {isCollapsed ? 'Expand' : 'Collapse'}
                             </button>
                           )}
                         </>

@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
 import { getToken } from 'next-auth/jwt';
-import { updateChatAgentSession } from '@/lib/chatStore';
+import { updateChatAgentSession, getChat, saveChat } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -133,6 +133,8 @@ function createNdjsonRpc(cp: ChildProcess): NdjsonRpc {
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
+      // Force a flat string copy to avoid V8 SlicedString retaining the original large buf
+      if (buf.length > 0) buf = (' ' + buf).slice(1);
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
@@ -198,8 +200,15 @@ function handleTerminalCreate(params: Record<string, unknown>, cwd: string): { t
 
   const terminal: ManagedTerminal = { cp, output: '', exitCode: null, signal: null, done: false, waiters: [] };
 
-  cp.stdout?.on('data', (chunk: Buffer) => { terminal.output += chunk.toString(); });
-  cp.stderr?.on('data', (chunk: Buffer) => { terminal.output += chunk.toString(); });
+  const MAX_TERM_OUTPUT = 100_000; // 100KB cap per terminal
+  cp.stdout?.on('data', (chunk: Buffer) => {
+    terminal.output += chunk.toString();
+    if (terminal.output.length > MAX_TERM_OUTPUT) terminal.output = terminal.output.slice(-MAX_TERM_OUTPUT);
+  });
+  cp.stderr?.on('data', (chunk: Buffer) => {
+    terminal.output += chunk.toString();
+    if (terminal.output.length > MAX_TERM_OUTPUT) terminal.output = terminal.output.slice(-MAX_TERM_OUTPUT);
+  });
   cp.on('exit', (code, signal) => {
     terminal.exitCode = code;
     terminal.signal = signal;
@@ -207,6 +216,8 @@ function handleTerminalCreate(params: Record<string, unknown>, cwd: string): { t
     for (const w of terminal.waiters) w({ exitCode: code, signal });
     terminal.waiters = [];
     console.log(`[ACP-TERM] ${id} exited (code=${code})`);
+    // Auto-cleanup finished terminal after 5 min to prevent memory leak
+    setTimeout(() => { getTerminals().delete(id); }, 5 * 60_000);
   });
   cp.on('error', (err) => {
     console.error(`[ACP-TERM] ${id} spawn error:`, err.message);
@@ -314,16 +325,36 @@ type AgentProcess = {
 // Per-user per-agent: isolated session and turn state
 type UserSession = {
   sessionId: string | null;
+  /** Map of chatId → list of sessionIds (append-only). Last element is the current session. */
+  chatSessions: Map<string, string[]>;
   activeTurn: TurnState | null;
   phase: 'idle' | 'busy' | 'booting';
   turnCount: number;
   lastActive: number;
 };
 
+/** Append a sessionId to a chat's session list (skip if already the last entry). */
+function pushChatSession(sess: UserSession, chatId: string, sessionId: string): void {
+  const list = sess.chatSessions.get(chatId);
+  if (list) {
+    if (list[list.length - 1] !== sessionId) list.push(sessionId);
+  } else {
+    sess.chatSessions.set(chatId, [sessionId]);
+  }
+}
+
+/** Get the current (last) sessionId for a chat, or null. */
+function getChatSession(sess: UserSession, chatId: string): string | null {
+  const list = sess.chatSessions.get(chatId);
+  return list && list.length > 0 ? list[list.length - 1] : null;
+}
+
 const globalStore = globalThis as typeof globalThis & {
   __acpAgents?: Map<string, AgentProcess>;
   __acpUserSessions?: Map<string, UserSession>;
   __acpBootPromises?: Map<string, Promise<void>>;
+  /** Collects replayed messages during session/load (keyed by sessionId) */
+  __acpReplayBuffers?: Map<string, { role: 'user' | 'agent'; text: string }[]>;
 };
 
 function getAgentProcesses(): Map<string, AgentProcess> {
@@ -336,9 +367,28 @@ function getUserSessions(): Map<string, UserSession> {
   return globalStore.__acpUserSessions;
 }
 
+// Periodically clean up stale user sessions (inactive > 30 min)
+const STALE_SESSION_MS = 30 * 60_000;
+function cleanupStaleSessions() {
+  const now = Date.now();
+  for (const [key, sess] of getUserSessions()) {
+    if (now - sess.lastActive > STALE_SESSION_MS && sess.phase === 'idle') {
+      getUserSessions().delete(key);
+    }
+  }
+}
+if (!(globalThis as any).__acpCleanupTimer) {
+  (globalThis as any).__acpCleanupTimer = setInterval(cleanupStaleSessions, 5 * 60_000);
+}
+
 function getBootPromises(): Map<string, Promise<void>> {
   if (!globalStore.__acpBootPromises) globalStore.__acpBootPromises = new Map();
   return globalStore.__acpBootPromises;
+}
+
+function getReplayBuffers(): Map<string, { role: 'user' | 'agent'; text: string }[]> {
+  if (!globalStore.__acpReplayBuffers) globalStore.__acpReplayBuffers = new Map();
+  return globalStore.__acpReplayBuffers;
 }
 
 function userSessionKey(agentId: string, userId: string): string {
@@ -371,6 +421,7 @@ function getUserSession(agentId: string, userId: string): UserSession {
   if (!sess) {
     sess = {
       sessionId: null,
+      chatSessions: new Map(),
       activeTurn: null,
       phase: 'idle',
       turnCount: 0,
@@ -379,6 +430,8 @@ function getUserSession(agentId: string, userId: string): UserSession {
     sessions.set(key, sess);
   }
   sess.lastActive = Date.now();
+  // Ensure chatSessions exists for sessions created before this field was added
+  if (!sess.chatSessions) sess.chatSessions = new Map();
   return sess;
 }
 
@@ -482,19 +535,55 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
     };
 
+    // Notification counter for memory diagnostics
+    let notifCount = 0;
+    let lastNotifLog = Date.now();
+
     rpc.onNotification = (method, params) => {
-      console.log(`[ACP:${agentId}] NOTIF method=${method}`, JSON.stringify(params).slice(0, 300));
-      if (method !== 'session/update') return;
+      notifCount++;
+      const now = Date.now();
+      if (now - lastNotifLog >= 10_000) {
+        console.log(`[ACP:${agentId}] notifications: ${notifCount} in last ${((now - lastNotifLog) / 1000).toFixed(0)}s (${method})`);
+        notifCount = 0;
+        lastNotifLog = now;
+      }
+      if (method !== 'session/update') {
+        return;
+      }
       const update = params?.update;
+      const kind = update?.sessionUpdate;
       // Route notification to correct user session by sessionId
       const notifSessionId = params?.sessionId as string | undefined;
+
+      // During session/load, capture replayed messages into the replay buffer
+      if (notifSessionId) {
+        const replayBuf = getReplayBuffers().get(notifSessionId);
+        if (replayBuf) {
+          if (kind === 'user_message_chunk' && update.content?.type === 'text') {
+            // Append to last user entry or create new one
+            const last = replayBuf.length > 0 ? replayBuf[replayBuf.length - 1] : null;
+            if (last && last.role === 'user') {
+              last.text += update.content.text;
+            } else {
+              replayBuf.push({ role: 'user', text: update.content.text });
+            }
+          } else if (kind === 'agent_message_chunk' && update.content?.type === 'text') {
+            const last = replayBuf.length > 0 ? replayBuf[replayBuf.length - 1] : null;
+            if (last && last.role === 'agent') {
+              last.text += update.content.text;
+            } else {
+              replayBuf.push({ role: 'agent', text: update.content.text });
+            }
+          }
+          // Don't return — also let normal turn handling process if there's an active turn
+        }
+      }
+
       const turn = notifSessionId
         ? findUserSessionBySessionId(notifSessionId)?.activeTurn
         : undefined;
       if (!turn || turn.done) return;
 
-      const kind = update?.sessionUpdate;
-      console.log(`[ACP:${agentId}] notification: ${kind}`, JSON.stringify(update).slice(0, 200));
       if (kind === 'agent_message_chunk' && update.content?.type === 'text') {
         turn.fullText += update.content.text;
         turn.phase = 'replying';
@@ -618,6 +707,15 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         turn.statusText = '';
         sess.phase = 'idle';
       }
+      // Don't clear events here — let frontend poll one last time with full events.
+      // Events are cleared in turn-clear or auto-release.
+      turn.prompt = '';
+      // Auto-release turn reference after 30s so GC can reclaim memory
+      setTimeout(() => {
+        if (sess.activeTurn === turn) {
+          sess.activeTurn = null;
+        }
+      }, 30_000);
     })
     .catch(async (err: Error) => {
       // If session/prompt fails, the session may be truly invalid — try to recover
@@ -628,6 +726,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
+        if (chatId) pushChatSession(sess, chatId, session.sessionId);
         console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
 
         // Persist the new sessionId to SQLite so chat history references stay current
@@ -665,6 +764,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           turn.statusText = '';
           sess.phase = 'idle';
         }
+        turn.prompt = '';
+        setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
       } catch (retryErr) {
         // Recovery also failed — report original error
         if (!turn.done) {
@@ -674,6 +775,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           turn.statusText = turn.error;
           sess.phase = 'idle';
         }
+        turn.prompt = '';
+        setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
       }
     });
 
@@ -697,6 +800,76 @@ function serializeTurn(turn: TurnState | null, sinceEvent?: number) {
   };
 }
 
+/* ─────────── Chat Recovery: compare ACP replay with SQLite ─────────── */
+
+/**
+ * After session/load replays the conversation, compare replayed messages
+ * with what's stored in SQLite. Returns:
+ * - recoveredMessages: agent messages that were in the ACP session but missing from SQLite
+ * - pendingUserMessage: if the last stored message is a user message with no agent reply
+ */
+async function compareAndRecover(
+  userId: string,
+  chatId: string | undefined,
+  agentId: string,
+  replayMessages: { role: 'user' | 'agent'; text: string }[],
+): Promise<{
+  recoveredMessages?: { type: 'agent'; content: string; agentId: string; ts: number }[];
+  pendingUserMessage?: string;
+}> {
+  if (!chatId) return {};
+
+  const chat = await getChat(userId, chatId);
+  if (!chat || chat.messages.length === 0) return {};
+
+  // Only check the last user message in SQLite
+  const lastUserMsg = [...chat.messages].reverse().find(m => m.type === 'user');
+  if (!lastUserMsg) return {};
+
+  const lastStoredMsg = chat.messages[chat.messages.length - 1];
+  const lastStoredIsUser = lastStoredMsg.type === 'user';
+
+  // If the last stored message is already an agent reply, nothing to recover
+  if (!lastStoredIsUser) return {};
+
+  // Last stored message is a user question with no agent answer.
+  // Find the last occurrence of that user message in the replay,
+  // then check if there's an agent reply AFTER it.
+  const userText = lastUserMsg.content;
+  let lastUserIdx = -1;
+  for (let i = replayMessages.length - 1; i >= 0; i--) {
+    if (replayMessages[i].role === 'user' && replayMessages[i].text === userText) {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  if (lastUserIdx >= 0) {
+    // Look for agent replies after this user message in the replay
+    const agentAfter = replayMessages.slice(lastUserIdx + 1).filter(m => m.role === 'agent' && m.text);
+    if (agentAfter.length > 0) {
+      // Take the last agent reply as the recovered answer
+      const replyText = agentAfter[agentAfter.length - 1].text;
+      const ts = Date.now();
+      const recovered = [{ type: 'agent' as const, content: replyText, agentId, ts }];
+      chat.messages.push({
+        id: `recovered-${ts}`,
+        type: 'agent',
+        content: replyText,
+        agentId,
+        ts,
+      });
+      chat.ts = ts;
+      await saveChat(userId, chat);
+      console.log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
+      return { recoveredMessages: recovered };
+    }
+  }
+
+  // ACP has no reply after the user's last message → re-send it
+  return { pendingUserMessage: userText };
+}
+
 /* ──────────────────── API Handler ──────────────────── */
 
 export async function POST(req: NextRequest) {
@@ -707,6 +880,26 @@ export async function POST(req: NextRequest) {
 
     if (!action) {
       return NextResponse.json({ ok: false, error: 'missing_action' }, { status: 400 });
+    }
+
+    // ─── Diagnostic endpoint ───
+    if (action === 'diag') {
+      const mem = process.memoryUsage();
+      const toMB = (b: number) => (b / 1024 / 1024).toFixed(1);
+      return NextResponse.json({
+        ok: true,
+        memory: {
+          rss: `${toMB(mem.rss)}MB`,
+          heapTotal: `${toMB(mem.heapTotal)}MB`,
+          heapUsed: `${toMB(mem.heapUsed)}MB`,
+          external: `${toMB(mem.external)}MB`,
+          arrayBuffers: `${toMB(mem.arrayBuffers)}MB`,
+        },
+        sessions: getUserSessions().size,
+        agents: getAgentProcesses().size,
+        replayBuffers: getReplayBuffers().size,
+        terminals: getTerminals().size,
+      });
     }
 
     // ─── Config endpoints (no agentId required) ───
@@ -889,8 +1082,26 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Switch to the correct session for this chat (if known)
+      if (chatId) {
+        const chatSessionId = getChatSession(sess, chatId);
+        if (chatSessionId && chatSessionId !== sess.sessionId) {
+          sess.sessionId = chatSessionId;
+          sess.activeTurn = null;
+          sess.phase = 'idle';
+        }
+      }
+
       // Ensure this user has a session on the agent
       await ensureUserSession(proc, sess, agentId, userId, isAdmin);
+
+      // Store in chatSessions list and persist to SQLite
+      if (chatId && sess.sessionId) {
+        pushChatSession(sess, chatId, sess.sessionId);
+        updateChatAgentSession(userId, chatId, agentId, sess.sessionId).catch(() => { /* ignore */ });
+      }
+
+      console.log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
 
       if (sess.activeTurn && !sess.activeTurn.done) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
@@ -912,7 +1123,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'turn-clear') {
-      sess.activeTurn = null;
+      if (sess.activeTurn) {
+        sess.activeTurn.events = [];
+        sess.activeTurn = null;
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -943,6 +1157,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'new-session') {
+      const chatId = body?.chatId as string | undefined;
       if (!proc.ready || !proc.rpc) {
         return NextResponse.json({ ok: true, skipped: true });
       }
@@ -952,9 +1167,14 @@ export async function POST(req: NextRequest) {
         const session = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
+        if (chatId) pushChatSession(sess, chatId, session.sessionId);
         sess.activeTurn = null;
         sess.phase = 'idle';
-        console.log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}`);
+        // Persist session ID to SQLite
+        if (chatId) {
+          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        }
+        console.log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -965,7 +1185,9 @@ export async function POST(req: NextRequest) {
     if (action === 'resume-session') {
       // Use session/load to restore a previously saved session from disk.
       // If session/load fails (e.g. session expired or not on disk), fall back to session/new.
+      // After successful load, compare replayed messages with SQLite to recover missing answers.
       const savedSessionId = body?.sessionId as string | undefined;
+      const chatId = body?.chatId as string | undefined;
       if (!savedSessionId) {
         return NextResponse.json({ ok: false, error: 'missing_sessionId' }, { status: 400 });
       }
@@ -990,6 +1212,7 @@ export async function POST(req: NextRequest) {
       // If this session is known to be active in the agent, just switch to it
       if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
         sess.sessionId = savedSessionId;
+        if (chatId) pushChatSession(sess, chatId, savedSessionId);
         sess.activeTurn = null;
         sess.phase = 'idle';
         console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
@@ -997,16 +1220,28 @@ export async function POST(req: NextRequest) {
       }
       // Try session/load if the agent supports it
       if (proc.supportsLoadSession) {
+        // Set up replay buffer to capture messages during session/load
+        const replayBuffers = getReplayBuffers();
+        replayBuffers.set(savedSessionId, []);
         try {
           const mcpServers = await loadMcpServers(isAdmin);
           await proc.rpc!.send('session/load', { sessionId: savedSessionId, cwd: proc.cachedCwd, mcpServers });
           sess.sessionId = savedSessionId;
+          if (chatId) pushChatSession(sess, chatId, savedSessionId);
           sess.activeTurn = null;
           sess.phase = 'idle';
           proc.knownSessions.add(savedSessionId);
-          console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}`);
-          return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+
+          // Extract replay buffer and compare with SQLite
+          const replayMessages = replayBuffers.get(savedSessionId) || [];
+          replayBuffers.delete(savedSessionId);
+          console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
+
+          // Compare with stored chat to find recovered messages
+          const recovery = await compareAndRecover(userId, chatId, agentId, replayMessages);
+          return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, ...recovery });
         } catch (loadErr: any) {
+          replayBuffers.delete(savedSessionId);
           // If session is already loaded, just reuse it
           const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
           let code = loadErr?.data?.code ?? loadErr?.code;
@@ -1014,6 +1249,7 @@ export async function POST(req: NextRequest) {
           const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
           if (alreadyLoaded) {
             sess.sessionId = savedSessionId;
+            if (chatId) pushChatSession(sess, chatId, savedSessionId);
             sess.activeTurn = null;
             sess.phase = 'idle';
             proc.knownSessions.add(savedSessionId);
@@ -1030,15 +1266,27 @@ export async function POST(req: NextRequest) {
         const mcpServers = await loadMcpServers(isAdmin);
         const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
         sess.sessionId = session.sessionId;
+        if (chatId) pushChatSession(sess, chatId, session.sessionId);
         sess.activeTurn = null;
         sess.phase = 'idle';
         proc.knownSessions.add(session.sessionId);
         // Update SQLite with the new sessionId
-        if (body?.chatId) {
-          updateChatAgentSession(userId, String(body.chatId), agentId, session.sessionId).catch(() => { /* ignore */ });
+        if (chatId) {
+          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        }
+        // Check if last message is an unanswered user question
+        let pendingUserMessage: string | undefined;
+        if (chatId) {
+          const chat = await getChat(userId, chatId);
+          if (chat && chat.messages.length > 0) {
+            const lastMsg = chat.messages[chat.messages.length - 1];
+            if (lastMsg.type === 'user') {
+              pendingUserMessage = lastMsg.content;
+            }
+          }
         }
         console.log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
-        return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
+        return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false, pendingUserMessage });
       } catch (newErr) {
         const msg = newErr instanceof Error ? newErr.message : String(newErr);
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });

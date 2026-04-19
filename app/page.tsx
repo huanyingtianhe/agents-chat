@@ -395,6 +395,12 @@ export default function Page() {
   const [settingsAgentConfig, setSettingsAgentConfig] = useState<Agent | null>(null);
   const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const currentChatIdRef = useRef(currentChatId);
+  currentChatIdRef.current = currentChatId;
+  const chatNameRef = useRef(chatName);
+  chatNameRef.current = chatName;
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -597,12 +603,14 @@ export default function Page() {
 
   function addMessage(msg: Omit<ChatMessage, 'id' | 'ts'> & { id?: string; ts?: number }) {
     const next: ChatMessage = { id: msg.id || makeId(), ts: msg.ts || Date.now(), ...msg };
-    setMessages((prev) => [...prev, next]);
+    messagesRef.current = [...messagesRef.current, next];
+    setMessages(messagesRef.current);
     return next.id;
   }
 
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    messagesRef.current = messagesRef.current.map((m) => (m.id === id ? { ...m, ...patch } : m));
+    setMessages(messagesRef.current);
   }
 
   async function loadAgents() {
@@ -711,15 +719,15 @@ export default function Page() {
     const runKey = `acp:${agentId}`;
     let consecutiveErrors = 0;
     const MAX_ERRORS = 10;
-    const POLL_TIMEOUT = 5 * 60_000; // 5 min safety timeout
-    const startTime = Date.now();
+    const POLL_TIMEOUT = 10 * 60_000; // 10 min safety timeout
+    let lastActivity = Date.now();
 
     while (sessionRunsRef.current[runKey]) {
       const current = sessionRunsRef.current[runKey];
       if (!current) break;
 
-      // Safety timeout — don't poll forever
-      if (Date.now() - startTime > POLL_TIMEOUT) {
+      // Safety timeout — don't poll forever (resets on each successful poll)
+      if (Date.now() - lastActivity > POLL_TIMEOUT) {
         updateMessage(current.pendingId, {
           content: current.currentText || '⚠️ Response timed out',
           pending: false,
@@ -745,6 +753,7 @@ export default function Page() {
         continue;
       }
       consecutiveErrors = 0;
+      lastActivity = Date.now();
 
       const turn = result?.activeTurn as {
         fullText?: string;
@@ -933,6 +942,9 @@ export default function Page() {
     addMessage({ type: 'user', content: text });
     setInput('');
 
+    // Persist user message to SQLite immediately (don't wait for agent response)
+    void saveCurrentChatToHistory();
+
     // Save to input history
     const hist = inputHistoryRef.current;
     if (hist[hist.length - 1] !== text) hist.push(text);
@@ -1070,20 +1082,23 @@ export default function Page() {
   /* ── New chat ── */
 
   async function saveCurrentChatToHistory() {
-    const userMsgs = messages.filter(m => m.type === 'user');
-    const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : chatName;
-    const persistable = messages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
+    const currentMessages = messagesRef.current;
+    const currentId = currentChatIdRef.current;
+    const currentName = chatNameRef.current;
+    const userMsgs = currentMessages.filter(m => m.type === 'user');
+    const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
+    const persistable = currentMessages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
 
     // Get current agent session IDs from SQLite (each chat stores its own sessions)
     let agentSessions: Record<string, string> = {};
     try {
-      const existing = await fetch(`/api/chats?id=${encodeURIComponent(currentChatId)}`).then(r => r.json());
+      const existing = await fetch(`/api/chats?id=${encodeURIComponent(currentId)}`).then(r => r.json());
       if (existing.ok && existing.chat?.agentSessions) {
         agentSessions = existing.chat.agentSessions;
       }
     } catch { /* ignore */ }
 
-    const chatData = { id: currentChatId, name, ts: Date.now(), messages: persistable, agentSessions };
+    const chatData = { id: currentId, name, ts: Date.now(), messages: persistable, agentSessions };
 
     // Save to server
     try {
@@ -1095,10 +1110,10 @@ export default function Page() {
     } catch { /* ignore */ }
 
     setChatHistory(prev => {
-      const existing = prev.find(c => c.id === currentChatId);
-      const entry = { id: currentChatId, name, ts: Date.now(), agentSessions };
+      const existing = prev.find(c => c.id === currentId);
+      const entry = { id: currentId, name, ts: Date.now(), agentSessions };
       if (existing) {
-        return prev.map(c => c.id === currentChatId ? entry : c);
+        return prev.map(c => c.id === currentId ? entry : c);
       } else {
         return [entry, ...prev];
       }

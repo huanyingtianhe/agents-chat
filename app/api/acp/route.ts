@@ -1030,8 +1030,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
     }
 
-    const userId = String(body?.userId || 'anonymous');
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
+    const userId = String(token?.email || token?.name || token?.sub || 'anonymous');
     const isAdmin = isAdminToken(token);
     const proc = getAgentProcess(agentId, config);
     const sess = getUserSession(agentId, userId);

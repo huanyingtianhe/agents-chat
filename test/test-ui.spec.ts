@@ -221,6 +221,93 @@ test.describe('Chat UI', () => {
     }
   });
 
+  test('should persist messages to SQLite after send and reload', async ({ page }) => {
+    test.setTimeout(240000);
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const chatArea = page.locator('.chatContainer');
+
+    // Send a message
+    const userText = 'What is 2+3? Reply with just the number.';
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator('.message.user').last()).toContainText('What is 2+3', { timeout: 15000 });
+
+    // Wait for agent reply to appear and finish (up to 60s; agent may be slow after many tests)
+    let agentResponded = false;
+    try {
+      await page.waitForFunction(
+        () => {
+          const msgs = document.querySelectorAll('.message.agent');
+          const last = msgs[msgs.length - 1];
+          if (!last) return false;
+          const hasContent = last.querySelector('.messageContent');
+          const isPending = last.querySelector('.messageContent.pending')
+            || last.querySelector('.thinkingWrap')
+            || last.querySelector('.streamingIndicator');
+          return hasContent && !isPending;
+        },
+        { timeout: 30000 },
+      );
+      agentResponded = true;
+      const replyText = await chatArea.locator('.message.agent').last().textContent() || '';
+      console.log(`Persistence test — agent replied: "${replyText.slice(0, 100)}"`);
+    } catch {
+      console.log('Agent did not finish in 30s — checking user message persistence only');
+    }
+
+    // Wait briefly for saveCurrentChatToHistory to complete
+    await page.waitForTimeout(2000);
+
+    // Verify messages are stored in SQLite via the API
+    const chatsBefore = await page.evaluate(async () => {
+      const r = await fetch('/api/chats');
+      return r.json();
+    });
+    expect(chatsBefore.ok).toBe(true);
+    expect(chatsBefore.chats.length).toBeGreaterThan(0);
+
+    // Find the most recent chat (should be ours since we just sent a message)
+    const targetChat = chatsBefore.chats[0];
+    expect(targetChat).toBeTruthy();
+    console.log(`Found chat in SQLite: id=${targetChat.id}, name="${targetChat.name}"`);
+
+    // Fetch full chat with messages
+    const fullChat = await page.evaluate(async (id: string) => {
+      const r = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+      return r.json();
+    }, targetChat.id);
+    expect(fullChat.ok).toBe(true);
+
+    const msgs = fullChat.chat.messages;
+    const userMsgs = msgs.filter((m: any) => m.type === 'user');
+    const agentMsgs = msgs.filter((m: any) => m.type === 'agent');
+    console.log(`SQLite has ${msgs.length} messages: ${userMsgs.length} user, ${agentMsgs.length} agent`);
+
+    // The user message MUST be persisted (this was the original stale-closure bug)
+    expect(userMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(userMsgs.some((m: any) => m.content.includes('What is 2+3'))).toBe(true);
+
+    // If agent responded, verify agent message was also persisted
+    if (agentResponded) {
+      expect(agentMsgs.length).toBeGreaterThanOrEqual(1);
+    }
+
+    // Reload the page and verify messages survive
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    // The chat should appear in the sidebar
+    await expect(page.locator('.chatHistoryItem')).toBeVisible({ timeout: 10000 });
+
+    // Click on the first chat in sidebar (most recent)
+    await page.locator('.chatHistoryItem').first().click();
+    await page.waitForTimeout(1000);
+
+    // User message must survive reload
+    await expect(chatArea.locator('.message.user:has-text("What is 2+3")')).toBeVisible({ timeout: 15000 });
+    console.log('PASS: Messages persisted in SQLite and survived page reload');
+  });
+
   test('should show share button', async ({ page }) => {
     // The share button should exist for chat history items
     const shareBtn = page.locator('.chatShareBtn').first();

@@ -111,8 +111,7 @@ export async function saveChat(userId: string, chat: StoredChat): Promise<void> 
     ON CONFLICT (user_id, chat_id) DO UPDATE SET
       name = excluded.name,
       ts = excluded.ts,
-      messages = excluded.messages,
-      agent_sessions = excluded.agent_sessions
+      messages = excluded.messages
   `).run(
     userId,
     chat.id,

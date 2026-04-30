@@ -119,13 +119,10 @@ type OrchestrationState = {
   maxRounds: number;
 };
 
-/* ────────── Storage keys ────────── */
+/* ────────── Storage keys (UI prefs only — chat data is in SQLite) ────────── */
 
-const STORAGE_CHAT_MESSAGES = 'acp_chat_messages_v1';
 const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
-const STORAGE_CURRENT_CHAT_ID = 'acp_chat_current_id_v1';
-const STORAGE_CHAT_PREFIX = 'acp_chat_data_';
 const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 
@@ -447,40 +444,31 @@ export default function Page() {
     setMounted(true);
     const savedInput = window.localStorage.getItem(STORAGE_CHAT_INPUT);
     const savedCollapsed = window.localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
-    const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
 
     if (savedInput) setInput(savedInput);
     if (savedCollapsed != null) setSidebarCollapsed(savedCollapsed === '1');
-    if (savedChatId) setCurrentChatId(savedChatId);
 
-    // If current chat is an imported shared chat, load from server
-    if (savedChatId && savedChatId.startsWith('shared-')) {
-      fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.ok && data.chat) {
-            setMessages(data.chat.messages || []);
-            setChatName(data.chat.name || savedChatId);
-            // No agent sessions — first send should include context
-            needsContextRestoreRef.current = true;
-          }
-        })
-        .catch(() => { /* ignore */ });
-    } else {
-      const savedMessages = window.localStorage.getItem(STORAGE_CHAT_MESSAGES);
-      if (savedMessages) {
-        try {
-          const parsed = JSON.parse(savedMessages);
-          if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
-        } catch { /* ignore */ }
-      }
-      // Resume agent sessions is handled in a separate effect that waits for auth
-    }
-
-    // Load chat history from server
+    // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
       if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+      const lastChatId = data.lastChatId as string | null;
+      if (lastChatId) {
+        setCurrentChatId(lastChatId);
+        // Load that chat's messages from server
+        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`)
+          .then(r => r.json())
+          .then(chatData => {
+            if (chatData.ok && chatData.chat) {
+              const msgs = chatData.chat.messages || [];
+              setMessages(msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
+              setChatName(chatData.chat.name || lastChatId);
+              needsContextRestoreRef.current = true;
+            }
+          })
+          .catch(() => { /* ignore */ });
+      }
     }).catch(() => { /* ignore */ });
+
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
       if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || [];
@@ -515,10 +503,10 @@ export default function Page() {
     if (!mounted || authStatus === 'loading') return;
     if (sessionResumedRef.current) return;
     sessionResumedRef.current = true;
-    const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
-    if (!savedChatId) return;
+    const activeChatId = currentChatIdRef.current;
+    if (!activeChatId || activeChatId === 'chat-1') return;
     needsContextRestoreRef.current = true;
-    fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
+    fetch(`/api/chats?id=${encodeURIComponent(activeChatId)}`)
       .then(r => r.json())
       .then(async (data: any) => {
         if (data.ok && data.chat) {
@@ -529,7 +517,7 @@ export default function Page() {
           if (entries.length > 0) {
             const results = await Promise.allSettled(
               entries.map(([agentId, sessionId]) =>
-                acp({ action: 'resume-session', agentId, sessionId, chatId: savedChatId })
+                acp({ action: 'resume-session', agentId, sessionId, chatId: activeChatId })
               )
             );
             const allLoaded = results.every(
@@ -566,12 +554,6 @@ export default function Page() {
       .catch(() => { /* ignore */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, authStatus, acp]);
-
-  useEffect(() => {
-    if (!mounted) return;
-    const persistable = messages.filter((m) => !m.pending && !(m.type === 'system' && m.ts !== 0));
-    try { window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(persistable)); } catch { /* ignore */ }
-  }, [messages, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -1126,10 +1108,6 @@ export default function Page() {
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
-    try {
-      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(initial));
-      window.localStorage.removeItem(STORAGE_CHAT_INPUT);
-    } catch { /* ignore */ }
   }
 
   async function loadChat(chatId: string) {
@@ -1169,11 +1147,12 @@ export default function Page() {
     sessionRunsRef.current = {};
     orchestrationsRef.current = {};
 
-    try {
-      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(targetMessages));
-      window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, chatId);
-      window.localStorage.removeItem(STORAGE_CHAT_INPUT);
-    } catch { /* ignore */ }
+    // Persist last active chat to server
+    void fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId }),
+    }).catch(() => { /* ignore */ });
 
     // Resume agent sessions via session/load. If session/load succeeds,
     // no history injection is needed. If it fails and falls back to session/new,
@@ -1236,9 +1215,12 @@ export default function Page() {
     setChatCounter(newCount);
     setCurrentChatId(newId);
 
-    try {
-      window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, newId);
-    } catch { /* ignore */ }
+    // Persist last active chat to server
+    void fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId: newId }),
+    }).catch(() => { /* ignore */ });
 
     // Register the new chat in history immediately so it persists
     const newEntry = { id: newId, name: newName, ts: Date.now() };
@@ -1537,6 +1519,26 @@ export default function Page() {
                       ))}
                     </div>
                   ) : null}
+                  {orchestrationEnabled && (
+                    <div className="orchestrationToggle">
+                      <button
+                        type="button"
+                        className={`orchToggleBtn ${orchestrationMode === 'pipeline' ? 'orchToggleActive' : ''}`}
+                        onClick={() => setOrchestrationMode('pipeline')}
+                        title="Pipeline: agents run sequentially, each receives the previous agent's output"
+                      >
+                        🔀 Pipeline
+                      </button>
+                      <button
+                        type="button"
+                        className={`orchToggleBtn ${orchestrationMode === 'discussion' ? 'orchToggleActive' : ''}`}
+                        onClick={() => setOrchestrationMode('discussion')}
+                        title="Discussion: agents run in parallel, then a summary is generated"
+                      >
+                        💬 Discussion
+                      </button>
+                    </div>
+                  )}
                   <div className="composerRow">
                     <textarea
                       ref={composerRef}
@@ -2364,6 +2366,36 @@ export default function Page() {
           border-color: var(--border-strong);
           box-shadow: 0 0 0 1px var(--accent-soft), 0 14px 30px rgba(0, 0, 0, 0.08);
           transform: translateY(-1px);
+        }
+        .orchestrationToggle {
+          display: flex;
+          gap: 4px;
+          padding: 2px;
+          background: var(--panel-strong);
+          border-radius: 12px;
+          border: 1px solid var(--border);
+        }
+        .orchToggleBtn {
+          flex: 1;
+          padding: 4px 12px;
+          border: none;
+          border-radius: 10px;
+          background: transparent;
+          color: var(--muted);
+          font-size: 0.82rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 160ms ease;
+          white-space: nowrap;
+        }
+        .orchToggleBtn:hover {
+          color: var(--fg);
+          background: var(--accent-soft);
+        }
+        .orchToggleBtn.orchToggleActive {
+          background: var(--accent);
+          color: #fff;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
         }
         .composerRow {
           display: flex;

@@ -93,7 +93,7 @@ type ChatMessage = {
   parts?: ContentPart[];
 };
 
-type OrchestrationMode = 'discussion' | 'pipeline';
+type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
 
 type SessionRunContext = {
   agentId: string;
@@ -897,6 +897,117 @@ export default function Page() {
       const summaryAgent = state.agentIds[0] || 'main';
       await dispatchToAgent(summaryAgent, summaryPrompt, orchestrationId, 'summary', { relation: 'Final conclusion', summary: true });
     }
+
+    if (state.mode === 'auto') {
+      const ext = state as Record<string, unknown>;
+      const phase = ext.autoPhase as string;
+      const autoStep = (ext.autoStep as number) || 0;
+      const schedulerAgentId = state.agentIds[0];
+      const agentList = (ext.autoAgentList as string) || '';
+      const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
+
+      if (phase === 'awaiting-plan' || phase === 'awaiting-eval') {
+        // Parse JSON from last scheduler response
+        const lastResult = Object.values(state.results).pop() || '';
+        let decision: { done?: boolean; nextAgent?: string; instruction?: string; summary?: string } = { done: true };
+        try {
+          const jsonMatch = lastResult.match(/\{[\s\S]*?\}/);
+          if (jsonMatch) decision = JSON.parse(jsonMatch[0]);
+        } catch { /* fallback to done */ }
+
+        if (decision.done || !decision.nextAgent || autoStep >= AUTO_MAX_STEPS) {
+          // Done — generate summary
+          ext.autoPhase = 'done';
+          state.summaryStarted = true;
+          const summaryPrompt = [
+            'You are the final coordinator. Summarize the results of this auto-scheduled multi-agent task.',
+            `Original task: ${state.originalTask}`, '',
+            ...autoHistory.map((h, i) => `## Step ${i + 1} — ${h.agent}\n${state.results[h.agent] || '(no result)'}`), '',
+            decision.summary ? `\nScheduler conclusion: ${decision.summary}` : '',
+            '\nPlease output:', '1. What was accomplished', '2. Final result', '3. Any remaining issues or next steps',
+          ].join('\n');
+          await dispatchToAgent(schedulerAgentId, summaryPrompt, orchestrationId, 'summary', { relation: 'Auto: final summary', summary: true });
+          return;
+        }
+
+        // Dispatch to the chosen agent
+        ext.autoStep = autoStep + 1;
+        ext.autoPhase = 'awaiting-execution';
+        ext.autoCurrentTarget = decision.nextAgent;
+        autoHistory.push({ agent: decision.nextAgent, instruction: decision.instruction || state.originalTask, step: autoStep + 1 });
+        state.results = {}; // clear for next agent
+        await dispatchToAgent(decision.nextAgent, decision.instruction || state.originalTask, orchestrationId, 'worker', {
+          round: autoStep + 1,
+          relation: `Auto: step ${autoStep + 1}`,
+        });
+        return;
+      }
+
+      if (phase === 'awaiting-execution') {
+        // Worker finished — ask scheduler to evaluate
+        const targetAgent = ext.autoCurrentTarget as string;
+        const agentResult = state.results[targetAgent] || '(no response)';
+
+        ext.autoPhase = 'awaiting-eval';
+        state.results = {}; // clear for scheduler response
+        const evalPrompt = [
+          'You are an intelligent task scheduler evaluating the result of a step.',
+          `\nOriginal task: ${state.originalTask}`,
+          `\nAvailable agents:\n${agentList}`,
+          `\nStep ${autoStep} — Agent "${targetAgent}" responded:\n${agentResult}`,
+          autoHistory.length > 1 ? `\nPrior steps:\n${autoHistory.slice(0, -1).map((h) => `Step ${h.step} (${h.agent}): ${h.instruction}`).join('\n')}` : '',
+          `\nSteps remaining: ${AUTO_MAX_STEPS - autoStep}`,
+          '\nDecide: is the task complete, or should another agent act?',
+          'Respond with ONLY a JSON object (no markdown fences, no explanation):',
+          '- If done: { "done": true, "summary": "<brief conclusion>" }',
+          '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context from prior results>" }',
+        ].join('\n');
+        await dispatchToAgent(schedulerAgentId, evalPrompt, orchestrationId, 'worker', {
+          round: autoStep,
+          relation: 'Auto: scheduler evaluating',
+        });
+        return;
+      }
+    }
+  }
+
+  /* ── Auto (Scheduler) orchestration ── */
+
+  const AUTO_MAX_STEPS = 5;
+
+  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string) {
+    const schedulerAgentId = agentIds[0];
+    const agentList = agentIds.map((id) => {
+      const a = agents.find((x) => x.id === id);
+      return `- ${id}: ${a?.name || id}`;
+    }).join('\n');
+    const history: { agent: string; instruction: string; step: number }[] = [];
+
+    // Step 1: Ask scheduler agent to plan the first step
+    const planPrompt = [
+      'You are an intelligent task scheduler. Decide which agent should handle this task first.',
+      `\nAvailable agents:\n${agentList}`,
+      `\nUser task: ${task}`,
+      '\nIMPORTANT: Respond with ONLY a JSON object (no markdown fences, no explanation):',
+      '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
+      'If the task can be fully answered by you alone, respond: { "done": true, "summary": "<your answer>" }',
+    ].join('\n');
+
+    await dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {
+      round: 0,
+      relation: 'Auto: scheduler planning',
+    });
+
+    // After scheduler responds, its result is captured in orchestration state via maybeAdvanceOrchestration.
+    // For auto mode, we need to parse the scheduler response and continue the loop.
+    // We store the scheduling intent so maybeAdvanceOrchestration can handle the auto routing.
+    const state = orchestrationsRef.current[orchestrationId];
+    if (state) {
+      (state as Record<string, unknown>).autoHistory = history;
+      (state as Record<string, unknown>).autoAgentList = agentList;
+      (state as Record<string, unknown>).autoStep = 0;
+      (state as Record<string, unknown>).autoPhase = 'awaiting-plan'; // 'awaiting-plan' | 'awaiting-execution' | 'awaiting-eval' | 'done'
+    }
   }
 
   /* ── Send handler ── */
@@ -942,7 +1053,9 @@ export default function Page() {
         await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker');
         return;
       }
-      if (orchestrationMode === 'discussion') {
+      if (orchestrationMode === 'auto') {
+        void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage);
+      } else if (orchestrationMode === 'discussion') {
         await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
       } else {
         await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
@@ -1534,6 +1647,14 @@ export default function Page() {
                             title="Discussion: agents run in parallel, then a summary is generated"
                           >
                             💬 Discussion
+                          </button>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('auto')}
+                            title="Auto: a scheduler decides which agent to call next based on results"
+                          >
+                            🧠 Auto
                           </button>
                           {orchestrationMode === 'discussion' && (
                             <select

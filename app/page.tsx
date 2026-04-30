@@ -1256,6 +1256,12 @@ export default function Page() {
       return;
     }
 
+    // Block switching while agents are still responding
+    if (isSending || Object.keys(sessionRunsRef.current).length > 0) {
+      addMessage({ type: 'system', content: '⚠️ Please wait for the current response to finish, or stop it first.' });
+      return;
+    }
+
     // Save current chat first
     await saveCurrentChatToHistory();
 

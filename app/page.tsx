@@ -1536,19 +1536,16 @@ export default function Page() {
                             💬 Discussion
                           </button>
                           {orchestrationMode === 'discussion' && (
-                            <>
+                            <select
+                              className="orchRoundsSelect"
+                              value={discussionRounds}
+                              onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                              title="Number of discussion rounds"
+                            >
                               {[1, 2, 3, 4, 5].map((n) => (
-                                <button
-                                  key={n}
-                                  type="button"
-                                  className={`targetPill orchRoundPill ${discussionRounds === n ? 'orchPillActive' : ''}`}
-                                  onClick={() => setDiscussionRounds(n)}
-                                  title={`${n} discussion ${n === 1 ? 'round' : 'rounds'}`}
-                                >
-                                  {n}R
-                                </button>
+                                <option key={n} value={n}>{n} {n === 1 ? 'round' : 'rounds'}</option>
                               ))}
-                            </>
+                            </select>
                           )}
                         </>
                       )}
@@ -2403,29 +2400,20 @@ export default function Page() {
         .orchPill.orchPillActive:hover {
           filter: brightness(1.08);
         }
-        .orchRoundPill {
-          cursor: pointer;
-          border-color: var(--border);
-          background: transparent;
-          color: var(--muted);
-          padding: 5px 8px;
-          min-width: 0;
-          font-size: 11px;
-          transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .orchRoundPill:hover {
-          color: var(--accent);
-          border-color: var(--accent);
+        .orchRoundsSelect {
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border-strong);
           background: var(--accent-soft);
+          color: var(--accent);
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 160ms ease;
         }
-        .orchRoundPill.orchPillActive {
-          background: linear-gradient(135deg, var(--accent), var(--accent-2));
-          color: #fff;
-          border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-          box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 22%, transparent);
-        }
-        .orchRoundPill.orchPillActive:hover {
-          filter: brightness(1.08);
+        .orchRoundsSelect:hover {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft);
         }
         .composerRow {
           display: flex;

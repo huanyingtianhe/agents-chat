@@ -2401,14 +2401,13 @@ export default function Page() {
         }
         .orchToggleBtn {
           flex: 1;
-          padding: 6px 14px;
+          padding: 3px 10px;
           border: 1px solid transparent;
-          border-radius: 13px;
+          border-radius: 10px;
           background: transparent;
           color: var(--muted);
-          font-size: 0.8rem;
+          font-size: 0.74rem;
           font-weight: 600;
-          letter-spacing: 0.01em;
           cursor: pointer;
           transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
           white-space: nowrap;
@@ -2451,8 +2450,8 @@ export default function Page() {
           text-transform: uppercase;
         }
         .orchRoundsSelect {
-          padding: 3px 8px;
-          border-radius: 10px;
+          padding: 2px 6px;
+          border-radius: 8px;
           border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
           background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
           color: var(--fg);

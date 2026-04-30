@@ -2386,60 +2386,84 @@ export default function Page() {
         .orchestrationToggle {
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 2px;
-          background: var(--panel-strong);
-          border-radius: 12px;
-          border: 1px solid var(--border);
+          gap: 6px;
+          padding: 3px;
+          background: color-mix(in srgb, var(--panel-strong) 80%, transparent);
+          backdrop-filter: blur(12px);
+          border-radius: 16px;
+          border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.04);
         }
         .orchModeBtns {
           display: flex;
-          gap: 4px;
+          gap: 3px;
           flex: 1;
         }
         .orchToggleBtn {
           flex: 1;
-          padding: 4px 12px;
-          border: none;
-          border-radius: 10px;
+          padding: 6px 14px;
+          border: 1px solid transparent;
+          border-radius: 13px;
           background: transparent;
           color: var(--muted);
-          font-size: 0.82rem;
+          font-size: 0.8rem;
           font-weight: 600;
+          letter-spacing: 0.01em;
           cursor: pointer;
-          transition: all 160ms ease;
+          transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
           white-space: nowrap;
+          position: relative;
+          overflow: hidden;
         }
         .orchToggleBtn:hover {
           color: var(--fg);
           background: var(--accent-soft);
+          border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+          transform: translateY(-0.5px);
         }
         .orchToggleBtn.orchToggleActive {
-          background: var(--accent);
+          background: linear-gradient(135deg, var(--accent), var(--accent-2));
           color: #fff;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+          border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+          box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 25%, transparent),
+                      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+          transform: translateY(-0.5px);
+        }
+        .orchToggleBtn.orchToggleActive:hover {
+          filter: brightness(1.08) saturate(1.05);
+          box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent),
+                      inset 0 1px 0 rgba(255, 255, 255, 0.22);
         }
         .orchRoundsControl {
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 0 8px;
-          border-left: 1px solid var(--border);
+          padding: 0 10px 0 8px;
+          border-left: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
         }
         .orchRoundsLabel {
-          font-size: 0.78rem;
+          font-size: 0.76rem;
           color: var(--muted);
           font-weight: 600;
           white-space: nowrap;
+          letter-spacing: 0.02em;
+          text-transform: uppercase;
         }
         .orchRoundsSelect {
-          padding: 2px 6px;
-          border-radius: 8px;
-          border: 1px solid var(--border);
-          background: var(--panel-soft);
+          padding: 3px 8px;
+          border-radius: 10px;
+          border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+          background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
           color: var(--fg);
           font-size: 0.8rem;
+          font-weight: 600;
           cursor: pointer;
+          transition: all 160ms ease;
+        }
+        .orchRoundsSelect:hover {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft);
         }
         .composerRow {
           display: flex;

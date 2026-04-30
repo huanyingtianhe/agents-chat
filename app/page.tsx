@@ -365,7 +365,7 @@ export default function Page() {
   const [input, setInput] = useState('');
   const [mounted, setMounted] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
-  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('discussion');
+  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
   const [discussionRounds, setDiscussionRounds] = useState(2);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1634,6 +1634,14 @@ export default function Page() {
                         <>
                           <button
                             type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('auto')}
+                            title="Auto: a scheduler decides which agent to call next based on results"
+                          >
+                            🧠 Auto
+                          </button>
+                          <button
+                            type="button"
                             className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`}
                             onClick={() => setOrchestrationMode('pipeline')}
                             title="Pipeline: agents run sequentially, each receives the previous agent's output"
@@ -1647,14 +1655,6 @@ export default function Page() {
                             title="Discussion: agents run in parallel, then a summary is generated"
                           >
                             💬 Discussion
-                          </button>
-                          <button
-                            type="button"
-                            className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`}
-                            onClick={() => setOrchestrationMode('auto')}
-                            title="Auto: a scheduler decides which agent to call next based on results"
-                          >
-                            🧠 Auto
                           </button>
                           {orchestrationMode === 'discussion' && (
                             <select

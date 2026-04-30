@@ -1517,44 +1517,40 @@ export default function Page() {
                       {mentionedAgentIds.map((agentId) => (
                         <span key={agentId} className="targetPill">@{agentId}</span>
                       ))}
-                    </div>
-                  ) : null}
-                  {orchestrationEnabled && (
-                    <div className="orchestrationToggle">
-                      <div className="orchModeBtns">
-                        <button
-                          type="button"
-                          className={`orchToggleBtn ${orchestrationMode === 'pipeline' ? 'orchToggleActive' : ''}`}
-                          onClick={() => setOrchestrationMode('pipeline')}
-                          title="Pipeline: agents run sequentially, each receives the previous agent's output"
-                        >
-                          🔀 Pipeline
-                        </button>
-                        <button
-                          type="button"
-                          className={`orchToggleBtn ${orchestrationMode === 'discussion' ? 'orchToggleActive' : ''}`}
-                          onClick={() => setOrchestrationMode('discussion')}
-                          title="Discussion: agents run in parallel, then a summary is generated"
-                        >
-                          💬 Discussion
-                        </button>
-                      </div>
-                      {orchestrationMode === 'discussion' && (
-                        <div className="orchRoundsControl">
-                          <label className="orchRoundsLabel">Rounds:</label>
-                          <select
-                            className="orchRoundsSelect"
-                            value={discussionRounds}
-                            onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                      {orchestrationEnabled && (
+                        <>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('pipeline')}
+                            title="Pipeline: agents run sequentially, each receives the previous agent's output"
                           >
-                            {[1, 2, 3, 4, 5].map((n) => (
-                              <option key={n} value={n}>{n}</option>
-                            ))}
-                          </select>
-                        </div>
+                            🔀 Pipeline
+                          </button>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'discussion' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('discussion')}
+                            title="Discussion: agents run in parallel, then a summary is generated"
+                          >
+                            💬 Discussion
+                          </button>
+                          {orchestrationMode === 'discussion' && (
+                            <select
+                              className="orchRoundsSelect"
+                              value={discussionRounds}
+                              onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                              title="Number of discussion rounds"
+                            >
+                              {[1, 2, 3, 4, 5].map((n) => (
+                                <option key={n} value={n}>{n} {n === 1 ? 'round' : 'rounds'}</option>
+                              ))}
+                            </select>
+                          )}
+                        </>
                       )}
                     </div>
-                  )}
+                  ) : null}
                   <div className="composerRow">
                     <textarea
                       ref={composerRef}
@@ -2383,80 +2379,35 @@ export default function Page() {
           box-shadow: 0 0 0 1px var(--accent-soft), 0 14px 30px rgba(0, 0, 0, 0.08);
           transform: translateY(-1px);
         }
-        .orchestrationToggle {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 3px;
-          background: color-mix(in srgb, var(--panel-strong) 80%, transparent);
-          backdrop-filter: blur(12px);
-          border-radius: 16px;
-          border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-        }
-        .orchModeBtns {
-          display: flex;
-          gap: 3px;
-          flex: 1;
-        }
-        .orchToggleBtn {
-          flex: 1;
-          padding: 3px 10px;
-          border: 1px solid transparent;
-          border-radius: 10px;
+        .orchPill {
+          cursor: pointer;
+          border-color: var(--border);
           background: transparent;
           color: var(--muted);
-          font-size: 0.74rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-          white-space: nowrap;
-          position: relative;
-          overflow: hidden;
+          transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
         }
-        .orchToggleBtn:hover {
-          color: var(--fg);
+        .orchPill:hover {
+          color: var(--accent);
+          border-color: var(--accent);
           background: var(--accent-soft);
-          border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-          transform: translateY(-0.5px);
         }
-        .orchToggleBtn.orchToggleActive {
+        .orchPill.orchPillActive {
           background: linear-gradient(135deg, var(--accent), var(--accent-2));
           color: #fff;
           border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-          box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 25%, transparent),
-                      inset 0 1px 0 rgba(255, 255, 255, 0.18);
-          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-          transform: translateY(-0.5px);
+          box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 22%, transparent);
         }
-        .orchToggleBtn.orchToggleActive:hover {
-          filter: brightness(1.08) saturate(1.05);
-          box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent),
-                      inset 0 1px 0 rgba(255, 255, 255, 0.22);
-        }
-        .orchRoundsControl {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 0 10px 0 8px;
-          border-left: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-        }
-        .orchRoundsLabel {
-          font-size: 0.76rem;
-          color: var(--muted);
-          font-weight: 600;
-          white-space: nowrap;
-          letter-spacing: 0.02em;
-          text-transform: uppercase;
+        .orchPill.orchPillActive:hover {
+          filter: brightness(1.08);
         }
         .orchRoundsSelect {
-          padding: 2px 6px;
-          border-radius: 8px;
-          border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-          background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
-          color: var(--fg);
-          font-size: 0.8rem;
-          font-weight: 600;
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border-strong);
+          background: var(--accent-soft);
+          color: var(--accent);
+          font-size: 12px;
+          font-weight: 700;
           cursor: pointer;
           transition: all 160ms ease;
         }

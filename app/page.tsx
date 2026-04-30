@@ -2410,10 +2410,30 @@ export default function Page() {
           font-weight: 700;
           cursor: pointer;
           transition: all 160ms ease;
+          outline: none;
+          -webkit-appearance: none;
+          -moz-appearance: none;
+          appearance: none;
+          padding-right: 20px;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2345d7ff' opacity='0.7'/%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 7px center;
+          background-size: 8px 5px;
         }
         .orchRoundsSelect:hover {
           border-color: var(--accent);
           box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+        .orchRoundsSelect:focus {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
+          background-color: color-mix(in srgb, var(--accent-soft) 60%, var(--panel-soft));
+        }
+        .orchRoundsSelect option {
+          background: var(--panel-strong);
+          color: var(--fg);
+          padding: 6px 10px;
+          font-weight: 600;
         }
         .composerRow {
           display: flex;

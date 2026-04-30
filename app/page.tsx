@@ -687,7 +687,6 @@ export default function Page() {
     const run = sessionRunsRef.current[runKey];
     if (!run) return;
 
-    setIsSending(false);
     updateMessage(run.pendingId, { pending: false, statusText: undefined, ptyPhase: undefined });
     const orchestration = orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
@@ -695,6 +694,13 @@ export default function Page() {
       void maybeAdvanceOrchestration(run.orchestrationId);
     }
     delete sessionRunsRef.current[runKey];
+
+    // Only clear isSending when no active runs remain AND no orchestration will continue
+    const hasActiveRuns = Object.keys(sessionRunsRef.current).length > 0;
+    const hasActiveOrch = orchestration && !orchestration.summaryStarted && run.kind === 'worker';
+    if (!hasActiveRuns && !hasActiveOrch) {
+      setIsSending(false);
+    }
   }
 
   async function pollAcpAgent(agentId: string) {
@@ -901,6 +907,7 @@ export default function Page() {
     if (state.mode === 'auto') {
       const ext = state as Record<string, unknown>;
       const phase = ext.autoPhase as string;
+      console.log('[Auto] maybeAdvance called, phase:', phase, 'results:', Object.keys(state.results));
       const autoStep = (ext.autoStep as number) || 0;
       const schedulerAgentId = state.agentIds[0];
       const agentList = (ext.autoAgentList as string) || '';
@@ -914,13 +921,16 @@ export default function Page() {
 
       try {
         if (phase === 'awaiting-plan' || phase === 'awaiting-eval') {
-          // Parse JSON from last scheduler response
+          // Parse JSON from last scheduler response (greedy to handle nested braces)
           const lastResult = Object.values(state.results).pop() || '';
           let decision: { done?: boolean; nextAgent?: string; instruction?: string; summary?: string } = { done: true };
           try {
-            const jsonMatch = lastResult.match(/\{[\s\S]*?\}/);
+            const jsonMatch = lastResult.match(/\{[\s\S]*\}/);
             if (jsonMatch) decision = JSON.parse(jsonMatch[0]);
-          } catch { /* fallback to done */ }
+          } catch (e) {
+            console.warn('[Auto] Failed to parse scheduler JSON:', e, '\nRaw:', lastResult.slice(0, 500));
+          }
+          console.log('[Auto]', phase, 'decision:', JSON.stringify(decision), 'results keys:', Object.keys(state.results));
 
           if (decision.done || !decision.nextAgent || autoStep >= AUTO_MAX_STEPS) {
             // Done — generate summary

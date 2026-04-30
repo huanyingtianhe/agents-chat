@@ -95,6 +95,9 @@ type ChatMessage = {
 
 type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
 
+const AUTO_MAX_STEPS = 5;
+const SCHEDULER_AGENT_ID = 'scheduler';
+
 type SessionRunContext = {
   agentId: string;
   pendingId: string;
@@ -997,9 +1000,6 @@ export default function Page() {
   }
 
   /* ── Auto (Scheduler) orchestration ── */
-
-  const AUTO_MAX_STEPS = 5;
-  const SCHEDULER_AGENT_ID = 'scheduler';
 
   async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string) {
     const schedulerAgentId = SCHEDULER_AGENT_ID;

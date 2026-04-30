@@ -1521,22 +1521,38 @@ export default function Page() {
                   ) : null}
                   {orchestrationEnabled && (
                     <div className="orchestrationToggle">
-                      <button
-                        type="button"
-                        className={`orchToggleBtn ${orchestrationMode === 'pipeline' ? 'orchToggleActive' : ''}`}
-                        onClick={() => setOrchestrationMode('pipeline')}
-                        title="Pipeline: agents run sequentially, each receives the previous agent's output"
-                      >
-                        🔀 Pipeline
-                      </button>
-                      <button
-                        type="button"
-                        className={`orchToggleBtn ${orchestrationMode === 'discussion' ? 'orchToggleActive' : ''}`}
-                        onClick={() => setOrchestrationMode('discussion')}
-                        title="Discussion: agents run in parallel, then a summary is generated"
-                      >
-                        💬 Discussion
-                      </button>
+                      <div className="orchModeBtns">
+                        <button
+                          type="button"
+                          className={`orchToggleBtn ${orchestrationMode === 'pipeline' ? 'orchToggleActive' : ''}`}
+                          onClick={() => setOrchestrationMode('pipeline')}
+                          title="Pipeline: agents run sequentially, each receives the previous agent's output"
+                        >
+                          🔀 Pipeline
+                        </button>
+                        <button
+                          type="button"
+                          className={`orchToggleBtn ${orchestrationMode === 'discussion' ? 'orchToggleActive' : ''}`}
+                          onClick={() => setOrchestrationMode('discussion')}
+                          title="Discussion: agents run in parallel, then a summary is generated"
+                        >
+                          💬 Discussion
+                        </button>
+                      </div>
+                      {orchestrationMode === 'discussion' && (
+                        <div className="orchRoundsControl">
+                          <label className="orchRoundsLabel">Rounds:</label>
+                          <select
+                            className="orchRoundsSelect"
+                            value={discussionRounds}
+                            onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                          >
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="composerRow">
@@ -2369,11 +2385,17 @@ export default function Page() {
         }
         .orchestrationToggle {
           display: flex;
+          align-items: center;
           gap: 4px;
           padding: 2px;
           background: var(--panel-strong);
           border-radius: 12px;
           border: 1px solid var(--border);
+        }
+        .orchModeBtns {
+          display: flex;
+          gap: 4px;
+          flex: 1;
         }
         .orchToggleBtn {
           flex: 1;
@@ -2396,6 +2418,28 @@ export default function Page() {
           background: var(--accent);
           color: #fff;
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+        .orchRoundsControl {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 0 8px;
+          border-left: 1px solid var(--border);
+        }
+        .orchRoundsLabel {
+          font-size: 0.78rem;
+          color: var(--muted);
+          font-weight: 600;
+          white-space: nowrap;
+        }
+        .orchRoundsSelect {
+          padding: 2px 6px;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: var(--panel-soft);
+          color: var(--fg);
+          font-size: 0.8rem;
+          cursor: pointer;
         }
         .composerRow {
           display: flex;

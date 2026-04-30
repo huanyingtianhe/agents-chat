@@ -8,7 +8,8 @@
         "--acp"
       ],
       "cwd": "Q:\\Repos\\EventStream-TSG",
-      "yolo": true
+      "yolo": false,
+      "noTools": true
     },
     {
       "id": "copilot",

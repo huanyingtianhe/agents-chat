@@ -1207,7 +1207,9 @@ export default function Page() {
     const currentName = chatNameRef.current;
     const userMsgs = currentMessages.filter(m => m.type === 'user');
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
-    const persistable = currentMessages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
+    const persistable = currentMessages
+      .filter(m => !(m.type === 'system' && m.ts !== 0))
+      .map(m => m.pending ? { ...m, pending: false, content: m.content || '⏹ (interrupted by chat switch)', statusText: undefined, ptyPhase: undefined } : m);
 
     // Get current agent session IDs from SQLite (each chat stores its own sessions)
     let agentSessions: Record<string, string> = {};

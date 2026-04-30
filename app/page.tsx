@@ -414,14 +414,14 @@ export default function Page() {
     const match = input.match(/@(\S*)$/);
     if (!match) return [];
     const q = match[1].toLowerCase();
-    return agents.filter((a) => a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q));
+    return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q)));
   }, [input, agents]);
 
   const mentionedAgentIds = useMemo(() => getMentionedAgentIds(input, agents), [input, agents]);
   const orchestrationEnabled = mentionedAgentIds.length > 1;
 
   const agentSidebarItems = useMemo(() => {
-    return agents.map((agent) => {
+    return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID).map((agent) => {
       const running = messages.some((m) => m.agentId === agent.id && m.pending);
       return { ...agent, running };
     });
@@ -909,7 +909,7 @@ export default function Page() {
       const phase = ext.autoPhase as string;
       console.log('[Auto] maybeAdvance called, phase:', phase, 'results:', Object.keys(state.results));
       const autoStep = (ext.autoStep as number) || 0;
-      const schedulerAgentId = state.agentIds[0];
+      const schedulerAgentId = SCHEDULER_AGENT_ID;
       const agentList = (ext.autoAgentList as string) || '';
       const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
 
@@ -999,9 +999,10 @@ export default function Page() {
   /* ── Auto (Scheduler) orchestration ── */
 
   const AUTO_MAX_STEPS = 5;
+  const SCHEDULER_AGENT_ID = 'scheduler';
 
   async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string) {
-    const schedulerAgentId = agentIds[0];
+    const schedulerAgentId = SCHEDULER_AGENT_ID;
     const agentList = agentIds.map((id) => {
       const a = agents.find((x) => x.id === id);
       return `- ${id}: ${a?.name || id}`;

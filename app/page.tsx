@@ -804,6 +804,7 @@ export default function Page() {
         const effectiveStatus = statusText || '';
 
         if (turn.done) {
+          current.currentText = serverText;
           updateMessage(current.pendingId, {
             content: serverText || (turn.error ? `⚠️ ${turn.error}` : ''),
             pending: false,

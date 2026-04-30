@@ -973,16 +973,16 @@ export default function Page() {
           ext.autoPhase = 'awaiting-eval';
           state.results = {};
           const evalPrompt = [
-            'You are an intelligent task scheduler evaluating the result of a step.',
+            'You are a ROUTING-ONLY scheduler evaluating a step result. Your ONLY job is to decide next action and output JSON.',
+            'DO NOT use any tools. DO NOT read files. DO NOT run commands. Just evaluate and decide.',
             `\nOriginal task: ${state.originalTask}`,
             `\nAvailable agents:\n${agentList}`,
             `\nStep ${autoStep} — Agent "${targetAgent}" responded:\n${agentResult}`,
             autoHistory.length > 1 ? `\nPrior steps:\n${autoHistory.slice(0, -1).map((h) => `Step ${h.step} (${h.agent}): ${h.instruction}`).join('\n')}` : '',
             `\nSteps remaining: ${AUTO_MAX_STEPS - autoStep}`,
-            '\nDecide: is the task complete, or should another agent act?',
-            'Respond with ONLY a JSON object (no markdown fences, no explanation):',
+            '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
             '- If done: { "done": true, "summary": "<brief conclusion>" }',
-            '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context from prior results>" }',
+            '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context>" }',
           ].join('\n');
           await prepareNextDispatch(schedulerAgentId);
           await dispatchToAgent(schedulerAgentId, evalPrompt, orchestrationId, 'worker', {
@@ -1011,12 +1011,14 @@ export default function Page() {
 
     // Step 1: Ask scheduler agent to plan the first step
     const planPrompt = [
-      'You are an intelligent task scheduler. Decide which agent should handle this task first.',
+      'You are a ROUTING-ONLY scheduler. Your ONLY job is to pick which agent handles the task and output JSON.',
+      'DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
+      'Just read the task and decide which agent should handle it.',
       `\nAvailable agents:\n${agentList}`,
       `\nUser task: ${task}`,
-      '\nIMPORTANT: Respond with ONLY a JSON object (no markdown fences, no explanation):',
+      '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
       '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
-      'If the task can be fully answered by you alone, respond: { "done": true, "summary": "<your answer>" }',
+      'If no agent is needed: { "done": true, "summary": "<your answer>" }',
     ].join('\n');
 
     await dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {

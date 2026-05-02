@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, saveChat, deleteChat, migrateFromJson, StoredChat } from '@/lib/chatStore';
+import { listChats, getChat, saveChat, deleteChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +29,8 @@ export async function GET(req: NextRequest) {
   }
 
   const chats = await listChats(userId);
-  return NextResponse.json({ ok: true, chats });
+  const lastChatId = await getLastChatId(userId);
+  return NextResponse.json({ ok: true, chats, lastChatId });
 }
 
 export async function POST(req: NextRequest) {
@@ -44,6 +45,14 @@ export async function POST(req: NextRequest) {
     if (!isAdminToken(token)) return NextResponse.json({ ok: false, error: 'admin_only' }, { status: 403 });
     const result = await migrateFromJson();
     return NextResponse.json({ ok: true, migrated: result });
+  }
+
+  // Save last active chat ID
+  if (body?.action === 'set-last-chat') {
+    const chatId = body?.chatId;
+    if (typeof chatId !== 'string' || !chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
+    await setLastChatId(userId, chatId);
+    return NextResponse.json({ ok: true });
   }
 
   const chat = body?.chat as StoredChat | undefined;

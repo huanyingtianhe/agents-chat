@@ -68,6 +68,7 @@ type AgentConfig = {
   args?: string[];
   cwd: string;
   yolo: boolean;
+  noTools?: boolean;
 };
 
 /* ─────────── Minimal NDJSON-RPC over raw Node streams ─────────── */
@@ -512,6 +513,19 @@ async function doBootAgent(agentId: string): Promise<void> {
 
     rpc.onRequest = (method, params, id) => {
       console.log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
+
+      // noTools agents: deny all tool/permission requests so the agent responds quickly
+      if (config.noTools) {
+        if (method === 'session/request_permission') {
+          rpc.respond(id, { outcome: { outcome: 'denied', message: 'Tools disabled for this agent' } });
+        } else if (method === 'terminal/create' || method === 'fs/read_text_file' || method === 'fs/write_text_file') {
+          rpc.respond(id, { error: 'Tools disabled for this agent' });
+        } else {
+          rpc.respond(id, {});
+        }
+        return;
+      }
+
       if (method === 'session/request_permission') {
         rpc.respond(id, { outcome: { outcome: 'approved' } });
       } else if (method === 'terminal/create') {
@@ -667,8 +681,9 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
 async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId: string, userId: string, isAdmin: boolean): Promise<void> {
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
-  const mcpServers = await loadMcpServers(isAdmin);
-  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${mcpServers.length})...`);
+  // noTools agents get no MCP servers to prevent tool usage and speed up responses
+  const mcpServers = proc.config.noTools ? [] : await loadMcpServers(isAdmin);
+  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${mcpServers.length}, noTools=${!!proc.config.noTools})...`);
   const result = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);

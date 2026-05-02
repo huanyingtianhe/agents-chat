@@ -74,6 +74,12 @@ function getDb(): Database.Database {
       name       TEXT NOT NULL,
       messages   TEXT NOT NULL DEFAULT '[]'
     );
+
+    CREATE TABLE IF NOT EXISTS user_prefs (
+      user_id       TEXT PRIMARY KEY,
+      last_chat_id  TEXT,
+      updated_at    INTEGER NOT NULL DEFAULT 0
+    );
   `);
 
   return _db;
@@ -84,7 +90,7 @@ function getDb(): Database.Database {
 /** List all chats for a user (metadata only, no messages). */
 export async function listChats(userId: string): Promise<{ id: string; name: string; ts: number }[]> {
   const db = getDb();
-  const rows = db.prepare('SELECT chat_id, name, ts FROM chats WHERE user_id = ? ORDER BY ts DESC').all(userId) as any[];
+  const rows = db.prepare('SELECT chat_id, name, ts FROM chats WHERE user_id = ? ORDER BY ts DESC, chat_id DESC').all(userId) as any[];
   return rows.map(r => ({ id: r.chat_id, name: r.name, ts: r.ts }));
 }
 
@@ -168,6 +174,24 @@ export async function getSharedChat(shareId: string): Promise<SharedChat | null>
     name: row.name,
     messages: JSON.parse(row.messages),
   };
+}
+
+/* ─────────── User preferences ─────────── */
+
+/** Get last active chat ID for a user. */
+export async function getLastChatId(userId: string): Promise<string | null> {
+  const db = getDb();
+  const row = db.prepare('SELECT last_chat_id FROM user_prefs WHERE user_id = ?').get(userId) as any;
+  return row?.last_chat_id || null;
+}
+
+/** Save last active chat ID for a user. */
+export async function setLastChatId(userId: string, chatId: string): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO user_prefs (user_id, last_chat_id, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET last_chat_id = excluded.last_chat_id, updated_at = excluded.updated_at
+  `).run(userId, chatId, Date.now());
 }
 
 /* ─────────── Migration from JSON files ─────────── */

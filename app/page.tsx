@@ -93,7 +93,25 @@ type ChatMessage = {
   parts?: ContentPart[];
 };
 
-type OrchestrationMode = 'discussion' | 'pipeline';
+type ChatHistoryEntry = {
+  id: string;
+  name: string;
+  ts: number;
+  agentSessions?: Record<string, string>;
+};
+
+type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
+
+const AUTO_MAX_STEPS = 5;
+const SCHEDULER_AGENT_ID = 'scheduler';
+
+function normalizeChatHistory(chats: ChatHistoryEntry[]): ChatHistoryEntry[] {
+  const byId = new Map<string, ChatHistoryEntry>();
+  for (const chat of chats) {
+    if (!byId.has(chat.id)) byId.set(chat.id, chat);
+  }
+  return Array.from(byId.values()).sort((a, b) => (b.ts - a.ts) || b.id.localeCompare(a.id));
+}
 
 type SessionRunContext = {
   agentId: string;
@@ -119,13 +137,10 @@ type OrchestrationState = {
   maxRounds: number;
 };
 
-/* ────────── Storage keys ────────── */
+/* ────────── Storage keys (UI prefs only — chat data is in SQLite) ────────── */
 
-const STORAGE_CHAT_MESSAGES = 'acp_chat_messages_v1';
 const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
-const STORAGE_CURRENT_CHAT_ID = 'acp_chat_current_id_v1';
-const STORAGE_CHAT_PREFIX = 'acp_chat_data_';
 const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 
@@ -324,7 +339,7 @@ function getMentionedAgentIds(text: string, agents: Agent[]) {
 function parseAgents(text: string, agents: Agent[]) {
   const agentIds = getMentionedAgentIds(text, agents);
   if (agentIds.length === 0) {
-    const fallback = agents[0] || { id: 'main', name: 'Main' };
+    const fallback = agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
     return { agentIds: [fallback.id], message: text };
   }
   const message = text.replace(/(?:^|\s)@(\S+)/g, '').trim();
@@ -368,7 +383,7 @@ export default function Page() {
   const [input, setInput] = useState('');
   const [mounted, setMounted] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
-  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('discussion');
+  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
   const [discussionRounds, setDiscussionRounds] = useState(2);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -377,12 +392,14 @@ export default function Page() {
   const [chatName, setChatName] = useState('New Chat');
   const [chatCounter, setChatCounter] = useState(1);
   const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
+  const [activeSidebarChatId, setActiveSidebarChatId] = useState<string>('chat-1');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
-  const [chatHistory, setChatHistory] = useState<{ id: string; name: string; ts: number; agentSessions?: Record<string, string> }[]>([]);
+  const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [themeId, setThemeId] = useState<ThemeId>('aurora');
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
+  const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -417,14 +434,14 @@ export default function Page() {
     const match = input.match(/@(\S*)$/);
     if (!match) return [];
     const q = match[1].toLowerCase();
-    return agents.filter((a) => a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q));
+    return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q)));
   }, [input, agents]);
 
   const mentionedAgentIds = useMemo(() => getMentionedAgentIds(input, agents), [input, agents]);
   const orchestrationEnabled = mentionedAgentIds.length > 1;
 
   const agentSidebarItems = useMemo(() => {
-    return agents.map((agent) => {
+    return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID).map((agent) => {
       const running = messages.some((m) => m.agentId === agent.id && m.pending);
       return { ...agent, running };
     });
@@ -447,40 +464,32 @@ export default function Page() {
     setMounted(true);
     const savedInput = window.localStorage.getItem(STORAGE_CHAT_INPUT);
     const savedCollapsed = window.localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
-    const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
 
     if (savedInput) setInput(savedInput);
     if (savedCollapsed != null) setSidebarCollapsed(savedCollapsed === '1');
-    if (savedChatId) setCurrentChatId(savedChatId);
 
-    // If current chat is an imported shared chat, load from server
-    if (savedChatId && savedChatId.startsWith('shared-')) {
-      fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.ok && data.chat) {
-            setMessages(data.chat.messages || []);
-            setChatName(data.chat.name || savedChatId);
-            // No agent sessions — first send should include context
-            needsContextRestoreRef.current = true;
-          }
-        })
-        .catch(() => { /* ignore */ });
-    } else {
-      const savedMessages = window.localStorage.getItem(STORAGE_CHAT_MESSAGES);
-      if (savedMessages) {
-        try {
-          const parsed = JSON.parse(savedMessages);
-          if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
-        } catch { /* ignore */ }
-      }
-      // Resume agent sessions is handled in a separate effect that waits for auth
-    }
-
-    // Load chat history from server
+    // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
+      const lastChatId = data.lastChatId as string | null;
+      if (lastChatId) {
+        setCurrentChatId(lastChatId);
+        setActiveSidebarChatId(lastChatId);
+        // Load that chat's messages from server
+        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`)
+          .then(r => r.json())
+          .then(chatData => {
+            if (chatData.ok && chatData.chat) {
+              const msgs = chatData.chat.messages || [];
+              setMessages(msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
+              setChatName(chatData.chat.name || lastChatId);
+              needsContextRestoreRef.current = true;
+            }
+          })
+          .catch(() => { /* ignore */ });
+      }
     }).catch(() => { /* ignore */ });
+
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
       if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || [];
@@ -515,10 +524,10 @@ export default function Page() {
     if (!mounted || authStatus === 'loading') return;
     if (sessionResumedRef.current) return;
     sessionResumedRef.current = true;
-    const savedChatId = window.localStorage.getItem(STORAGE_CURRENT_CHAT_ID);
-    if (!savedChatId) return;
+    const activeChatId = currentChatIdRef.current;
+    if (!activeChatId || activeChatId === 'chat-1') return;
     needsContextRestoreRef.current = true;
-    fetch(`/api/chats?id=${encodeURIComponent(savedChatId)}`)
+    fetch(`/api/chats?id=${encodeURIComponent(activeChatId)}`)
       .then(r => r.json())
       .then(async (data: any) => {
         if (data.ok && data.chat) {
@@ -529,7 +538,7 @@ export default function Page() {
           if (entries.length > 0) {
             const results = await Promise.allSettled(
               entries.map(([agentId, sessionId]) =>
-                acp({ action: 'resume-session', agentId, sessionId, chatId: savedChatId })
+                acp({ action: 'resume-session', agentId, sessionId, chatId: activeChatId })
               )
             );
             const allLoaded = results.every(
@@ -569,12 +578,6 @@ export default function Page() {
 
   useEffect(() => {
     if (!mounted) return;
-    const persistable = messages.filter((m) => !m.pending && !(m.type === 'system' && m.ts !== 0));
-    try { window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(persistable)); } catch { /* ignore */ }
-  }, [messages, mounted]);
-
-  useEffect(() => {
-    if (!mounted) return;
     window.localStorage.setItem(STORAGE_CHAT_INPUT, input);
   }, [input, mounted]);
 
@@ -598,6 +601,18 @@ export default function Page() {
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [showThemeMenu]);
+
+  useEffect(() => {
+    if (!openChatMenuId) return;
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('.chatActionsWrap')) {
+        setOpenChatMenuId(null);
+      }
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [openChatMenuId]);
 
   /* ── Core functions ── */
 
@@ -705,7 +720,6 @@ export default function Page() {
     const run = sessionRunsRef.current[runKey];
     if (!run) return;
 
-    setIsSending(false);
     updateMessage(run.pendingId, { pending: false, statusText: undefined, ptyPhase: undefined });
     const orchestration = orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
@@ -713,6 +727,13 @@ export default function Page() {
       void maybeAdvanceOrchestration(run.orchestrationId);
     }
     delete sessionRunsRef.current[runKey];
+
+    // Only clear isSending when no active runs remain AND no orchestration will continue
+    const hasActiveRuns = Object.keys(sessionRunsRef.current).length > 0;
+    const hasActiveOrch = orchestration && !orchestration.summaryStarted && run.kind === 'worker';
+    if (!hasActiveRuns && !hasActiveOrch) {
+      setIsSending(false);
+    }
   }
 
   async function pollAcpAgent(agentId: string) {
@@ -813,6 +834,7 @@ export default function Page() {
         const effectiveStatus = statusText || '';
 
         if (turn.done) {
+          current.currentText = serverText;
           updateMessage(current.pendingId, {
             content: serverText || (turn.error ? `⚠️ ${turn.error}` : ''),
             pending: false,
@@ -915,6 +937,136 @@ export default function Page() {
       const summaryAgent = state.agentIds[0] || 'main';
       await dispatchToAgent(summaryAgent, summaryPrompt, orchestrationId, 'summary', { relation: 'Final conclusion', summary: true });
     }
+
+    if (state.mode === 'auto') {
+      const ext = state as Record<string, unknown>;
+      const phase = ext.autoPhase as string;
+      console.log('[Auto] maybeAdvance called, phase:', phase, 'results:', Object.keys(state.results));
+      const autoStep = (ext.autoStep as number) || 0;
+      const schedulerAgentId = SCHEDULER_AGENT_ID;
+      const agentList = (ext.autoAgentList as string) || '';
+      const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
+
+      // Helper: clear previous turn and wait before next dispatch
+      const prepareNextDispatch = async (agentId: string) => {
+        await acp({ action: 'turn-clear', agentId }).catch(() => null);
+        await new Promise((r) => setTimeout(r, 800));
+      };
+
+      try {
+        if (phase === 'awaiting-plan' || phase === 'awaiting-eval') {
+          // Parse JSON from last scheduler response (greedy to handle nested braces)
+          const lastResult = Object.values(state.results).pop() || '';
+          let decision: { done?: boolean; nextAgent?: string; instruction?: string; summary?: string } = { done: true };
+          try {
+            const jsonMatch = lastResult.match(/\{[\s\S]*\}/);
+            if (jsonMatch) decision = JSON.parse(jsonMatch[0]);
+          } catch (e) {
+            console.warn('[Auto] Failed to parse scheduler JSON:', e, '\nRaw:', lastResult.slice(0, 500));
+          }
+          console.log('[Auto]', phase, 'decision:', JSON.stringify(decision), 'results keys:', Object.keys(state.results));
+
+          if (decision.done || !decision.nextAgent || autoStep >= AUTO_MAX_STEPS) {
+            // Done — generate summary
+            ext.autoPhase = 'done';
+            state.summaryStarted = true;
+            const summaryPrompt = [
+              'You are the final coordinator. Summarize the results of this auto-scheduled multi-agent task.',
+              `Original task: ${state.originalTask}`, '',
+              ...autoHistory.map((h, i) => `## Step ${i + 1} — ${h.agent}\n${state.results[h.agent] || '(no result)'}`), '',
+              decision.summary ? `\nScheduler conclusion: ${decision.summary}` : '',
+              '\nPlease output:', '1. What was accomplished', '2. Final result', '3. Any remaining issues or next steps',
+            ].join('\n');
+            await prepareNextDispatch(schedulerAgentId);
+            await dispatchToAgent(schedulerAgentId, summaryPrompt, orchestrationId, 'summary', { relation: 'Auto: final summary', summary: true });
+            return;
+          }
+
+          // Dispatch to the chosen agent
+          ext.autoStep = autoStep + 1;
+          ext.autoPhase = 'awaiting-execution';
+          ext.autoCurrentTarget = decision.nextAgent;
+          autoHistory.push({ agent: decision.nextAgent, instruction: decision.instruction || state.originalTask, step: autoStep + 1 });
+          state.results = {};
+          await prepareNextDispatch(decision.nextAgent);
+          await dispatchToAgent(decision.nextAgent, decision.instruction || state.originalTask, orchestrationId, 'worker', {
+            round: autoStep + 1,
+            relation: `Auto: step ${autoStep + 1}`,
+          });
+          return;
+        }
+
+        if (phase === 'awaiting-execution') {
+          // Worker finished — ask scheduler to evaluate
+          const targetAgent = ext.autoCurrentTarget as string;
+          const agentResult = state.results[targetAgent] || '(no response)';
+
+          ext.autoPhase = 'awaiting-eval';
+          state.results = {};
+          const evalPrompt = [
+            'You are a ROUTING-ONLY scheduler evaluating a step result. Your ONLY job is to decide next action and output JSON.',
+            'DO NOT use any tools. DO NOT read files. DO NOT run commands. Just evaluate and decide.',
+            `\nOriginal task: ${state.originalTask}`,
+            `\nAvailable agents:\n${agentList}`,
+            `\nStep ${autoStep} — Agent "${targetAgent}" responded:\n${agentResult}`,
+            autoHistory.length > 1 ? `\nPrior steps:\n${autoHistory.slice(0, -1).map((h) => `Step ${h.step} (${h.agent}): ${h.instruction}`).join('\n')}` : '',
+            `\nSteps remaining: ${AUTO_MAX_STEPS - autoStep}`,
+            '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
+            '- If done: { "done": true, "summary": "<brief conclusion>" }',
+            '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context>" }',
+          ].join('\n');
+          await prepareNextDispatch(schedulerAgentId);
+          await dispatchToAgent(schedulerAgentId, evalPrompt, orchestrationId, 'worker', {
+            round: autoStep,
+            relation: 'Auto: scheduler evaluating',
+          });
+          return;
+        }
+      } catch (err) {
+        console.error('[Auto] orchestration step failed:', err);
+        addMessage({ type: 'system', content: `⚠️ Auto orchestration error: ${err instanceof Error ? err.message : String(err)}` });
+        setIsSending(false);
+      }
+    }
+  }
+
+  /* ── Auto (Scheduler) orchestration ── */
+
+  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string) {
+    const schedulerAgentId = SCHEDULER_AGENT_ID;
+    const agentList = agentIds.map((id) => {
+      const a = agents.find((x) => x.id === id);
+      return `- ${id}: ${a?.name || id}`;
+    }).join('\n');
+    const history: { agent: string; instruction: string; step: number }[] = [];
+
+    // Step 1: Ask scheduler agent to plan the first step
+    const planPrompt = [
+      'You are a ROUTING-ONLY scheduler. Your ONLY job is to pick which agent handles the task and output JSON.',
+      'DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
+      'Just read the task and decide which agent should handle it.',
+      `\nAvailable agents:\n${agentList}`,
+      `\nUser task: ${task}`,
+      '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
+      '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
+      'If no agent is needed: { "done": true, "summary": "<your answer>" }',
+    ].join('\n');
+
+    await dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {
+      round: 0,
+      relation: 'Auto: scheduler planning',
+    });
+
+    // After scheduler responds, its result is captured in orchestration state via maybeAdvanceOrchestration.
+    // For auto mode, we need to parse the scheduler response and continue the loop.
+    // We store the scheduling intent so maybeAdvanceOrchestration can handle the auto routing.
+    const state = orchestrationsRef.current[orchestrationId];
+    if (state) {
+      (state as Record<string, unknown>).autoHistory = history;
+      (state as Record<string, unknown>).autoAgentList = agentList;
+      (state as Record<string, unknown>).autoStep = 0;
+      (state as Record<string, unknown>).autoPhase = 'awaiting-plan'; // 'awaiting-plan' | 'awaiting-execution' | 'awaiting-eval' | 'done'
+    }
   }
 
   /* ── Send handler ── */
@@ -960,7 +1112,9 @@ export default function Page() {
         await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker');
         return;
       }
-      if (orchestrationMode === 'discussion') {
+      if (orchestrationMode === 'auto') {
+        void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage);
+      } else if (orchestrationMode === 'discussion') {
         await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
       } else {
         await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
@@ -1081,13 +1235,15 @@ export default function Page() {
 
   /* ── New chat ── */
 
-  async function saveCurrentChatToHistory() {
+  async function saveCurrentChatToHistory(preserveOrder = false) {
     const currentMessages = messagesRef.current;
     const currentId = currentChatIdRef.current;
     const currentName = chatNameRef.current;
     const userMsgs = currentMessages.filter(m => m.type === 'user');
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
-    const persistable = currentMessages.filter(m => !m.pending && !(m.type === 'system' && m.ts !== 0));
+    const persistable = currentMessages
+      .filter(m => !(m.type === 'system' && m.ts !== 0))
+      .map(m => m.pending ? { ...m, pending: false, content: m.content || '⏹ (interrupted by chat switch)', statusText: undefined, ptyPhase: undefined } : m);
 
     // Get current agent session IDs from SQLite (each chat stores its own sessions)
     let agentSessions: Record<string, string> = {};
@@ -1098,7 +1254,9 @@ export default function Page() {
       }
     } catch { /* ignore */ }
 
-    const chatData = { id: currentId, name, ts: Date.now(), messages: persistable, agentSessions };
+    const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
+    const savedAt = preserveOrder ? (existingHistoryEntry?.ts ?? Date.now()) : Date.now();
+    const chatData = { id: currentId, name, ts: savedAt, messages: persistable, agentSessions };
 
     // Save to server
     try {
@@ -1110,14 +1268,16 @@ export default function Page() {
     } catch { /* ignore */ }
 
     setChatHistory(prev => {
-      const existing = prev.find(c => c.id === currentId);
-      const entry = { id: currentId, name, ts: Date.now(), agentSessions };
-      if (existing) {
-        return prev.map(c => c.id === currentId ? entry : c);
-      } else {
-        return [entry, ...prev];
+      const entry = { id: currentId, name, ts: savedAt, agentSessions };
+      if (preserveOrder) {
+        if (prev.some(c => c.id === currentId)) {
+          return prev.map(c => c.id === currentId ? entry : c);
+        }
+        return [...prev, entry];
       }
+      return normalizeChatHistory([entry, ...prev]);
     });
+    return savedAt;
   }
 
   function clearChatMessages() {
@@ -1126,20 +1286,26 @@ export default function Page() {
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
-    try {
-      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(initial));
-      window.localStorage.removeItem(STORAGE_CHAT_INPUT);
-    } catch { /* ignore */ }
   }
 
   async function loadChat(chatId: string) {
     if (chatId === currentChatId) {
+      setOpenChatMenuId(null);
       setShowChatsPanel(false);
       return;
     }
 
+    // Block switching while agents are still responding
+    if (isSending || Object.keys(sessionRunsRef.current).length > 0) {
+      addMessage({ type: 'system', content: '⚠️ Please wait for the current response to finish, or stop it first.' });
+      return;
+    }
+
+    setActiveSidebarChatId(chatId);
+    setOpenChatMenuId(null);
+
     // Save current chat first
-    await saveCurrentChatToHistory();
+    await saveCurrentChatToHistory(true);
 
     // Load target chat from server
     let targetMessages: ChatMessage[] = [];
@@ -1148,12 +1314,19 @@ export default function Page() {
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
+      if (!res.ok || !data.ok || !data.chat) {
+        addMessage({ type: 'system', content: `Failed to load chat: ${data.error || 'not found'}` });
+        return;
+      }
       if (data.ok && data.chat) {
         targetMessages = data.chat.messages || [];
         targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
       }
-    } catch { /* ignore */ }
+    } catch {
+      addMessage({ type: 'system', content: 'Failed to load chat. Please try again.' });
+      return;
+    }
 
     // If chat has no messages (e.g. newly created), use the welcome message
     if (targetMessages.length === 0) {
@@ -1162,18 +1335,26 @@ export default function Page() {
 
     setMessages(targetMessages);
     setChatName(targetName);
+    currentChatIdRef.current = chatId;
     setCurrentChatId(chatId);
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
     sessionRunsRef.current = {};
     orchestrationsRef.current = {};
+    setChatHistory(prev => {
+      if (prev.some(c => c.id === chatId)) {
+        return prev.map(c => c.id === chatId ? { ...c, name: targetName, agentSessions } : c);
+      }
+      return [...prev, { id: chatId, name: targetName, ts: Date.now(), agentSessions }];
+    });
 
-    try {
-      window.localStorage.setItem(STORAGE_CHAT_MESSAGES, JSON.stringify(targetMessages));
-      window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, chatId);
-      window.localStorage.removeItem(STORAGE_CHAT_INPUT);
-    } catch { /* ignore */ }
+    // Persist last active chat to server
+    void fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId }),
+    }).catch(() => { /* ignore */ });
 
     // Resume agent sessions via session/load. If session/load succeeds,
     // no history injection is needed. If it fails and falls back to session/new,
@@ -1225,6 +1406,7 @@ export default function Page() {
   async function createNewChat() {
     // Save current chat to history
     await saveCurrentChatToHistory();
+    setOpenChatMenuId(null);
 
     const newCount = chatCounter + 1;
     const newName = 'New Chat';
@@ -1234,17 +1416,22 @@ export default function Page() {
     clearChatMessages();
     setChatName(newName);
     setChatCounter(newCount);
+    currentChatIdRef.current = newId;
     setCurrentChatId(newId);
+    setActiveSidebarChatId(newId);
 
-    try {
-      window.localStorage.setItem(STORAGE_CURRENT_CHAT_ID, newId);
-    } catch { /* ignore */ }
+    // Persist last active chat to server
+    void fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId: newId }),
+    }).catch(() => { /* ignore */ });
 
     // Register the new chat in history immediately so it persists
     const newEntry = { id: newId, name: newName, ts: Date.now() };
     setChatHistory(prev => {
       if (prev.some(c => c.id === newId)) return prev;
-      return [newEntry, ...prev];
+      return normalizeChatHistory([newEntry, ...prev]);
     });
     try {
       await fetch('/api/chats', {
@@ -1278,7 +1465,7 @@ export default function Page() {
 
     // Reload chat list from server to ensure old chats are visible
     fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
     }).catch(() => { /* ignore */ });
   }
 
@@ -1309,6 +1496,7 @@ export default function Page() {
     try {
       await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
       setChatHistory(prev => prev.filter(c => c.id !== chatId));
+      setOpenChatMenuId(null);
     } catch { /* ignore */ }
   }
 
@@ -1391,26 +1579,65 @@ export default function Page() {
                 const allChats = chatHistory.some(c => c.id === currentChatId)
                   ? chatHistory
                   : [{ id: currentChatId, name: chatName, ts: Date.now() }, ...chatHistory];
-                // Deduplicate by id (keep first occurrence)
-                const seen = new Set<string>();
-                const uniqueChats = allChats.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+                const uniqueChats = normalizeChatHistory(allChats);
                 return uniqueChats.map((chat) => {
-                  const isActive = chat.id === currentChatId;
+                  const isCurrent = chat.id === currentChatId;
+                  const isActive = chat.id === activeSidebarChatId;
                   return (
                     <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
-                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isActive ? undefined : loadChat(chat.id)}>
+                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isCurrent ? undefined : loadChat(chat.id)}>
                         <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
                         <span className="chatHistoryText">
-                          <span className="chatHistoryName">{isActive ? chatName : chat.name}</span>
+                          <span className="chatHistoryName">{isCurrent ? chatName : chat.name}</span>
                           <span className="chatHistoryMeta" suppressHydrationWarning>
-                            {isActive
-                              ? `${messages.filter((m) => m.type === 'user').length} messages`
-                              : (mounted ? new Date(chat.ts).toLocaleDateString() : '')}
+                            {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
                           </span>
                         </span>
                       </button>
-                      <button className="chatShareBtn" title="Share chat" onClick={(e) => { e.stopPropagation(); void shareCurrentChat(chat.id); }}>🔗</button>
-                      {!isActive && <button className="chatDeleteBtn" title="Delete chat" onClick={(e) => { e.stopPropagation(); void deleteChatById(chat.id); }}>🗑️</button>}
+                      <div className="chatActionsWrap">
+                        <button
+                          type="button"
+                          className={`chatMoreBtn ${openChatMenuId === chat.id ? 'active' : ''}`}
+                          title="Chat actions"
+                          aria-haspopup="menu"
+                          aria-expanded={openChatMenuId === chat.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenChatMenuId(openChatMenuId === chat.id ? null : chat.id);
+                          }}
+                        >
+                          ...
+                        </button>
+                        {openChatMenuId === chat.id ? (
+                          <div className="chatActionsMenu" role="menu">
+                            <button
+                              type="button"
+                              className="chatActionItem"
+                              role="menuitem"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChatMenuId(null);
+                                void shareCurrentChat(chat.id);
+                              }}
+                            >
+                              Share
+                            </button>
+                            {!isCurrent ? (
+                              <button
+                                type="button"
+                                className="chatActionItem danger"
+                                role="menuitem"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void deleteChatById(chat.id);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   );
                 });
@@ -1535,6 +1762,46 @@ export default function Page() {
                       {mentionedAgentIds.map((agentId) => (
                         <span key={agentId} className="targetPill">@{agentId}</span>
                       ))}
+                      {orchestrationEnabled && (
+                        <>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('auto')}
+                            title="Auto: a scheduler decides which agent to call next based on results"
+                          >
+                            🧠 Auto
+                          </button>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('pipeline')}
+                            title="Pipeline: agents run sequentially, each receives the previous agent's output"
+                          >
+                            🔀 Pipeline
+                          </button>
+                          <button
+                            type="button"
+                            className={`targetPill orchPill ${orchestrationMode === 'discussion' ? 'orchPillActive' : ''}`}
+                            onClick={() => setOrchestrationMode('discussion')}
+                            title="Discussion: agents run in parallel, then a summary is generated"
+                          >
+                            💬 Discussion
+                          </button>
+                          {orchestrationMode === 'discussion' && (
+                            <select
+                              className="orchRoundsSelect"
+                              value={discussionRounds}
+                              onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                              title="Number of discussion rounds"
+                            >
+                              {[1, 2, 3, 4, 5].map((n) => (
+                                <option key={n} value={n}>{n} {n === 1 ? 'round' : 'rounds'}</option>
+                              ))}
+                            </select>
+                          )}
+                        </>
+                      )}
                     </div>
                   ) : null}
                   <div className="composerRow">
@@ -1987,13 +2254,7 @@ export default function Page() {
         }
         .chatHistoryItem:hover,
         .chatHistoryItem.active {
-          background: var(--panel-soft);
-          border-color: var(--border);
           color: var(--text);
-        }
-        .chatHistoryItem.active {
-          border-color: var(--border-strong);
-          box-shadow: inset 0 0 0 1px var(--accent-soft);
         }
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
@@ -2004,33 +2265,27 @@ export default function Page() {
           align-items: center;
           gap: 2px;
           border-radius: 14px;
+          border: 1px solid transparent;
+          position: relative;
+          transition: all 0.12s ease;
         }
         .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
-        .chatHistoryRow.active { background: var(--panel-soft); border: 1px solid var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
-        .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
-        .chatShareBtn {
-          flex: 0 0 auto;
-          width: 28px;
-          height: 28px;
-          border-radius: 8px;
-          border: 1px solid transparent;
-          background: transparent;
-          color: var(--muted);
-          cursor: pointer;
-          font-size: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.12s ease;
-          margin-right: 2px;
-        }
-        .chatShareBtn:hover {
-          color: var(--accent);
-          background: var(--accent-soft);
+        .chatHistoryRow:hover,
+        .chatHistoryRow:focus-within {
+          background: var(--panel-soft);
           border-color: var(--border);
+          color: var(--text);
         }
-        .chatDeleteBtn {
+        .chatHistoryRow.active { background: var(--panel-soft); border-color: var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
+        .chatHistoryRow:hover .chatHistoryItem,
+        .chatHistoryRow:focus-within .chatHistoryItem,
+        .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
+        .chatActionsWrap {
           flex: 0 0 auto;
+          position: relative;
+          margin-right: 4px;
+        }
+        .chatMoreBtn {
           width: 28px;
           height: 28px;
           border-radius: 8px;
@@ -2039,16 +2294,64 @@ export default function Page() {
           color: var(--muted);
           cursor: pointer;
           font-size: 14px;
+          font-weight: 700;
+          line-height: 1;
           display: flex;
           align-items: center;
           justify-content: center;
           transition: all 0.12s ease;
-          margin-right: 2px;
+          opacity: 0;
         }
-        .chatDeleteBtn:hover {
+        .chatHistoryRow:hover .chatMoreBtn,
+        .chatHistoryRow:focus-within .chatMoreBtn,
+        .chatMoreBtn.active {
+          opacity: 1;
+        }
+        .chatMoreBtn:hover,
+        .chatMoreBtn.active {
+          color: var(--accent);
+          background: var(--accent-soft);
+          border-color: var(--border);
+        }
+        .chatActionsMenu {
+          position: absolute;
+          top: calc(100% + 4px);
+          right: 0;
+          min-width: 132px;
+          padding: 6px;
+          border-radius: 10px;
+          border: 1px solid var(--border);
+          background: var(--panel-bg);
+          box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+          z-index: 30;
+        }
+        .chatActionItem {
+          width: 100%;
+          padding: 8px 10px;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--text);
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 600;
+          text-align: left;
+          transition: all 0.12s ease;
+        }
+        .chatActionItem:hover,
+        .chatActionItem:focus-visible {
+          background: var(--accent-soft);
+          color: var(--accent);
+          outline: none;
+        }
+        .chatActionItem.danger {
+          color: #d53f3f;
+        }
+        .chatActionItem.danger:hover,
+        .chatActionItem.danger:focus-visible {
           color: #e53e3e;
           background: rgba(229, 62, 62, 0.1);
-          border-color: rgba(229, 62, 62, 0.3);
+        }
         }
         .agentsSidebar {
           border-left: 1px solid var(--border);
@@ -2365,6 +2668,62 @@ export default function Page() {
           box-shadow: 0 0 0 1px var(--accent-soft), 0 14px 30px rgba(0, 0, 0, 0.08);
           transform: translateY(-1px);
         }
+        .orchPill {
+          cursor: pointer;
+          border-color: var(--border);
+          background: transparent;
+          color: var(--muted);
+          transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .orchPill:hover {
+          color: var(--accent);
+          border-color: var(--accent);
+          background: var(--accent-soft);
+        }
+        .orchPill.orchPillActive {
+          background: linear-gradient(135deg, var(--accent), var(--accent-2));
+          color: #fff;
+          border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+          box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 22%, transparent);
+        }
+        .orchPill.orchPillActive:hover {
+          filter: brightness(1.08);
+        }
+        .orchRoundsSelect {
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border-strong);
+          background: var(--accent-soft);
+          color: var(--accent);
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 160ms ease;
+          outline: none;
+          -webkit-appearance: none;
+          -moz-appearance: none;
+          appearance: none;
+          padding-right: 20px;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2345d7ff' opacity='0.7'/%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 7px center;
+          background-size: 8px 5px;
+        }
+        .orchRoundsSelect:hover {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+        .orchRoundsSelect:focus {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
+          background-color: color-mix(in srgb, var(--accent-soft) 60%, var(--panel-soft));
+        }
+        .orchRoundsSelect option {
+          background: var(--panel-strong);
+          color: var(--fg);
+          padding: 6px 10px;
+          font-weight: 600;
+        }
         .composerRow {
           display: flex;
           align-items: flex-end;
@@ -2617,6 +2976,9 @@ export default function Page() {
           .participantsSidebar.mobilePanelVisible,
           .agentsSidebar.mobilePanelVisible {
             transform: translateX(0);
+          }
+          .chatMoreBtn {
+            opacity: 1;
           }
           .participantsHeader,
           .agentsSidebarHeader {

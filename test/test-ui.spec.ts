@@ -315,6 +315,105 @@ test.describe('Chat UI', () => {
     const count = await shareBtn.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
+
+  test('should not store chat messages in localStorage', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+
+    // Send a message
+    await textarea.fill('Hello localStorage test');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('.message.user').last()).toContainText('Hello localStorage test', { timeout: 15000 });
+    await page.waitForTimeout(1000);
+
+    // Check that old localStorage keys are NOT written
+    const storageKeys = await page.evaluate(() => {
+      const keys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        keys.push(localStorage.key(i)!);
+      }
+      return keys;
+    });
+    console.log('localStorage keys:', storageKeys);
+
+    // These keys should NOT exist (removed in favor of SQLite)
+    expect(storageKeys).not.toContain('acp_chat_messages_v1');
+    expect(storageKeys).not.toContain('acp_chat_current_id_v1');
+    expect(storageKeys.filter(k => k.startsWith('acp_chat_data_'))).toHaveLength(0);
+
+    // These UI pref keys SHOULD still exist
+    const uiKeys = ['acp_chat_input_v1', 'acp_chat_sidebar_collapsed_v1', 'acp_chat_theme_v1'];
+    for (const k of uiKeys) {
+      expect(storageKeys).toContain(k);
+    }
+    console.log('PASS: No chat data in localStorage, UI prefs preserved');
+  });
+
+  test('should save and restore lastChatId from server on reload', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+
+    // Send a message so the chat has content and a name
+    await textarea.fill('lastChatId test message');
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator('.message.user').last()).toContainText('lastChatId test', { timeout: 15000 });
+    await page.waitForTimeout(2000);
+
+    // Get the current chat ID from the server
+    const chatsRes = await page.evaluate(async () => {
+      const r = await fetch('/api/chats');
+      return r.json();
+    });
+    expect(chatsRes.ok).toBe(true);
+    const lastChatId = chatsRes.lastChatId;
+    console.log(`Server lastChatId: ${lastChatId}`);
+    expect(lastChatId).toBeTruthy();
+
+    // Reload the page
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    // Wait for chat to load from server
+    await page.waitForTimeout(2000);
+
+    // The user message should be visible — loaded from SQLite via lastChatId
+    await expect(chatArea.locator('.message.user:has-text("lastChatId test")')).toBeVisible({ timeout: 15000 });
+    console.log('PASS: lastChatId restored from server, chat loaded from SQLite after reload');
+  });
+
+  test('should switch lastChatId when creating new chat', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+
+    // Send a message in the first chat
+    await textarea.fill('first chat message');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('.message.user').last()).toContainText('first chat', { timeout: 15000 });
+    await page.waitForTimeout(1000);
+
+    // Get lastChatId before creating new chat
+    const before = await page.evaluate(async () => {
+      const r = await fetch('/api/chats');
+      return r.json();
+    });
+    const firstChatId = before.lastChatId;
+    console.log(`Before new chat: lastChatId=${firstChatId}`);
+
+    // Create a new chat
+    await page.click('button.newChatButton');
+    await page.waitForTimeout(2000);
+
+    // Get lastChatId after creating new chat
+    const after = await page.evaluate(async () => {
+      const r = await fetch('/api/chats');
+      return r.json();
+    });
+    const newChatId = after.lastChatId;
+    console.log(`After new chat: lastChatId=${newChatId}`);
+
+    // lastChatId should have changed
+    expect(newChatId).toBeTruthy();
+    expect(newChatId).not.toBe(firstChatId);
+    console.log('PASS: lastChatId updated on server when creating new chat');
+  });
 });
 
 test.describe('Theme', () => {

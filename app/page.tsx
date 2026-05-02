@@ -93,10 +93,25 @@ type ChatMessage = {
   parts?: ContentPart[];
 };
 
+type ChatHistoryEntry = {
+  id: string;
+  name: string;
+  ts: number;
+  agentSessions?: Record<string, string>;
+};
+
 type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
 
 const AUTO_MAX_STEPS = 5;
 const SCHEDULER_AGENT_ID = 'scheduler';
+
+function normalizeChatHistory(chats: ChatHistoryEntry[]): ChatHistoryEntry[] {
+  const byId = new Map<string, ChatHistoryEntry>();
+  for (const chat of chats) {
+    if (!byId.has(chat.id)) byId.set(chat.id, chat);
+  }
+  return Array.from(byId.values()).sort((a, b) => (b.ts - a.ts) || b.id.localeCompare(a.id));
+}
 
 type SessionRunContext = {
   agentId: string;
@@ -324,7 +339,7 @@ function getMentionedAgentIds(text: string, agents: Agent[]) {
 function parseAgents(text: string, agents: Agent[]) {
   const agentIds = getMentionedAgentIds(text, agents);
   if (agentIds.length === 0) {
-    const fallback = agents[0] || { id: 'main', name: 'Main' };
+    const fallback = agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
     return { agentIds: [fallback.id], message: text };
   }
   const message = text.replace(/(?:^|\s)@(\S+)/g, '').trim();
@@ -377,12 +392,14 @@ export default function Page() {
   const [chatName, setChatName] = useState('New Chat');
   const [chatCounter, setChatCounter] = useState(1);
   const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
+  const [activeSidebarChatId, setActiveSidebarChatId] = useState<string>('chat-1');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
-  const [chatHistory, setChatHistory] = useState<{ id: string; name: string; ts: number; agentSessions?: Record<string, string> }[]>([]);
+  const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [themeId, setThemeId] = useState<ThemeId>('aurora');
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
+  const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -453,10 +470,11 @@ export default function Page() {
 
     // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
       const lastChatId = data.lastChatId as string | null;
       if (lastChatId) {
         setCurrentChatId(lastChatId);
+        setActiveSidebarChatId(lastChatId);
         // Load that chat's messages from server
         fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`)
           .then(r => r.json())
@@ -583,6 +601,18 @@ export default function Page() {
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [showThemeMenu]);
+
+  useEffect(() => {
+    if (!openChatMenuId) return;
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('.chatActionsWrap')) {
+        setOpenChatMenuId(null);
+      }
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [openChatMenuId]);
 
   /* ── Core functions ── */
 
@@ -1205,7 +1235,7 @@ export default function Page() {
 
   /* ── New chat ── */
 
-  async function saveCurrentChatToHistory() {
+  async function saveCurrentChatToHistory(preserveOrder = false) {
     const currentMessages = messagesRef.current;
     const currentId = currentChatIdRef.current;
     const currentName = chatNameRef.current;
@@ -1224,7 +1254,9 @@ export default function Page() {
       }
     } catch { /* ignore */ }
 
-    const chatData = { id: currentId, name, ts: Date.now(), messages: persistable, agentSessions };
+    const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
+    const savedAt = preserveOrder ? (existingHistoryEntry?.ts ?? Date.now()) : Date.now();
+    const chatData = { id: currentId, name, ts: savedAt, messages: persistable, agentSessions };
 
     // Save to server
     try {
@@ -1236,14 +1268,16 @@ export default function Page() {
     } catch { /* ignore */ }
 
     setChatHistory(prev => {
-      const existing = prev.find(c => c.id === currentId);
-      const entry = { id: currentId, name, ts: Date.now(), agentSessions };
-      if (existing) {
-        return prev.map(c => c.id === currentId ? entry : c);
-      } else {
-        return [entry, ...prev];
+      const entry = { id: currentId, name, ts: savedAt, agentSessions };
+      if (preserveOrder) {
+        if (prev.some(c => c.id === currentId)) {
+          return prev.map(c => c.id === currentId ? entry : c);
+        }
+        return [...prev, entry];
       }
+      return normalizeChatHistory([entry, ...prev]);
     });
+    return savedAt;
   }
 
   function clearChatMessages() {
@@ -1256,6 +1290,7 @@ export default function Page() {
 
   async function loadChat(chatId: string) {
     if (chatId === currentChatId) {
+      setOpenChatMenuId(null);
       setShowChatsPanel(false);
       return;
     }
@@ -1266,8 +1301,11 @@ export default function Page() {
       return;
     }
 
+    setActiveSidebarChatId(chatId);
+    setOpenChatMenuId(null);
+
     // Save current chat first
-    await saveCurrentChatToHistory();
+    await saveCurrentChatToHistory(true);
 
     // Load target chat from server
     let targetMessages: ChatMessage[] = [];
@@ -1276,12 +1314,19 @@ export default function Page() {
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
+      if (!res.ok || !data.ok || !data.chat) {
+        addMessage({ type: 'system', content: `Failed to load chat: ${data.error || 'not found'}` });
+        return;
+      }
       if (data.ok && data.chat) {
         targetMessages = data.chat.messages || [];
         targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
       }
-    } catch { /* ignore */ }
+    } catch {
+      addMessage({ type: 'system', content: 'Failed to load chat. Please try again.' });
+      return;
+    }
 
     // If chat has no messages (e.g. newly created), use the welcome message
     if (targetMessages.length === 0) {
@@ -1290,12 +1335,19 @@ export default function Page() {
 
     setMessages(targetMessages);
     setChatName(targetName);
+    currentChatIdRef.current = chatId;
     setCurrentChatId(chatId);
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
     sessionRunsRef.current = {};
     orchestrationsRef.current = {};
+    setChatHistory(prev => {
+      if (prev.some(c => c.id === chatId)) {
+        return prev.map(c => c.id === chatId ? { ...c, name: targetName, agentSessions } : c);
+      }
+      return [...prev, { id: chatId, name: targetName, ts: Date.now(), agentSessions }];
+    });
 
     // Persist last active chat to server
     void fetch('/api/chats', {
@@ -1354,6 +1406,7 @@ export default function Page() {
   async function createNewChat() {
     // Save current chat to history
     await saveCurrentChatToHistory();
+    setOpenChatMenuId(null);
 
     const newCount = chatCounter + 1;
     const newName = 'New Chat';
@@ -1363,7 +1416,9 @@ export default function Page() {
     clearChatMessages();
     setChatName(newName);
     setChatCounter(newCount);
+    currentChatIdRef.current = newId;
     setCurrentChatId(newId);
+    setActiveSidebarChatId(newId);
 
     // Persist last active chat to server
     void fetch('/api/chats', {
@@ -1376,7 +1431,7 @@ export default function Page() {
     const newEntry = { id: newId, name: newName, ts: Date.now() };
     setChatHistory(prev => {
       if (prev.some(c => c.id === newId)) return prev;
-      return [newEntry, ...prev];
+      return normalizeChatHistory([newEntry, ...prev]);
     });
     try {
       await fetch('/api/chats', {
@@ -1410,7 +1465,7 @@ export default function Page() {
 
     // Reload chat list from server to ensure old chats are visible
     fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(data.chats);
+      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
     }).catch(() => { /* ignore */ });
   }
 
@@ -1441,6 +1496,7 @@ export default function Page() {
     try {
       await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
       setChatHistory(prev => prev.filter(c => c.id !== chatId));
+      setOpenChatMenuId(null);
     } catch { /* ignore */ }
   }
 
@@ -1523,26 +1579,65 @@ export default function Page() {
                 const allChats = chatHistory.some(c => c.id === currentChatId)
                   ? chatHistory
                   : [{ id: currentChatId, name: chatName, ts: Date.now() }, ...chatHistory];
-                // Deduplicate by id (keep first occurrence)
-                const seen = new Set<string>();
-                const uniqueChats = allChats.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+                const uniqueChats = normalizeChatHistory(allChats);
                 return uniqueChats.map((chat) => {
-                  const isActive = chat.id === currentChatId;
+                  const isCurrent = chat.id === currentChatId;
+                  const isActive = chat.id === activeSidebarChatId;
                   return (
                     <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
-                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isActive ? undefined : loadChat(chat.id)}>
+                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isCurrent ? undefined : loadChat(chat.id)}>
                         <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
                         <span className="chatHistoryText">
-                          <span className="chatHistoryName">{isActive ? chatName : chat.name}</span>
+                          <span className="chatHistoryName">{isCurrent ? chatName : chat.name}</span>
                           <span className="chatHistoryMeta" suppressHydrationWarning>
-                            {isActive
-                              ? `${messages.filter((m) => m.type === 'user').length} messages`
-                              : (mounted ? new Date(chat.ts).toLocaleDateString() : '')}
+                            {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
                           </span>
                         </span>
                       </button>
-                      <button className="chatShareBtn" title="Share chat" onClick={(e) => { e.stopPropagation(); void shareCurrentChat(chat.id); }}>🔗</button>
-                      {!isActive && <button className="chatDeleteBtn" title="Delete chat" onClick={(e) => { e.stopPropagation(); void deleteChatById(chat.id); }}>🗑️</button>}
+                      <div className="chatActionsWrap">
+                        <button
+                          type="button"
+                          className={`chatMoreBtn ${openChatMenuId === chat.id ? 'active' : ''}`}
+                          title="Chat actions"
+                          aria-haspopup="menu"
+                          aria-expanded={openChatMenuId === chat.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenChatMenuId(openChatMenuId === chat.id ? null : chat.id);
+                          }}
+                        >
+                          ...
+                        </button>
+                        {openChatMenuId === chat.id ? (
+                          <div className="chatActionsMenu" role="menu">
+                            <button
+                              type="button"
+                              className="chatActionItem"
+                              role="menuitem"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChatMenuId(null);
+                                void shareCurrentChat(chat.id);
+                              }}
+                            >
+                              Share
+                            </button>
+                            {!isCurrent ? (
+                              <button
+                                type="button"
+                                className="chatActionItem danger"
+                                role="menuitem"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void deleteChatById(chat.id);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   );
                 });
@@ -2159,13 +2254,7 @@ export default function Page() {
         }
         .chatHistoryItem:hover,
         .chatHistoryItem.active {
-          background: var(--panel-soft);
-          border-color: var(--border);
           color: var(--text);
-        }
-        .chatHistoryItem.active {
-          border-color: var(--border-strong);
-          box-shadow: inset 0 0 0 1px var(--accent-soft);
         }
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
@@ -2176,33 +2265,27 @@ export default function Page() {
           align-items: center;
           gap: 2px;
           border-radius: 14px;
+          border: 1px solid transparent;
+          position: relative;
+          transition: all 0.12s ease;
         }
         .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
-        .chatHistoryRow.active { background: var(--panel-soft); border: 1px solid var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
-        .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
-        .chatShareBtn {
-          flex: 0 0 auto;
-          width: 28px;
-          height: 28px;
-          border-radius: 8px;
-          border: 1px solid transparent;
-          background: transparent;
-          color: var(--muted);
-          cursor: pointer;
-          font-size: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.12s ease;
-          margin-right: 2px;
-        }
-        .chatShareBtn:hover {
-          color: var(--accent);
-          background: var(--accent-soft);
+        .chatHistoryRow:hover,
+        .chatHistoryRow:focus-within {
+          background: var(--panel-soft);
           border-color: var(--border);
+          color: var(--text);
         }
-        .chatDeleteBtn {
+        .chatHistoryRow.active { background: var(--panel-soft); border-color: var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
+        .chatHistoryRow:hover .chatHistoryItem,
+        .chatHistoryRow:focus-within .chatHistoryItem,
+        .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
+        .chatActionsWrap {
           flex: 0 0 auto;
+          position: relative;
+          margin-right: 4px;
+        }
+        .chatMoreBtn {
           width: 28px;
           height: 28px;
           border-radius: 8px;
@@ -2211,16 +2294,64 @@ export default function Page() {
           color: var(--muted);
           cursor: pointer;
           font-size: 14px;
+          font-weight: 700;
+          line-height: 1;
           display: flex;
           align-items: center;
           justify-content: center;
           transition: all 0.12s ease;
-          margin-right: 2px;
+          opacity: 0;
         }
-        .chatDeleteBtn:hover {
+        .chatHistoryRow:hover .chatMoreBtn,
+        .chatHistoryRow:focus-within .chatMoreBtn,
+        .chatMoreBtn.active {
+          opacity: 1;
+        }
+        .chatMoreBtn:hover,
+        .chatMoreBtn.active {
+          color: var(--accent);
+          background: var(--accent-soft);
+          border-color: var(--border);
+        }
+        .chatActionsMenu {
+          position: absolute;
+          top: calc(100% + 4px);
+          right: 0;
+          min-width: 132px;
+          padding: 6px;
+          border-radius: 10px;
+          border: 1px solid var(--border);
+          background: var(--panel-bg);
+          box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+          z-index: 30;
+        }
+        .chatActionItem {
+          width: 100%;
+          padding: 8px 10px;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--text);
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 600;
+          text-align: left;
+          transition: all 0.12s ease;
+        }
+        .chatActionItem:hover,
+        .chatActionItem:focus-visible {
+          background: var(--accent-soft);
+          color: var(--accent);
+          outline: none;
+        }
+        .chatActionItem.danger {
+          color: #d53f3f;
+        }
+        .chatActionItem.danger:hover,
+        .chatActionItem.danger:focus-visible {
           color: #e53e3e;
           background: rgba(229, 62, 62, 0.1);
-          border-color: rgba(229, 62, 62, 0.3);
+        }
         }
         .agentsSidebar {
           border-left: 1px solid var(--border);
@@ -2845,6 +2976,9 @@ export default function Page() {
           .participantsSidebar.mobilePanelVisible,
           .agentsSidebar.mobilePanelVisible {
             transform: translateX(0);
+          }
+          .chatMoreBtn {
+            opacity: 1;
           }
           .participantsHeader,
           .agentsSidebarHeader {

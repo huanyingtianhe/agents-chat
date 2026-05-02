@@ -40,6 +40,14 @@
       ],
       "cwd": "Q:\\Repos\\workload-eventstream-web-api-testing",
       "yolo": true
+    },
+    {
+      "id": "remote-copilot",
+      "name": "Remote Copilot (Relay)",
+      "relay": true,
+      "relayConnectionName": "cpc-wulei-cksvl",
+      "cwd": "/",
+      "yolo": true
     }
   ]
 }

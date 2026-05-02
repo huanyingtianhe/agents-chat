@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
+    "hyco-ws": "^1.0.5",
     "next": "16.2.3",
     "next-auth": "^4.24.14",
     "react": "19.2.5",

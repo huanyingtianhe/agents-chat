@@ -406,6 +406,16 @@ export default function Page() {
   const [newAgentForm, setNewAgentForm] = useState({ id: '', name: '', command: '', args: '', cwd: '', yolo: true });
   const [addAgentLoading, setAddAgentLoading] = useState(false);
 
+  // Nodes panel
+  const [showNodesPanel, setShowNodesPanel] = useState(false);
+  const [nodesData, setNodesData] = useState<{ name: string; label: string; online: boolean; checkedAt: number; manual?: boolean }[]>([]);
+  const [nodesLoading, setNodesLoading] = useState(false);
+  const [showAddNode, setShowAddNode] = useState(false);
+  const [newNodeForm, setNewNodeForm] = useState({ name: '', label: '' });
+  const [addNodeLoading, setAddNodeLoading] = useState(false);
+  const [showNodeAddMenu, setShowNodeAddMenu] = useState(false);
+  const [showSetupScript, setShowSetupScript] = useState(false);
+
   // Agent settings
   const [showAgentSettings, setShowAgentSettings] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
@@ -449,7 +459,7 @@ export default function Page() {
 
   const activeTheme = THEMES[themeId];
   const themeStyle = activeTheme.values as React.CSSProperties;
-  const mobilePanelOpen = showChatsPanel || showAgentsPanel;
+  const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
 
   const visibleMessages = useMemo(() => {
     if (!selectedAgentFilter) return messages;
@@ -640,6 +650,69 @@ export default function Page() {
     } finally {
       setAgentsLoading(false);
     }
+  }
+
+  async function nodesApi(body: Record<string, unknown>) {
+    const res = await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return res.json();
+  }
+
+  async function loadNodes() {
+    setNodesLoading(true);
+    try {
+      const data = await nodesApi({ action: 'list-nodes' });
+      if (data.ok && Array.isArray(data.nodes)) {
+        setNodesData(data.nodes);
+      }
+    } catch (err) {
+      console.error('Failed to load nodes', err);
+    } finally {
+      setNodesLoading(false);
+    }
+  }
+
+  async function handleAddNode() {
+    if (!newNodeForm.name.trim()) return;
+    setAddNodeLoading(true);
+    try {
+      const res = await nodesApi({ action: 'add-node', name: newNodeForm.name.trim(), label: newNodeForm.label.trim() || newNodeForm.name.trim() });
+      if (res.ok) {
+        setShowAddNode(false);
+        setNewNodeForm({ name: '', label: '' });
+        loadNodes();
+      }
+    } catch (err) {
+      console.error('Failed to add node', err);
+    } finally {
+      setAddNodeLoading(false);
+    }
+  }
+
+  async function handleRemoveNode(name: string) {
+    try {
+      const res = await nodesApi({ action: 'remove-node', name });
+      if (res.ok) loadNodes();
+    } catch (err) {
+      console.error('Failed to remove node', err);
+    }
+  }
+
+  async function handleRefreshNode(name: string) {
+    try {
+      const res = await nodesApi({ action: 'check-node', name });
+      if (res.ok) {
+        setNodesData(prev => prev.map(n => n.name === name ? { ...n, online: res.online, checkedAt: res.checkedAt } : n));
+      }
+    } catch (err) {
+      console.error('Failed to check node', err);
+    }
+  }
+
+  function downloadSetupZip() {
+    const a = document.createElement('a');
+    a.href = '/api/nodes/setup';
+    a.download = 'copilot-node-setup.zip';
+    a.click();
   }
 
   /* ── ACP Send & Poll ── */
@@ -1551,7 +1624,8 @@ export default function Page() {
               </div>
             )}
           </div>
-          <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); }} title="Agents">🤖</button>
+          <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); }} title="Agents">🤖</button>
+          <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); }} title="Nodes">🖥️</button>
           {session?.user && (
             <div className="userChip">
               <span className="userAvatar">{(session.user.name || '?')[0].toUpperCase()}</span>
@@ -1562,9 +1636,9 @@ export default function Page() {
         </div>
       </header>
 
-      {mobilePanelOpen ? <div className="mobilePanelBackdrop" onClick={() => { setShowChatsPanel(false); setShowAgentsPanel(false); }} /> : null}
+      {mobilePanelOpen ? <div className="mobilePanelBackdrop" onClick={() => { setShowChatsPanel(false); setShowAgentsPanel(false); setShowNodesPanel(false); }} /> : null}
 
-      <div className={`chatLayout ${sidebarCollapsed ? 'sidebarCollapsed' : ''} ${showAgentsPanel ? 'agentsSidebarOpen' : ''}`}>
+      <div className={`chatLayout ${sidebarCollapsed ? 'sidebarCollapsed' : ''} ${(showAgentsPanel || showNodesPanel) ? 'agentsSidebarOpen' : ''}`}>
         {/* ── Left sidebar: chats ── */}
         <aside className={`participantsSidebar ${showChatsPanel ? 'mobilePanelVisible' : ''}`}>
           <div className="participantsHeader">
@@ -1901,7 +1975,112 @@ export default function Page() {
             </div>
           </aside>
         )}
+
+        {/* ── Right sidebar: nodes ── */}
+        {showNodesPanel && (
+          <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`}>
+            <div className="agentsSidebarHeader">
+              <span>Nodes</span>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <button className="sidebarToggle" onClick={() => loadNodes()} title="Refresh all">↻</button>
+                {isAdmin && (
+                  <div style={{ position: 'relative' }}>
+                    <button className="sidebarToggle" onClick={() => setShowNodeAddMenu(p => !p)} title="Add node">+</button>
+                    {showNodeAddMenu && (
+                      <div className="nodeAddMenu">
+                        <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowSetupScript(true); }}>
+                          📦 Download Setup Kit
+                        </button>
+                        <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowAddNode(true); }}>
+                          ✏️ Add Manually
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button className="sidebarToggle" onClick={() => setShowNodesPanel(false)}>→</button>
+              </div>
+            </div>
+            <div className="agentsSidebarSection">
+              {nodesData.map((node) => (
+                <button key={node.name} className="agentListItem" onClick={() => handleRefreshNode(node.name)} title={`Click to refresh — ${node.online ? 'Online' : 'Offline'}`}>
+                  <span className="agentListAvatar nodeAvatar" data-online={node.online ? '' : undefined}>{node.label.slice(0, 1).toUpperCase()}</span>
+                  <span className="agentListInfo">
+                    <span className="agentListName">{node.label}</span>
+                    <span className="agentListId">{node.name}{!node.manual ? ' · auto' : ''}</span>
+                  </span>
+                  <span className={`agentListStatus ${node.online ? 'running' : ''}`}>{node.online ? '●' : '○'}</span>
+                  {isAdmin && (
+                    <span className="nodeRemoveBtn" onClick={(e) => { e.stopPropagation(); handleRemoveNode(node.name); }} title="Remove node">✕</span>
+                  )}
+                </button>
+              ))}
+              {nodesData.length === 0 && (
+                <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
+                  {nodesLoading ? 'Checking nodes...' : 'No nodes configured'}
+                </div>
+              )}
+            </div>
+
+            {/* Add node form */}
+            {showAddNode && (
+              <div className="nodeAddForm">
+                <div className="nodeAddFormTitle">Add Node</div>
+                <input className="nodeAddInput" placeholder="Connection name (e.g. cpc-team-vm1)" value={newNodeForm.name} onChange={(e) => setNewNodeForm(f => ({ ...f, name: e.target.value }))} />
+                <input className="nodeAddInput" placeholder="Display label (optional)" value={newNodeForm.label} onChange={(e) => setNewNodeForm(f => ({ ...f, label: e.target.value }))} />
+                <div className="nodeAddActions">
+                  <button className="ghostButton nodeAddBtn" onClick={handleAddNode} disabled={addNodeLoading || !newNodeForm.name.trim()}>
+                    {addNodeLoading ? '...' : 'Add'}
+                  </button>
+                  <button className="ghostButton nodeAddBtn" onClick={() => { setShowAddNode(false); setNewNodeForm({ name: '', label: '' }); }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
+
+      {/* ── Setup script modal ── */}
+      {showSetupScript && (
+        <div className="modalOverlay" onClick={() => setShowSetupScript(false)}>
+          <div className="modal setupScriptModal" onClick={(e) => e.stopPropagation()}>
+            <h2>🖥️ Node Setup Kit</h2>
+            <p className="setupScriptDesc">
+              Download the setup kit and run it on your devbox to connect it as a node.
+              It includes <code>setup-node.ps1</code> and <code>relay-listener.js</code>.
+            </p>
+            <div className="setupScriptSteps">
+              <div className="setupScriptStep">
+                <span className="setupStepNum">1</span>
+                <span>Download and extract the zip</span>
+              </div>
+              <div className="setupScriptStep">
+                <span className="setupStepNum">2</span>
+                <span>Open PowerShell in the extracted folder</span>
+              </div>
+              <div className="setupScriptStep">
+                <span className="setupStepNum">3</span>
+                <span>Run: <code>.\setup-node.ps1</code></span>
+              </div>
+              <div className="setupScriptStep">
+                <span className="setupStepNum">4</span>
+                <span>The node appears here automatically</span>
+              </div>
+            </div>
+            <div className="setupScriptNote">
+              <strong>Prerequisites:</strong> Node.js, GitHub Copilot CLI, Azure CLI (logged in)
+            </div>
+            <div className="setupScriptActions">
+              <button className="ghostButton setupDownloadBtn" onClick={() => downloadSetupZip()}>
+                📦 Download copilot-node-setup.zip
+              </button>
+              <button className="ghostButton" onClick={() => setShowSetupScript(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Status bar ── */}
       <footer className="statusBar">
@@ -2412,6 +2591,142 @@ export default function Page() {
         .agentListId { font-size: 11px; color: var(--muted); }
         .agentListStatus { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
         .agentListStatus.running { color: var(--success); }
+        .nodeAvatar { font-size: 15px; }
+        .nodeAvatar:not([data-online]) { background: linear-gradient(135deg, #718096, #4a5568) !important; }
+        .nodeRemoveBtn {
+          font-size: 11px;
+          color: var(--muted);
+          cursor: pointer;
+          flex: 0 0 auto;
+          padding: 2px 4px;
+          border-radius: 4px;
+          transition: all 0.12s ease;
+          opacity: 0;
+        }
+        .agentListItem:hover .nodeRemoveBtn { opacity: 1; }
+        .nodeRemoveBtn:hover { color: #e53e3e; background: rgba(229,62,62,0.1); }
+        .nodeAddForm {
+          padding: 12px;
+          border-top: 1px solid var(--border);
+        }
+        .nodeAddFormTitle {
+          font-size: 13px;
+          font-weight: 600;
+          margin-bottom: 8px;
+          color: var(--text);
+        }
+        .nodeAddInput {
+          width: 100%;
+          padding: 6px 8px;
+          margin-bottom: 6px;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: var(--panel-bg);
+          color: var(--text);
+          font-size: 12px;
+          outline: none;
+          transition: border-color 0.15s ease;
+        }
+        .nodeAddInput:focus { border-color: var(--accent); }
+        .nodeAddActions { display: flex; gap: 6px; margin-top: 4px; }
+        .nodeAddBtn { font-size: 12px !important; padding: 4px 10px !important; }
+        .nodeAddMenu {
+          position: absolute;
+          top: 100%;
+          right: 0;
+          z-index: 100;
+          background: var(--panel-bg);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+          padding: 4px;
+          min-width: 200px;
+          backdrop-filter: blur(16px);
+        }
+        .nodeAddMenuItem {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+          padding: 8px 12px;
+          border: none;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--text-soft);
+          font-size: 13px;
+          cursor: pointer;
+          text-align: left;
+          transition: all 0.12s ease;
+        }
+        .nodeAddMenuItem:hover {
+          background: var(--panel-soft);
+          color: var(--text);
+        }
+        .setupScriptModal {
+          max-width: 480px;
+        }
+        .setupScriptDesc {
+          font-size: 13px;
+          color: var(--text-soft);
+          margin: 0 0 16px;
+          line-height: 1.5;
+        }
+        .setupScriptSteps {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-bottom: 20px;
+        }
+        .setupScriptStep {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 13px;
+          color: var(--text);
+        }
+        .setupScriptStep code {
+          background: var(--panel-soft);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 12px;
+          color: var(--accent);
+        }
+        .setupStepNum {
+          width: 24px;
+          height: 24px;
+          border-radius: 999px;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2));
+          color: #fff;
+          font-size: 12px;
+          font-weight: 700;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 auto;
+        }
+        .setupScriptActions {
+          display: flex;
+          gap: 8px;
+        }
+        .setupScriptNote {
+          font-size: 12px;
+          color: var(--muted);
+          background: var(--panel-soft);
+          padding: 8px 12px;
+          border-radius: 8px;
+          margin-bottom: 16px;
+        }
+        .setupScriptNote code {
+          background: var(--panel-soft);
+          padding: 1px 4px;
+          border-radius: 3px;
+          font-size: 11px;
+        }
+        .setupDownloadBtn {
+          background: linear-gradient(135deg, var(--accent-soft), var(--accent-strong)) !important;
+          border-color: var(--accent) !important;
+          color: var(--text) !important;
+        }
         .chatMain {
           min-width: 0;
           min-height: 0;

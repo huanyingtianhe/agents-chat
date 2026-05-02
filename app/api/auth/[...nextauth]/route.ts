@@ -1,7 +1,21 @@
+import { timingSafeEqual } from 'crypto';
 import NextAuth, { type AuthOptions } from 'next-auth';
 import AzureADProvider from 'next-auth/providers/azure-ad';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { type NextRequest } from 'next/server';
+
+/** Constant-time string comparison to prevent timing attacks. */
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Compare against self so we still spend constant time,
+    // but always return false for mismatched lengths.
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
 
 const providers: AuthOptions['providers'] = [];
 
@@ -29,12 +43,15 @@ providers.push(
       password: { label: 'Password', type: 'password' },
     },
     async authorize(credentials) {
-      const adminUser = process.env.ADMIN_USERNAME ?? 'admin';
-      const adminPass = process.env.ADMIN_PASSWORD ?? '';
-      if (!adminPass) return null;
+      const adminUser = process.env.ADMIN_USERNAME;
+      const adminPass = process.env.ADMIN_PASSWORD;
+      // Disable credentials login when either env var is missing
+      if (!adminUser || !adminPass) return null;
       if (
-        credentials?.username === adminUser &&
-        credentials?.password === adminPass
+        credentials?.username &&
+        credentials?.password &&
+        safeEqual(credentials.username, adminUser) &&
+        safeEqual(credentials.password, adminPass)
       ) {
         return { id: 'admin', name: 'Admin', email: 'admin@local', role: 'admin' };
       }

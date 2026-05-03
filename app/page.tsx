@@ -65,12 +65,14 @@ const mdComponents = {
 type Agent = {
   id: string;
   name: string;
-  command: string;
+  command?: string;
   args?: string[];
-  cwd: string;
-  yolo: boolean;
+  cwd?: string;
+  yolo?: boolean;
   relay?: boolean;
   relayConnectionName?: string;
+  owner?: string;
+  canModify?: boolean;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -414,7 +416,7 @@ export default function Page() {
 
   // Nodes panel
   const [showNodesPanel, setShowNodesPanel] = useState(false);
-  const [nodesData, setNodesData] = useState<{ name: string; label: string; online: boolean; checkedAt: number; manual?: boolean }[]>([]);
+  const [nodesData, setNodesData] = useState<{ name: string; label: string; online: boolean; checkedAt: number; manual?: boolean; owner?: string; canModify?: boolean }[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [showAddNode, setShowAddNode] = useState(false);
   const [newNodeForm, setNewNodeForm] = useState({ name: '', label: '' });
@@ -2055,11 +2057,9 @@ export default function Page() {
                   <button className="sidebarToggle" onClick={() => setShowAgentAddMenu(p => !p)} title="Add agent">+</button>
                   {showAgentAddMenu && (
                     <div className="nodeAddMenu">
-                      {isAdmin && (
                         <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); setShowAddAgent(true); }}>
                           🖥️ Add Agent in Server
                         </button>
-                      )}
                       <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); loadNodes(); setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: defaultCwd }); setShowAddRemoteAgent(true); }}>
                         🌐 Add Agent from Remote Node
                       </button>
@@ -2071,7 +2071,7 @@ export default function Page() {
             </div>
             <div className="agentsSidebarSection">
               {agentSidebarItems.map((agent) => (
-                <button key={agent.id} className="agentListItem" style={isAdmin ? undefined : { cursor: 'default' }} onClick={() => isAdmin && openAgentSettings(agent.id)} title={isAdmin ? `${agent.name} — Click for settings` : agent.name}>
+                <button key={agent.id} className="agentListItem" style={agent.canModify ? undefined : { cursor: 'default' }} onClick={() => agent.canModify && openAgentSettings(agent.id)} title={agent.canModify ? `${agent.name} — Click for settings` : agent.name}>
                   <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
                   <span className="agentListInfo">
                     <span className="agentListName">{agent.name || agent.id}</span>
@@ -2123,10 +2123,10 @@ export default function Page() {
                     <span className="agentListId">{node.name}{!node.manual ? ' · auto' : ''}</span>
                   </span>
                   <span className={`agentListStatus ${node.online ? 'running' : ''}`}>{node.online ? '●' : '○'}</span>
-                  {isAdmin && (
+                  {node.canModify && (
                     <span className="nodeActionBtn" onClick={(e) => { e.stopPropagation(); setRelayAgentNode(node.name); setNewRelayAgentForm({ id: '', name: '', cwd: defaultCwd }); setShowAddRelayAgent(true); }} title="Add agent on this node">＋</span>
                   )}
-                  {isAdmin && (
+                  {node.canModify && (
                     <span className="nodeRemoveBtn" onClick={(e) => { e.stopPropagation(); handleRemoveNode(node.name); }} title="Remove node">✕</span>
                   )}
                 </button>
@@ -2277,8 +2277,8 @@ export default function Page() {
         <span>{messages.filter((m) => m.type === 'user').length} messages</span>
       </footer>
 
-      {/* ── Agent settings modal (admin only) ── */}
-      {isAdmin && showAgentSettings && settingsAgentConfig && (
+      {/* ── Agent settings modal (admin or owner) ── */}
+      {showAgentSettings && settingsAgentConfig && (
         <div className="modalOverlay" onClick={() => setShowAgentSettings(false)}>
           <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
             <h2>⚙️ {settingsAgentConfig.name}</h2>
@@ -2334,7 +2334,7 @@ export default function Page() {
         </div>
       )}
 
-      {isAdmin && showAgentSettings && !settingsAgentConfig && agentSettingsLoading && (
+      {showAgentSettings && !settingsAgentConfig && agentSettingsLoading && (
         <div className="modalOverlay" onClick={() => setShowAgentSettings(false)}>
           <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
             <div style={{ textAlign: 'center', padding: '20px', color: '#8a90a2' }}>Loading...</div>
@@ -2343,7 +2343,7 @@ export default function Page() {
       )}
 
       {/* ── Add agent modal ── */}
-      {isAdmin && showAddAgent && (
+      {showAddAgent && (
         <div className="modalOverlay" onClick={() => setShowAddAgent(false)}>
           <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
             <h2>➕ Add New Agent</h2>

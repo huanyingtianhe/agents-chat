@@ -1,24 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import * as path from 'path';
-import * as fs from 'fs/promises';
+import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth';
+import * as configStore from '@/lib/configStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-const NODES_CONFIG_PATH = path.join(process.cwd(), 'nodes.json');
 
 const RELAY_SEND_CONNECTION_STRING = process.env.RELAY_SEND_CONNECTION_STRING || '';
 const RELAY_SUBSCRIPTION_ID = process.env.RELAY_SUBSCRIPTION_ID || '';
 const RELAY_RESOURCE_GROUP = process.env.RELAY_RESOURCE_GROUP || '';
 const RELAY_NAMESPACE = process.env.RELAY_NAMESPACE || '';
 
-type NodeConfig = {
+type NodeStatus = {
   name: string;
   label: string;
-  manual?: boolean; // true if added manually via nodes.json
-};
-
-type NodeStatus = NodeConfig & {
+  owner: string;
+  canModify: boolean;
+  manual: boolean;
   online: boolean;
   checkedAt: number;
 };
@@ -30,22 +27,6 @@ const PROBE_TTL_MS = 30_000;
 // Cache discovered hybrid connections for 60s
 let discoveryCache: { names: string[]; ts: number } | null = null;
 const DISCOVERY_TTL_MS = 60_000;
-
-async function readNodesConfig(): Promise<NodeConfig[]> {
-  try {
-    const raw = await fs.readFile(NODES_CONFIG_PATH, 'utf-8');
-    const data = JSON.parse(raw);
-    return ((data.nodes || []) as NodeConfig[]).map(n => ({ ...n, manual: true }));
-  } catch {
-    return [];
-  }
-}
-
-async function writeNodesConfig(nodes: NodeConfig[]): Promise<void> {
-  // Only persist manual nodes
-  const manual = nodes.filter(n => n.manual).map(({ name, label }) => ({ name, label }));
-  await fs.writeFile(NODES_CONFIG_PATH, JSON.stringify({ nodes: manual }, null, 2), 'utf-8');
-}
 
 /**
  * Discover hybrid connections from the Azure Relay namespace via ARM REST API.
@@ -88,32 +69,35 @@ async function discoverHybridConnections(): Promise<string[]> {
 }
 
 /**
- * Merge auto-discovered nodes with manual nodes.
- * Manual nodes take priority for labels.
+ * Merge auto-discovered nodes with manual nodes from SQLite.
+ * Manual nodes take priority for labels. Discovered nodes are system-managed.
  */
-async function getAllNodes(): Promise<NodeConfig[]> {
+type MergedNode = { name: string; label: string; owner: string; manual: boolean };
+
+async function getAllMergedNodes(): Promise<MergedNode[]> {
   const [manualNodes, discoveredNames] = await Promise.all([
-    readNodesConfig(),
+    Promise.resolve(configStore.getAllNodes()),
     discoverHybridConnections(),
   ]);
 
   const manualMap = new Map(manualNodes.map(n => [n.name, n]));
-  const merged: NodeConfig[] = [];
+  const merged: MergedNode[] = [];
 
-  // Add all discovered nodes (use manual label if available)
+  // Add all discovered nodes (use manual label/owner if available)
   for (const name of discoveredNames) {
     const manual = manualMap.get(name);
     merged.push({
       name,
       label: manual?.label || name,
+      owner: manual?.owner || 'system',
       manual: !!manual,
     });
     manualMap.delete(name);
   }
 
-  // Add any manual nodes not found in discovery (e.g. namespace not yet synced)
+  // Add any manual nodes not found in discovery
   for (const node of manualMap.values()) {
-    merged.push(node);
+    merged.push({ name: node.name, label: node.label, owner: node.owner, manual: true });
   }
 
   return merged;
@@ -181,12 +165,17 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action } = body;
+    const token = await getAuthToken(req);
 
     if (action === 'list-nodes') {
-      const nodes = await getAllNodes();
+      const nodes = await getAllMergedNodes();
       const statuses: NodeStatus[] = await Promise.all(
         nodes.map(async (node) => ({
-          ...node,
+          name: node.name,
+          label: node.label,
+          owner: node.owner,
+          canModify: canModify(token, node.owner),
+          manual: node.manual,
           online: await probeNode(node.name),
           checkedAt: Date.now(),
         }))
@@ -203,14 +192,18 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'add-node') {
+      const ownerEmail = getUserEmail(token);
+      if (!ownerEmail) {
+        return NextResponse.json({ ok: false, error: 'email_required_for_ownership' }, { status: 400 });
+      }
+
       const { name, label } = body;
       if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });
-      const nodes = await readNodesConfig();
-      if (nodes.some(n => n.name === name)) {
+      const existing = configStore.getNodeByName(name);
+      if (existing) {
         return NextResponse.json({ ok: false, error: 'node already exists' }, { status: 409 });
       }
-      nodes.push({ name, label: label || name, manual: true });
-      await writeNodesConfig(nodes);
+      configStore.createNode({ name, label: label || name, owner: ownerEmail });
       return NextResponse.json({ ok: true });
     }
 
@@ -218,11 +211,18 @@ export async function POST(req: NextRequest) {
       const { name } = body;
       if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });
 
-      // Remove from manual nodes config if present
-      const nodes = await readNodesConfig();
-      const filtered = nodes.filter(n => n.name !== name);
-      if (filtered.length < nodes.length) {
-        await writeNodesConfig(filtered);
+      // Check permissions: manual nodes require owner/admin; discovered-only nodes require admin
+      const nodeRecord = configStore.getNodeByName(name);
+      if (nodeRecord) {
+        if (!canModify(token, nodeRecord.owner)) {
+          return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+        }
+        configStore.deleteNode(name);
+      } else {
+        // Discovered-only node (not in SQLite) — admin-only to delete from Azure
+        if (!isAdminToken(token)) {
+          return NextResponse.json({ ok: false, error: 'admin_only_for_discovered_nodes' }, { status: 403 });
+        }
       }
 
       // Delete the hybrid connection from Azure Relay namespace

@@ -5,6 +5,8 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { getToken } from 'next-auth/jwt';
 import { updateChatAgentSession, getChat, saveChat } from '@/lib/chatStore';
+import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth';
+import * as configStore from '@/lib/configStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,25 +17,6 @@ export const runtime = 'nodejs';
  * Agents are configured in agents.json at the project root.
  * Each agent is a persistent child process communicating via NDJSON-RPC over stdio.
  */
-
-/* ─────────────── Admin check helper ─────────────── */
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isAdminToken(token: any): boolean {
-  if (!token) return false;
-  // Credentials login sets role=admin in the JWT callback
-  if (token.role === 'admin') return true;
-  // Credentials login user has sub='admin' (the id from the provider)
-  if (token.sub === 'admin') return true;
-  // Fallback: check ADMIN_EMAILS env var (for Azure AD users)
-  const adminEmails = (process.env.ADMIN_EMAILS || '')
-    .split(',')
-    .map((e: string) => e.trim().toLowerCase())
-    .filter(Boolean);
-  if (adminEmails.length === 0) return false;
-  const email = ((token.email as string) || '').toLowerCase();
-  return adminEmails.includes(email);
-}
 
 /* ─────────────────────── Types ─────────────────────── */
 
@@ -420,27 +403,36 @@ async function handleWriteTextFile(params: Record<string, unknown>): Promise<Rec
   return {};
 }
 
-/* ─────────────── agents.json Config ─────────────── */
+/* ─────────────── agents.json Config (now backed by SQLite via configStore) ─────────────── */
 
-const AGENTS_CONFIG_PATH = path.join(process.cwd(), 'agents.json');
-
-async function readAgentsConfig(): Promise<AgentConfig[]> {
-  try {
-    const raw = await fs.readFile(AGENTS_CONFIG_PATH, 'utf-8');
-    const data = JSON.parse(raw);
-    return (data.agents || []) as AgentConfig[];
-  } catch {
-    return [];
-  }
+function readAgentsConfig(): AgentConfig[] {
+  return configStore.getAllAgents().map(a => ({
+    id: a.id,
+    name: a.name,
+    command: a.command,
+    args: a.args,
+    cwd: a.cwd,
+    yolo: a.yolo,
+    noTools: a.noTools,
+    relay: a.relay,
+    relayConnectionName: a.relayConnectionName,
+  }));
 }
 
-async function writeAgentsConfig(agents: AgentConfig[]): Promise<void> {
-  await fs.writeFile(AGENTS_CONFIG_PATH, JSON.stringify({ agents }, null, 2), 'utf-8');
-}
-
-async function getAgentById(agentId: string): Promise<AgentConfig | null> {
-  const agents = await readAgentsConfig();
-  return agents.find(a => a.id === agentId) ?? null;
+function getAgentById(agentId: string): AgentConfig | null {
+  const a = configStore.getAgentById(agentId);
+  if (!a) return null;
+  return {
+    id: a.id,
+    name: a.name,
+    command: a.command,
+    args: a.args,
+    cwd: a.cwd,
+    yolo: a.yolo,
+    noTools: a.noTools,
+    relay: a.relay,
+    relayConnectionName: a.relayConnectionName,
+  };
 }
 
 /* ─────────────── Per-Agent ACP State (Multi-User) ─────────────── */
@@ -594,7 +586,7 @@ async function bootAgent(agentId: string): Promise<void> {
 }
 
 async function doBootAgent(agentId: string): Promise<void> {
-  const config = await getAgentById(agentId);
+  const config = getAgentById(agentId);
   if (!config) throw new Error(`Agent "${agentId}" not found in agents.json`);
 
   const proc = getAgentProcess(agentId, config);
@@ -1085,15 +1077,24 @@ export async function POST(req: NextRequest) {
     // ─── Config endpoints (no agentId required) ───
 
     if (action === 'list-agents') {
-      const allAgents = await readAgentsConfig();
-      const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
-      const agents = isAdminToken(token) ? allAgents : allAgents.filter(a => a.id === 'copilot');
+      const allAgents = configStore.getAllAgents();
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      // All authenticated users can see all agents; include canModify flag and hide sensitive fields for non-privileged users
+      const agents = allAgents.map(a => {
+        const userCanModify = canModify(token, a.owner);
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, relay: a.relay, noTools: a.noTools };
+        if (userCanModify) {
+          return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName };
+        }
+        return base;
+      });
       return NextResponse.json({ ok: true, agents });
     }
 
     if (action === 'get-agent-config') {
       if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
-      const agent = await getAgentById(agentId);
+      const agent = getAgentById(agentId);
       if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
       return NextResponse.json({ ok: true, agent });
     }
@@ -1101,7 +1102,7 @@ export async function POST(req: NextRequest) {
     if (action === 'get-sessions') {
       // Return current session IDs for all agents for this user
       const userId = String(body?.userId || 'anonymous');
-      const allAgents = await readAgentsConfig();
+      const allAgents = readAgentsConfig();
       const sessionMap: Record<string, string | null> = {};
       for (const agent of allAgents) {
         const s = getUserSessions().get(userSessionKey(agent.id, userId));
@@ -1110,31 +1111,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, sessions: sessionMap });
     }
 
-    // ─── Admin-only actions ───
-    const ADMIN_ACTIONS = ['update-agent-config', 'create-agent', 'delete-agent'];
-    if (ADMIN_ACTIONS.includes(action)) {
-      const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
-      if (!isAdminToken(token)) {
-        return NextResponse.json({ ok: false, error: 'admin_only' }, { status: 403 });
-      }
-    }
+    // ─── Agent config mutation actions (admin or owner) ───
 
     if (action === 'update-agent-config') {
       if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+
       const updates = body?.updates as Partial<AgentConfig> | undefined;
       if (!updates) return NextResponse.json({ ok: false, error: 'missing_updates' }, { status: 400 });
 
-      const agents = await readAgentsConfig();
-      const idx = agents.findIndex(a => a.id === agentId);
-      if (idx < 0) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
-
-      if (updates.name !== undefined) agents[idx].name = updates.name;
-      if (updates.command !== undefined) agents[idx].command = updates.command;
-      if (updates.args !== undefined) agents[idx].args = updates.args;
-      if (updates.cwd !== undefined) agents[idx].cwd = updates.cwd;
-      if (updates.yolo !== undefined) agents[idx].yolo = updates.yolo;
-
-      await writeAgentsConfig(agents);
+      configStore.updateAgent(agentId, {
+        name: updates.name,
+        command: updates.command,
+        args: updates.args,
+        cwd: updates.cwd,
+        yolo: updates.yolo,
+      });
 
       // Restart if running
       let restarted = false;
@@ -1143,7 +1140,6 @@ export async function POST(req: NextRequest) {
       if (existing?.ready) {
         if (existing.rpc) existing.rpc.destroy();
         procs.delete(agentId);
-        // Clean up all user sessions for this agent
         for (const key of [...getUserSessions().keys()]) {
           if (key.startsWith(`${agentId}:`)) getUserSessions().delete(key);
         }
@@ -1151,39 +1147,47 @@ export async function POST(req: NextRequest) {
         restarted = true;
       }
 
-      return NextResponse.json({ ok: true, agent: agents[idx], restarted });
+      const updated = configStore.getAgentById(agentId);
+      return NextResponse.json({ ok: true, agent: updated, restarted });
     }
 
     if (action === 'create-agent') {
+      const token = await getAuthToken(req);
+      const ownerEmail = getUserEmail(token);
+      if (!ownerEmail) {
+        return NextResponse.json({ ok: false, error: 'email_required_for_ownership' }, { status: 400 });
+      }
+
       const newAgent = body?.agent as Partial<AgentConfig> | undefined;
       if (!newAgent?.id) return NextResponse.json({ ok: false, error: 'missing_agent_id' }, { status: 400 });
 
-      const agents = await readAgentsConfig();
-      if (agents.some(a => a.id === newAgent.id)) {
+      const existingAgent = configStore.getAgentById(newAgent.id);
+      if (existingAgent) {
         return NextResponse.json({ ok: false, error: 'agent_id_already_exists' }, { status: 409 });
       }
 
-      const entry: AgentConfig = {
+      const entry = configStore.createAgent({
         id: newAgent.id,
         name: newAgent.name || newAgent.id,
         command: newAgent.command || 'copilot.exe',
         args: newAgent.args || ['--acp'],
         cwd: newAgent.cwd || '',
         yolo: newAgent.yolo ?? true,
-        ...(newAgent.relay ? { relay: true, relayConnectionName: newAgent.relayConnectionName || newAgent.id } : {}),
-      };
+        relay: newAgent.relay,
+        relayConnectionName: newAgent.relayConnectionName || (newAgent.relay ? newAgent.id : ''),
+        owner: ownerEmail,
+      });
 
-      agents.push(entry);
-      await writeAgentsConfig(agents);
       return NextResponse.json({ ok: true, agent: entry });
     }
 
     if (action === 'delete-agent') {
       if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
-      const agents = await readAgentsConfig();
-      const filtered = agents.filter(a => a.id !== agentId);
-      if (filtered.length === agents.length) {
-        return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
       }
 
       // Stop if running
@@ -1191,12 +1195,11 @@ export async function POST(req: NextRequest) {
       const existing2 = procs2.get(agentId);
       if (existing2?.rpc) existing2.rpc.destroy();
       procs2.delete(agentId);
-      // Clean up all user sessions for this agent
       for (const key of [...getUserSessions().keys()]) {
         if (key.startsWith(`${agentId}:`)) getUserSessions().delete(key);
       }
 
-      await writeAgentsConfig(filtered);
+      configStore.deleteAgent(agentId);
       return NextResponse.json({ ok: true });
     }
 
@@ -1206,7 +1209,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
     }
 
-    const config = await getAgentById(agentId);
+    const config = getAgentById(agentId);
     if (!config) {
       return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
     }

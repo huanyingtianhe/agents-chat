@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  serverExternalPackages: ['better-sqlite3'],
+  serverExternalPackages: ['better-sqlite3', 'hyco-ws'],
   allowedDevOrigins: [
     'oldest-eating-spice-restoration.trycloudflare.com',
     'headphones-frequency-routers-liked.trycloudflare.com',

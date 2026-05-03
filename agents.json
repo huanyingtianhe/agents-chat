@@ -42,12 +42,16 @@
       "yolo": true
     },
     {
-      "id": "remote-copilot",
-      "name": "Remote Copilot (Relay)",
+      "id": "mwc-copilot",
+      "name": "MWC copilot",
+      "command": "copilot.exe",
+      "args": [
+        "--acp"
+      ],
+      "cwd": "Q:\\Repos\\workload-eventstream",
+      "yolo": true,
       "relay": true,
-      "relayConnectionName": "cpc-wulei-cksvl",
-      "cwd": "/",
-      "yolo": true
+      "relayConnectionName": "cpc-wulei-kl9r5"
     }
   ]
 }

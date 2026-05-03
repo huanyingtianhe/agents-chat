@@ -69,6 +69,8 @@ type Agent = {
   args?: string[];
   cwd: string;
   yolo: boolean;
+  relay?: boolean;
+  relayConnectionName?: string;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -403,7 +405,11 @@ export default function Page() {
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
-  const [newAgentForm, setNewAgentForm] = useState({ id: '', name: '', command: '', args: '', cwd: '', yolo: true });
+  const [showAgentAddMenu, setShowAgentAddMenu] = useState(false);
+  const [showAddRemoteAgent, setShowAddRemoteAgent] = useState(false);
+  const defaultCwd = 'Q:\\Repos\\workload-eventstream';
+  const [newRemoteAgentForm, setNewRemoteAgentForm] = useState({ id: '', name: '', nodeName: '', cwd: defaultCwd });
+  const [newAgentForm, setNewAgentForm] = useState({ id: '', name: '', command: '', args: '', cwd: defaultCwd, yolo: true });
   const [addAgentLoading, setAddAgentLoading] = useState(false);
 
   // Nodes panel
@@ -415,6 +421,9 @@ export default function Page() {
   const [addNodeLoading, setAddNodeLoading] = useState(false);
   const [showNodeAddMenu, setShowNodeAddMenu] = useState(false);
   const [showSetupScript, setShowSetupScript] = useState(false);
+  const [showAddRelayAgent, setShowAddRelayAgent] = useState(false);
+  const [relayAgentNode, setRelayAgentNode] = useState('');
+  const [newRelayAgentForm, setNewRelayAgentForm] = useState({ id: '', name: '', cwd: defaultCwd });
 
   // Agent settings
   const [showAgentSettings, setShowAgentSettings] = useState(false);
@@ -1272,6 +1281,23 @@ export default function Page() {
     }
   }
 
+  async function deleteAgent(agentId: string, agentName: string) {
+    if (!confirm(`Delete agent "${agentName}"? This cannot be undone.`)) return;
+    setAgentSettingsLoading(true);
+    try {
+      const data = await acp({ action: 'delete-agent', agentId });
+      if (data.ok) {
+        setShowAgentSettings(false);
+        await loadAgents();
+        addMessage({ type: 'system', content: `🗑️ Agent "${agentName}" deleted` });
+      }
+    } catch (err) {
+      console.error('Failed to delete agent', err);
+    } finally {
+      setAgentSettingsLoading(false);
+    }
+  }
+
   /* ── Create agent ── */
 
   async function createAgent() {
@@ -1295,12 +1321,85 @@ export default function Page() {
         await loadAgents();
         addMessage({ type: 'system', content: `✅ Agent "${name.trim() || trimmedId}" created` });
         setShowAddAgent(false);
-        setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: '', yolo: true });
+        setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: defaultCwd, yolo: true });
       } else {
         addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
       }
     } catch {
       addMessage({ type: 'system', content: '❌ Failed to create agent' });
+    } finally {
+      setAddAgentLoading(false);
+    }
+  }
+
+  /* ── Create relay agent for a node ── */
+
+  async function createRelayAgent() {
+    const { id, name, cwd } = newRelayAgentForm;
+    const nodeName = relayAgentNode;
+    const trimmedId = id.trim();
+    if (!trimmedId || !nodeName) return;
+    const displayName = name.trim() || trimmedId;
+    setAddAgentLoading(true);
+    try {
+      const data = await acp({
+        action: 'create-agent',
+        agent: {
+          id: trimmedId,
+          name: displayName,
+          relay: true,
+          relayConnectionName: nodeName,
+          cwd: cwd.trim() || '/',
+          yolo: true,
+        },
+      });
+      if (data.ok) {
+        await loadAgents();
+        addMessage({ type: 'system', content: `✅ Relay agent "${displayName}" created on node ${nodeName}` });
+        setShowAddRelayAgent(false);
+        setNewRelayAgentForm({ id: '', name: '', cwd: defaultCwd });
+        setRelayAgentNode('');
+      } else {
+        addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
+      }
+    } catch {
+      addMessage({ type: 'system', content: '❌ Failed to create relay agent' });
+    } finally {
+      setAddAgentLoading(false);
+    }
+  }
+
+  /* ── Create remote agent (from node selection) ── */
+
+  async function createRemoteAgent() {
+    const { id, name, nodeName, cwd } = newRemoteAgentForm;
+    const trimmedId = id.trim();
+    if (!trimmedId || !nodeName) return;
+    const agentId = trimmedId;
+    const displayName = name.trim() || nodeName;
+    setAddAgentLoading(true);
+    try {
+      const data = await acp({
+        action: 'create-agent',
+        agent: {
+          id: agentId,
+          name: displayName,
+          relay: true,
+          relayConnectionName: nodeName,
+          cwd: cwd.trim() || '/',
+          yolo: true,
+        },
+      });
+      if (data.ok) {
+        await loadAgents();
+        addMessage({ type: 'system', content: `✅ Remote agent "${displayName}" created on node ${nodeName}` });
+        setShowAddRemoteAgent(false);
+        setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: defaultCwd });
+      } else {
+        addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
+      }
+    } catch {
+      addMessage({ type: 'system', content: '❌ Failed to create remote agent' });
     } finally {
       setAddAgentLoading(false);
     }
@@ -1952,7 +2051,21 @@ export default function Page() {
             <div className="agentsSidebarHeader">
               <span>Agents</span>
               <div style={{ display: 'flex', gap: '4px' }}>
-                {isAdmin && <button className="sidebarToggle" onClick={() => setShowAddAgent(true)} title="Add new agent">+</button>}
+                <div style={{ position: 'relative' }}>
+                  <button className="sidebarToggle" onClick={() => setShowAgentAddMenu(p => !p)} title="Add agent">+</button>
+                  {showAgentAddMenu && (
+                    <div className="nodeAddMenu">
+                      {isAdmin && (
+                        <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); setShowAddAgent(true); }}>
+                          🖥️ Add Agent in Server
+                        </button>
+                      )}
+                      <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); loadNodes(); setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: defaultCwd }); setShowAddRemoteAgent(true); }}>
+                        🌐 Add Agent from Remote Node
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button className="sidebarToggle" onClick={() => setShowAgentsPanel(false)}>→</button>
               </div>
             </div>
@@ -1962,7 +2075,7 @@ export default function Page() {
                   <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
                   <span className="agentListInfo">
                     <span className="agentListName">{agent.name || agent.id}</span>
-                    <span className="agentListId">@{agent.id}</span>
+                    <span className="agentListId">{agent.relay ? `🌐 ${agent.relayConnectionName}` : `@${agent.id}`}</span>
                   </span>
                   <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
                 </button>
@@ -2010,6 +2123,9 @@ export default function Page() {
                     <span className="agentListId">{node.name}{!node.manual ? ' · auto' : ''}</span>
                   </span>
                   <span className={`agentListStatus ${node.online ? 'running' : ''}`}>{node.online ? '●' : '○'}</span>
+                  {isAdmin && (
+                    <span className="nodeActionBtn" onClick={(e) => { e.stopPropagation(); setRelayAgentNode(node.name); setNewRelayAgentForm({ id: '', name: '', cwd: defaultCwd }); setShowAddRelayAgent(true); }} title="Add agent on this node">＋</span>
+                  )}
                   {isAdmin && (
                     <span className="nodeRemoveBtn" onClick={(e) => { e.stopPropagation(); handleRemoveNode(node.name); }} title="Remove node">✕</span>
                   )}
@@ -2082,6 +2198,76 @@ export default function Page() {
         </div>
       )}
 
+      {/* ── Add relay agent modal ── */}
+      {showAddRelayAgent && (
+        <div className="modalOverlay" onClick={() => setShowAddRelayAgent(false)}>
+          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+            <h2>➕ Add Agent on <code>{relayAgentNode}</code></h2>
+            <label>
+              <span>Agent ID</span>
+              <input value={newRelayAgentForm.id} onChange={(e) => setNewRelayAgentForm(f => ({ ...f, id: e.target.value }))} placeholder="unique-agent-id" />
+              <span className="fieldHint">Unique identifier, lowercase with hyphens</span>
+            </label>
+            <label>
+              <span>Agent Name</span>
+              <input value={newRelayAgentForm.name} onChange={(e) => setNewRelayAgentForm(f => ({ ...f, name: e.target.value }))} placeholder="My Remote Agent" />
+              <span className="fieldHint">Display name for the agent</span>
+            </label>
+            <label>
+              <span>Working Directory (on the remote node)</span>
+              <input value={newRelayAgentForm.cwd} onChange={(e) => setNewRelayAgentForm(f => ({ ...f, cwd: e.target.value }))} placeholder="/home/user/project or C:\Repos\MyProject" />
+              <span className="fieldHint">The cwd the copilot agent runs in on that node</span>
+            </label>
+            <div className="modalActions">
+              <button onClick={() => void createRelayAgent()} disabled={addAgentLoading || !newRelayAgentForm.id.trim()}>
+                {addAgentLoading ? 'Creating...' : 'Create Relay Agent'}
+              </button>
+              <button className="secondary" onClick={() => setShowAddRelayAgent(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Add remote agent modal (from agents panel) ── */}
+      {showAddRemoteAgent && (
+        <div className="modalOverlay" onClick={() => setShowAddRemoteAgent(false)}>
+          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+            <h2>🌐 Add Agent from Remote Node</h2>
+            <label>
+              <span>Agent ID</span>
+              <input value={newRemoteAgentForm.id} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, id: e.target.value }))} placeholder="unique-agent-id" />
+              <span className="fieldHint">Unique identifier, lowercase with hyphens</span>
+            </label>
+            <label>
+              <span>Agent Name</span>
+              <input value={newRemoteAgentForm.name} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, name: e.target.value }))} placeholder="My Remote Agent" />
+              <span className="fieldHint">Display name for the agent</span>
+            </label>
+            <label>
+              <span>Node</span>
+              <select value={newRemoteAgentForm.nodeName} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, nodeName: e.target.value }))} className="remoteAgentSelect">
+                <option value="">— Select a node —</option>
+                {nodesData.map(n => (
+                  <option key={n.name} value={n.name}>{n.label} ({n.name}){n.online ? '' : ' · offline'}</option>
+                ))}
+              </select>
+              <span className="fieldHint">The remote node to run the agent on</span>
+            </label>
+            <label>
+              <span>Working Directory (on the remote node)</span>
+              <input value={newRemoteAgentForm.cwd} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, cwd: e.target.value }))} placeholder="/home/user/project or C:\Repos\MyProject" />
+              <span className="fieldHint">The cwd the copilot agent runs in on that node</span>
+            </label>
+            <div className="modalActions">
+              <button onClick={() => void createRemoteAgent()} disabled={addAgentLoading || !newRemoteAgentForm.id.trim() || !newRemoteAgentForm.nodeName}>
+                {addAgentLoading ? 'Creating...' : 'Create Remote Agent'}
+              </button>
+              <button className="secondary" onClick={() => setShowAddRemoteAgent(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Status bar ── */}
       <footer className="statusBar">
         <div className="statusGroup">
@@ -2097,30 +2283,52 @@ export default function Page() {
           <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
             <h2>⚙️ {settingsAgentConfig.name}</h2>
             <label>
+              <span>Agent ID</span>
+              <input value={settingsAgentConfig.id} disabled style={{ opacity: 0.6 }} />
+              <span className="fieldHint">Unique identifier (read-only)</span>
+            </label>
+            <label>
               <span>Name</span>
               <input value={settingsAgentConfig.name} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, name: e.target.value } : c)} />
             </label>
-            <label>
-              <span>Command</span>
-              <input value={settingsAgentConfig.command} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, command: e.target.value } : c)} />
-              <span className="fieldHint">Path to the ACP executable</span>
-            </label>
-            <label>
-              <span>Arguments</span>
-              <input value={(settingsAgentConfig.args || []).join(' ')} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, args: e.target.value.split(/\s+/).filter(Boolean) } : c)} />
-              <span className="fieldHint">Space-separated args (e.g. --acp --yolo)</span>
-            </label>
-            <label>
-              <span>Working Directory</span>
-              <input value={settingsAgentConfig.cwd} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, cwd: e.target.value } : c)} />
-            </label>
-            <label className="checkboxLabel">
-              <input type="checkbox" checked={settingsAgentConfig.yolo} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, yolo: e.target.checked } : c)} />
-              <span>YOLO mode (auto-approve)</span>
-            </label>
+            {settingsAgentConfig.relay ? (
+              <>
+                <label>
+                  <span>Node</span>
+                  <input value={settingsAgentConfig.relayConnectionName || ''} disabled style={{ opacity: 0.6 }} />
+                  <span className="fieldHint">Remote node this agent runs on</span>
+                </label>
+                <label>
+                  <span>Working Directory (on the remote node)</span>
+                  <input value={settingsAgentConfig.cwd} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, cwd: e.target.value } : c)} />
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  <span>Command</span>
+                  <input value={settingsAgentConfig.command} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, command: e.target.value } : c)} />
+                  <span className="fieldHint">Path to the ACP executable</span>
+                </label>
+                <label>
+                  <span>Arguments</span>
+                  <input value={(settingsAgentConfig.args || []).join(' ')} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, args: e.target.value.split(/\s+/).filter(Boolean) } : c)} />
+                  <span className="fieldHint">Space-separated args (e.g. --acp --yolo)</span>
+                </label>
+                <label>
+                  <span>Working Directory</span>
+                  <input value={settingsAgentConfig.cwd} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, cwd: e.target.value } : c)} />
+                </label>
+                <label className="checkboxLabel">
+                  <input type="checkbox" checked={settingsAgentConfig.yolo} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, yolo: e.target.checked } : c)} />
+                  <span>YOLO mode (auto-approve)</span>
+                </label>
+              </>
+            )}
             <div className="modalActions">
               <button onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={() => setShowAgentSettings(false)}>Cancel</button>
+              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>🗑️ Delete</button>
             </div>
           </div>
         </div>
@@ -2549,6 +2757,26 @@ export default function Page() {
           font-weight: 700;
           font-size: 14px;
         }
+        .sidebarToggle {
+          width: 28px;
+          height: 28px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid var(--border);
+          background: var(--panel-soft);
+          color: var(--text-soft);
+          border-radius: 8px;
+          font-size: 14px;
+          cursor: pointer;
+          transition: all 0.12s ease;
+          padding: 0;
+        }
+        .sidebarToggle:hover {
+          border-color: var(--border-strong);
+          background: var(--accent-soft);
+          color: var(--text);
+        }
         .agentsSidebarSection {
           padding: 4px 12px 12px;
         }
@@ -2591,7 +2819,7 @@ export default function Page() {
         .agentListId { font-size: 11px; color: var(--muted); }
         .agentListStatus { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
         .agentListStatus.running { color: var(--success); }
-        .nodeAvatar { font-size: 15px; }
+        .nodeAvatar[data-online] { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
         .nodeAvatar:not([data-online]) { background: linear-gradient(135deg, #718096, #4a5568) !important; }
         .nodeRemoveBtn {
           font-size: 11px;
@@ -2603,8 +2831,20 @@ export default function Page() {
           transition: all 0.12s ease;
           opacity: 0;
         }
-        .agentListItem:hover .nodeRemoveBtn { opacity: 1; }
+        .nodeActionBtn {
+          font-size: 13px;
+          color: var(--muted);
+          cursor: pointer;
+          flex: 0 0 auto;
+          padding: 2px 4px;
+          border-radius: 4px;
+          transition: all 0.12s ease;
+          opacity: 0;
+        }
+        .agentListItem:hover .nodeRemoveBtn,
+        .agentListItem:hover .nodeActionBtn { opacity: 1; }
         .nodeRemoveBtn:hover { color: #e53e3e; background: rgba(229,62,62,0.1); }
+        .nodeActionBtn:hover { color: var(--accent); background: rgba(99,102,241,0.1); }
         .nodeAddForm {
           padding: 12px;
           border-top: 1px solid var(--border);
@@ -3194,8 +3434,24 @@ export default function Page() {
         }
         .modalActions { display: flex; gap: 10px; justify-content: flex-end; }
         .modalActions .secondary { background: transparent; }
+        .modalActions .danger { background: #d9363e; color: #fff; border: none; }
+        .modalActions .danger:hover { background: #c22d35; }
         .agentSettingsModal { width: min(580px, 100%); }
         .fieldHint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+        .remoteAgentSelect {
+          width: 100%;
+          padding: 10px 12px;
+          border-radius: 10px;
+          border: 1px solid var(--border);
+          background: var(--panel-soft);
+          color: var(--text);
+          font-size: 14px;
+          outline: none;
+          cursor: pointer;
+        }
+        .remoteAgentSelect:focus {
+          border-color: var(--accent);
+        }
         .checkboxLabel {
           display: flex !important;
           flex-direction: row !important;

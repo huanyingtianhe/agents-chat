@@ -137,22 +137,27 @@ async function probeNode(connectionName: string): Promise<boolean> {
 
     const uri = HycoWebSocket.createRelaySendUri(ns, connectionName);
     const token = HycoWebSocket.createRelayToken(uri, keyName, key);
+    console.log('[probeNode]', connectionName, 'uri:', uri, 'keyName:', keyName);
 
     const online = await new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
+        console.log('[probeNode]', connectionName, 'TIMEOUT');
         try { ws.close(); } catch { /* ignore */ }
         resolve(false);
       }, 5_000);
 
-      const ws = HycoWebSocket.connect(uri, token);
+      // Use relayedConnect which passes token via ServiceBusAuthorization header
+      const ws = HycoWebSocket.relayedConnect(uri, token);
 
       ws.on('open', () => {
+        console.log('[probeNode]', connectionName, 'OPEN');
         clearTimeout(timeout);
         try { ws.close(); } catch { /* ignore */ }
         resolve(true);
       });
 
-      ws.on('error', () => {
+      ws.on('error', (err: Error) => {
+        console.log('[probeNode]', connectionName, 'ERROR:', err?.message);
         clearTimeout(timeout);
         resolve(false);
       });
@@ -162,9 +167,11 @@ async function probeNode(connectionName: string): Promise<boolean> {
       });
     });
 
+    console.log('[probeNode]', connectionName, 'result:', online);
     probeCache.set(connectionName, { online, ts: Date.now() });
     return online;
-  } catch {
+  } catch (err) {
+    console.log('[probeNode]', connectionName, 'CATCH:', err);
     probeCache.set(connectionName, { online: false, ts: Date.now() });
     return false;
   }
@@ -210,13 +217,42 @@ export async function POST(req: NextRequest) {
     if (action === 'remove-node') {
       const { name } = body;
       if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });
+
+      // Remove from manual nodes config if present
       const nodes = await readNodesConfig();
       const filtered = nodes.filter(n => n.name !== name);
-      if (filtered.length === nodes.length) {
-        return NextResponse.json({ ok: false, error: 'node not found' }, { status: 404 });
+      if (filtered.length < nodes.length) {
+        await writeNodesConfig(filtered);
       }
-      await writeNodesConfig(filtered);
+
+      // Delete the hybrid connection from Azure Relay namespace
+      if (RELAY_SUBSCRIPTION_ID && RELAY_RESOURCE_GROUP && RELAY_NAMESPACE) {
+        try {
+          const { execSync } = require('child_process');
+          const tokenJson = execSync('az account get-access-token --resource https://management.azure.com/ -o json', {
+            encoding: 'utf-8', timeout: 15_000, windowsHide: true,
+          });
+          const { accessToken } = JSON.parse(tokenJson);
+
+          const url = `https://management.azure.com/subscriptions/${RELAY_SUBSCRIPTION_ID}/resourceGroups/${RELAY_RESOURCE_GROUP}/providers/Microsoft.Relay/namespaces/${RELAY_NAMESPACE}/hybridConnections/${encodeURIComponent(name)}?api-version=2021-11-01`;
+          const res = await fetch(url, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+
+          if (!res.ok && res.status !== 404) {
+            console.error(`[Nodes] Failed to delete hybrid connection ${name}: ${res.status} ${res.statusText}`);
+            return NextResponse.json({ ok: false, error: `Azure delete failed: ${res.status}` }, { status: 500 });
+          }
+        } catch (err) {
+          console.error(`[Nodes] Error deleting hybrid connection ${name}:`, err);
+          return NextResponse.json({ ok: false, error: `Azure delete error: ${err}` }, { status: 500 });
+        }
+      }
+
+      // Clear caches
       probeCache.delete(name);
+      discoveryCache = null;
       return NextResponse.json({ ok: true });
     }
 

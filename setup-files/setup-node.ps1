@@ -6,12 +6,24 @@ param(
     [int]$Port = 0,
     [int]$CheckInterval = 5,
     [string]$RelayConnectionString = $env:RELAY_CONNECTION_STRING,
-    [string]$ConnectionName = $env:COMPUTERNAME.ToLower()
+    [string]$ConnectionName = $env:COMPUTERNAME.ToLower(),
+    [string]$KeyVaultName = "agents-chat-kv",
+    [string]$SecretName = "relay-connection-string"
 )
 
+# If no connection string provided, fetch from Azure Key Vault
 if (-not $RelayConnectionString) {
-    Write-Error "Relay connection string is required. Pass -RelayConnectionString or set RELAY_CONNECTION_STRING."
-    exit 1
+    if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+        Write-Error "Azure CLI is required to fetch the relay connection string from Key Vault. Install it and run 'az login'."
+        exit 1
+    }
+    Write-Host "Fetching relay connection string from Key Vault '$KeyVaultName'..." -ForegroundColor Yellow
+    $RelayConnectionString = az keyvault secret show --vault-name $KeyVaultName --name $SecretName --query "value" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not $RelayConnectionString) {
+        Write-Error "Failed to fetch secret '$SecretName' from Key Vault '$KeyVaultName'. Ensure you are logged in with 'az login' and have access."
+        exit 1
+    }
+    Write-Host "  Connection string retrieved from Key Vault." -ForegroundColor Green
 }
 
 # Test if a port is in use (pure .NET — no WMI/CIM, works everywhere)

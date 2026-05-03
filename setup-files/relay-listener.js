@@ -15,19 +15,14 @@ console.log(`Relay listener starting...`);
 console.log(`  Connection name: ${connectionName}`);
 console.log(`  ACP port: ${acpPort}`);
 
+const ns = connectionString.match(/Endpoint=sb:\/\/([^/;]+)/)[1];
+const keyName = connectionString.match(/SharedAccessKeyName=([^;]+)/)[1];
+const key = connectionString.match(/SharedAccessKey=([^;]+)/)[1];
+const listenUri = WebSocket.createRelayListenUri(ns, connectionName);
+
 const wss = WebSocket.createRelayedServer(
-  { server: WebSocket.createRelayListenUri(
-      connectionString.match(/Endpoint=sb:\/\/([^/;]+)/)[1],
-      connectionName
-    ),
-    token: WebSocket.createRelayToken(
-      WebSocket.createRelayListenUri(
-        connectionString.match(/Endpoint=sb:\/\/([^/;]+)/)[1],
-        connectionName
-      ),
-      connectionString.match(/SharedAccessKeyName=([^;]+)/)[1],
-      connectionString.match(/SharedAccessKey=([^;]+)/)[1]
-    )
+  { server: listenUri,
+    token: () => WebSocket.createRelayToken(listenUri, keyName, key)
   },
   (ws) => {
     console.log(`[${new Date().toLocaleTimeString()}] New relay connection, forwarding to localhost:${acpPort}`);

@@ -194,7 +194,7 @@ function createRelayNdjsonRpc(connectionName: string): Promise<NdjsonRpc> {
     let buf = '';
     let connected = false;
 
-    const ws = HycoWebSocket.connect(uri, token);
+    const ws = HycoWebSocket.relayedConnect(uri, token);
 
     function processBuffer() {
       let nl: number;
@@ -1170,6 +1170,7 @@ export async function POST(req: NextRequest) {
         args: newAgent.args || ['--acp'],
         cwd: newAgent.cwd || '',
         yolo: newAgent.yolo ?? true,
+        ...(newAgent.relay ? { relay: true, relayConnectionName: newAgent.relayConnectionName || newAgent.id } : {}),
       };
 
       agents.push(entry);

@@ -72,6 +72,14 @@ function getDb(): ReturnType<typeof Database> {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS agent_access (
+      agent_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      granted_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (agent_id, email),
+      FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
   `);
   runMigrations();
   return _db;
@@ -310,4 +318,36 @@ export function deleteNode(name: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM nodes WHERE name = ?').run(name);
   return result.changes > 0;
+}
+
+// ─── Agent Access Control ───
+
+export function addAgentAccess(agentId: string, email: string, grantedBy: string): boolean {
+  const db = getDb();
+  try {
+    db.prepare('INSERT OR IGNORE INTO agent_access (agent_id, email, granted_by) VALUES (?, ?, ?)').run(
+      agentId, email.toLowerCase(), grantedBy.toLowerCase(),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function removeAgentAccess(agentId: string, email: string): boolean {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM agent_access WHERE agent_id = ? AND email = ?').run(agentId, email.toLowerCase());
+  return result.changes > 0;
+}
+
+export function getAgentAccessList(agentId: string): { email: string; grantedBy: string; createdAt: string }[] {
+  const db = getDb();
+  const rows = db.prepare('SELECT email, granted_by, created_at FROM agent_access WHERE agent_id = ? ORDER BY created_at ASC').all(agentId) as any[];
+  return rows.map(r => ({ email: r.email, grantedBy: r.granted_by, createdAt: r.created_at }));
+}
+
+export function hasAgentAccess(agentId: string, email: string): boolean {
+  const db = getDb();
+  const row = db.prepare('SELECT 1 FROM agent_access WHERE agent_id = ? AND email = ?').get(agentId, email.toLowerCase());
+  return !!row;
 }

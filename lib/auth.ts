@@ -42,3 +42,16 @@ export function canModify(token: any, ownerEmail: string): boolean {
 export async function getAuthToken(req: NextRequest) {
   return getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
 }
+
+/**
+ * Check if a token holder can talk to an agent.
+ * Admin always can. Owner always can. Otherwise must be on the allowlist.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function canTalkTo(token: any, agentOwner: string, agentId: string, hasAccess: (agentId: string, email: string) => boolean): boolean {
+  if (isAdminToken(token)) return true;
+  const email = getUserEmail(token);
+  if (!email) return false;
+  if (email === agentOwner.toLowerCase()) return true;
+  return hasAccess(agentId, email);
+}

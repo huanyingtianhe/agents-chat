@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { getToken } from 'next-auth/jwt';
 import { updateChatAgentSession, getChat, saveChat } from '@/lib/chatStore';
-import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth';
+import { isAdminToken, getUserEmail, canModify, canTalkTo, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
 
 export const dynamic = 'force-dynamic';
@@ -1080,10 +1080,11 @@ export async function POST(req: NextRequest) {
       const allAgents = configStore.getAllAgents();
       const token = await getAuthToken(req);
       const userEmail = getUserEmail(token);
-      // All authenticated users can see all agents; include canModify flag and hide sensitive fields for non-privileged users
+      // All authenticated users can see all agents; include canModify and canTalk flags
       const agents = allAgents.map(a => {
         const userCanModify = canModify(token, a.owner);
-        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, relay: a.relay, noTools: a.noTools };
+        const userCanTalk = canTalkTo(token, a.owner, a.id, configStore.hasAgentAccess);
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, relay: a.relay, noTools: a.noTools };
         if (userCanModify) {
           return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName };
         }
@@ -1203,6 +1204,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ─── Agent access management (admin or owner) ───
+
+    if (action === 'add-agent-access') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+      const email = (body?.email as string || '').trim().toLowerCase();
+      if (!email) return NextResponse.json({ ok: false, error: 'missing_email' }, { status: 400 });
+      configStore.addAgentAccess(agentId, email, getUserEmail(token));
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === 'remove-agent-access') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+      const email = (body?.email as string || '').trim().toLowerCase();
+      if (!email) return NextResponse.json({ ok: false, error: 'missing_email' }, { status: 400 });
+      configStore.removeAgentAccess(agentId, email);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === 'list-agent-access') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+      const accessList = configStore.getAgentAccessList(agentId);
+      return NextResponse.json({ ok: true, access: accessList });
+    }
+
     // ─── Agent runtime actions (require agentId + userId) ───
 
     if (!agentId) {
@@ -1250,6 +1293,13 @@ export async function POST(req: NextRequest) {
     if (action === 'send') {
       const text = String(body?.text ?? '');
       if (!text) return NextResponse.json({ ok: false, error: 'missing_text' }, { status: 400 });
+
+      // Check talk permission
+      const agentRecord = configStore.getAgentById(agentId);
+      if (agentRecord && !canTalkTo(token, agentRecord.owner, agentId, configStore.hasAgentAccess)) {
+        return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
+      }
+
       const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
       const chatId = body?.chatId as string | undefined;
 

@@ -73,6 +73,7 @@ type Agent = {
   relayConnectionName?: string;
   owner?: string;
   canModify?: boolean;
+  canTalk?: boolean;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -432,6 +433,8 @@ export default function Page() {
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [settingsAgentConfig, setSettingsAgentConfig] = useState<Agent | null>(null);
   const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
+  const [agentAccessList, setAgentAccessList] = useState<{ email: string; grantedBy: string; createdAt: string }[]>([]);
+  const [newAccessEmail, setNewAccessEmail] = useState('');
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -1247,14 +1250,35 @@ export default function Page() {
     setSettingsAgentConfig(null);
     setShowAgentSettings(true);
     setAgentSettingsLoading(true);
+    setAgentAccessList([]);
+    setNewAccessEmail('');
     try {
-      const data = await acp({ action: 'get-agent-config', agentId });
-      if (data.ok) setSettingsAgentConfig(data.agent);
+      const [configData, accessData] = await Promise.all([
+        acp({ action: 'get-agent-config', agentId }),
+        acp({ action: 'list-agent-access', agentId }),
+      ]);
+      if (configData.ok) setSettingsAgentConfig(configData.agent);
+      if (accessData.ok) setAgentAccessList(accessData.access || []);
     } catch (err) {
       console.error('Failed to load agent config', err);
     } finally {
       setAgentSettingsLoading(false);
     }
+  }
+
+  async function addAccess() {
+    if (!settingsAgentId || !newAccessEmail.trim()) return;
+    await acp({ action: 'add-agent-access', agentId: settingsAgentId, email: newAccessEmail.trim() });
+    setNewAccessEmail('');
+    const data = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
+    if (data.ok) setAgentAccessList(data.access || []);
+  }
+
+  async function removeAccess(email: string) {
+    if (!settingsAgentId) return;
+    await acp({ action: 'remove-agent-access', agentId: settingsAgentId, email });
+    const data = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
+    if (data.ok) setAgentAccessList(data.access || []);
   }
 
   async function saveAgentSettings() {
@@ -2074,7 +2098,7 @@ export default function Page() {
                 <button key={agent.id} className="agentListItem" style={agent.canModify ? undefined : { cursor: 'default' }} onClick={() => agent.canModify && openAgentSettings(agent.id)} title={agent.canModify ? `${agent.name} — Click for settings` : agent.name}>
                   <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
                   <span className="agentListInfo">
-                    <span className="agentListName">{agent.name || agent.id}</span>
+                    <span className="agentListName">{agent.name || agent.id}{agent.canTalk === false ? ' 🔒' : ''}</span>
                     <span className="agentListId">{agent.relay ? `🌐 ${agent.relayConnectionName}` : `@${agent.id}`}</span>
                   </span>
                   <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
@@ -2325,6 +2349,33 @@ export default function Page() {
                 </label>
               </>
             )}
+            {/* Access Control */}
+            <div style={{ marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px' }}>
+              <h3 style={{ margin: '0 0 8px', fontSize: '13px', color: '#8a90a2' }}>🔐 Access Control</h3>
+              <p style={{ fontSize: '12px', color: '#666', margin: '0 0 8px' }}>Only listed users (and admins) can talk to this agent.</p>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                <input
+                  value={newAccessEmail}
+                  onChange={(e) => setNewAccessEmail(e.target.value)}
+                  placeholder="user@email.com"
+                  style={{ flex: 1, fontSize: '12px' }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
+                />
+                <button onClick={() => void addAccess()} disabled={!newAccessEmail.trim()} style={{ fontSize: '12px', padding: '4px 10px' }}>Grant</button>
+              </div>
+              {agentAccessList.length > 0 ? (
+                <div style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '12px' }}>
+                  {agentAccessList.map((entry) => (
+                    <div key={entry.email} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span>{entry.email}</span>
+                      <button onClick={() => void removeAccess(entry.email)} style={{ fontSize: '11px', padding: '2px 6px', background: 'transparent', color: '#e55', border: '1px solid #e55', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: '12px', color: '#666', fontStyle: 'italic' }}>No users granted access yet. Only the owner and admins can talk to this agent.</div>
+              )}
+            </div>
             <div className="modalActions">
               <button onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={() => setShowAgentSettings(false)}>Cancel</button>

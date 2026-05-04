@@ -72,7 +72,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        secure: true,
       },
     },
     callbackUrl: {
@@ -81,7 +81,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        secure: true,
       },
     },
     state: {
@@ -90,16 +90,16 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        secure: true,
       },
     },
     pkceCodeVerifier: {
       name: 'next-auth.pkce.code_verifier',
       options: {
         httpOnly: true,
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        sameSite: 'none',
         path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        secure: true,
       },
     },
     sessionToken: {
@@ -108,7 +108,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        secure: true,
       },
     },
   },

@@ -1083,8 +1083,8 @@ export async function POST(req: NextRequest) {
       // All authenticated users can see all agents; include canModify and canTalk flags
       const agents = allAgents.map(a => {
         const userCanModify = canModify(token, a.owner);
-        const userCanTalk = canTalkTo(token, a.owner, a.id, configStore.hasAgentAccess);
-        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, relay: a.relay, noTools: a.noTools };
+        const userCanTalk = canTalkTo(token, a.owner, a.id, a.public, configStore.hasAgentAccess);
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools };
         if (userCanModify) {
           return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName };
         }
@@ -1132,6 +1132,7 @@ export async function POST(req: NextRequest) {
         args: updates.args,
         cwd: updates.cwd,
         yolo: updates.yolo,
+        public: (body?.updates as any)?.public,
       });
 
       // Restart if running
@@ -1296,7 +1297,7 @@ export async function POST(req: NextRequest) {
 
       // Check talk permission
       const agentRecord = configStore.getAgentById(agentId);
-      if (agentRecord && !canTalkTo(token, agentRecord.owner, agentId, configStore.hasAgentAccess)) {
+      if (agentRecord && !canTalkTo(token, agentRecord.owner, agentId, agentRecord.public, configStore.hasAgentAccess)) {
         return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
       }
 

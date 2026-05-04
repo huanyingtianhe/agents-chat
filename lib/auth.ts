@@ -45,10 +45,11 @@ export async function getAuthToken(req: NextRequest) {
 
 /**
  * Check if a token holder can talk to an agent.
- * Admin always can. Owner always can. Otherwise must be on the allowlist.
+ * Public agents: anyone can talk. Otherwise: admin, owner, or allowlisted user.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function canTalkTo(token: any, agentOwner: string, agentId: string, hasAccess: (agentId: string, email: string) => boolean): boolean {
+export function canTalkTo(token: any, agentOwner: string, agentId: string, isPublic: boolean, hasAccess: (agentId: string, email: string) => boolean): boolean {
+  if (isPublic) return true;
   if (isAdminToken(token)) return true;
   const email = getUserEmail(token);
   if (!email) return false;

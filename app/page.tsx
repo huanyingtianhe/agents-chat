@@ -74,6 +74,7 @@ type Agent = {
   owner?: string;
   canModify?: boolean;
   canTalk?: boolean;
+  public?: boolean;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -1293,6 +1294,7 @@ export default function Page() {
           args: settingsAgentConfig.args,
           cwd: settingsAgentConfig.cwd,
           yolo: settingsAgentConfig.yolo,
+          public: settingsAgentConfig.public,
         },
       });
       if (data.ok) {
@@ -2352,16 +2354,22 @@ export default function Page() {
             {/* Access Control */}
             <div style={{ marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px' }}>
               <h3 style={{ margin: '0 0 8px', fontSize: '13px', color: '#8a90a2' }}>🔐 Access Control</h3>
-              <p style={{ fontSize: '12px', color: '#666', margin: '0 0 8px' }}>Only listed users (and admins) can talk to this agent.</p>
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                <input
-                  value={newAccessEmail}
-                  onChange={(e) => setNewAccessEmail(e.target.value)}
-                  placeholder="user@email.com"
-                  style={{ flex: 1, fontSize: '12px' }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
-                />
-                <button onClick={() => void addAccess()} disabled={!newAccessEmail.trim()} style={{ fontSize: '12px', padding: '4px 10px' }}>Grant</button>
+              <label className="checkboxLabel" style={{ marginBottom: '8px' }}>
+                <input type="checkbox" checked={!!settingsAgentConfig.public} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, public: e.target.checked } : c)} />
+                <span>Public (anyone can talk to this agent)</span>
+              </label>
+              {!settingsAgentConfig.public && (
+                <>
+                  <p style={{ fontSize: '12px', color: '#666', margin: '0 0 8px' }}>Only listed users (and admins) can talk to this agent.</p>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                    <input
+                      value={newAccessEmail}
+                      onChange={(e) => setNewAccessEmail(e.target.value)}
+                      placeholder="user@email.com"
+                      style={{ flex: 1, fontSize: '12px' }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
+                    />
+                    <button onClick={() => void addAccess()} disabled={!newAccessEmail.trim()} style={{ fontSize: '12px', padding: '4px 10px' }}>Grant</button>
               </div>
               {agentAccessList.length > 0 ? (
                 <div style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '12px' }}>
@@ -2374,6 +2382,8 @@ export default function Page() {
                 </div>
               ) : (
                 <div style={{ fontSize: '12px', color: '#666', fontStyle: 'italic' }}>No users granted access yet. Only the owner and admins can talk to this agent.</div>
+              )}
+                </>
               )}
             </div>
             <div className="modalActions">

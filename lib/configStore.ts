@@ -24,6 +24,7 @@ export type AgentRecord = {
   noTools: boolean;
   relay: boolean;
   relayConnectionName: string;
+  public: boolean;
   owner: string;
   createdAt: string;
   updatedAt: string;
@@ -61,6 +62,7 @@ function getDb(): ReturnType<typeof Database> {
       no_tools INTEGER NOT NULL DEFAULT 0,
       relay INTEGER NOT NULL DEFAULT 0,
       relay_connection_name TEXT NOT NULL DEFAULT '',
+      public INTEGER NOT NULL DEFAULT 0,
       owner TEXT NOT NULL DEFAULT 'system',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -100,8 +102,8 @@ function runMigrations(): void {
       const defaultOwner = getDefaultOwner();
 
       const insert = db.prepare(`
-        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, owner)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, owner)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const tx = db.transaction(() => {
@@ -116,6 +118,7 @@ function runMigrations(): void {
             a.noTools ? 1 : 0,
             a.relay ? 1 : 0,
             a.relayConnectionName || '',
+            a.id === 'copilot' ? 1 : 0,
             defaultOwner,
           );
         }
@@ -156,6 +159,19 @@ function runMigrations(): void {
       db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('nodes_json_import');
     }
   }
+
+  // Add 'public' column if missing (for existing databases created before this feature)
+  const publicColMigrated = db.prepare('SELECT 1 FROM migrations WHERE key = ?').get('add_public_column');
+  if (!publicColMigrated) {
+    try {
+      db.exec(`ALTER TABLE agents ADD COLUMN public INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+      // Column already exists if DB was created fresh with the new schema
+    }
+    // Set copilot as public by default
+    db.prepare("UPDATE agents SET public = 1 WHERE id = 'copilot'").run();
+    db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('add_public_column');
+  }
 }
 
 function getDefaultOwner(): string {
@@ -179,6 +195,7 @@ function rowToAgent(row: any): AgentRecord {
     noTools: !!row.no_tools,
     relay: !!row.relay,
     relayConnectionName: row.relay_connection_name,
+    public: !!row.public,
     owner: row.owner,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -207,12 +224,13 @@ export function createAgent(agent: {
   noTools?: boolean;
   relay?: boolean;
   relayConnectionName?: string;
+  public?: boolean;
   owner: string;
 }): AgentRecord {
   const db = getDb();
   db.prepare(`
-    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, owner)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, owner)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agent.id,
     agent.name || agent.id,
@@ -223,6 +241,7 @@ export function createAgent(agent: {
     agent.noTools ? 1 : 0,
     agent.relay ? 1 : 0,
     agent.relayConnectionName || '',
+    agent.public ? 1 : 0,
     agent.owner,
   );
   return getAgentById(agent.id)!;
@@ -237,6 +256,7 @@ export function updateAgent(agentId: string, updates: Partial<{
   noTools: boolean;
   relay: boolean;
   relayConnectionName: string;
+  public: boolean;
 }>): AgentRecord | null {
   const db = getDb();
   const existing = getAgentById(agentId);
@@ -253,6 +273,7 @@ export function updateAgent(agentId: string, updates: Partial<{
   if (updates.noTools !== undefined) { fields.push('no_tools = ?'); values.push(updates.noTools ? 1 : 0); }
   if (updates.relay !== undefined) { fields.push('relay = ?'); values.push(updates.relay ? 1 : 0); }
   if (updates.relayConnectionName !== undefined) { fields.push('relay_connection_name = ?'); values.push(updates.relayConnectionName); }
+  if (updates.public !== undefined) { fields.push('public = ?'); values.push(updates.public ? 1 : 0); }
 
   if (fields.length === 0) return existing;
 

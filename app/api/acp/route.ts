@@ -682,7 +682,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       if (config.noTools) {
         if (method === 'session/request_permission') {
           const denyOption = params?.options?.find((o: any) => o.kind === 'reject_once');
-          rpc.respond(id, { selectedOptionId: denyOption?.optionId || 'reject_once' });
+          rpc.respond(id, { outcome: { outcome: 'selected', optionId: denyOption?.optionId || 'reject_once' } });
         } else if (method === 'terminal/create' || method === 'fs/read_text_file' || method === 'fs/write_text_file') {
           rpc.respond(id, { error: 'Tools disabled for this agent' });
         } else {
@@ -692,10 +692,10 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
 
       if (method === 'session/request_permission') {
-        console.log(`[ACP:${agentId}] Approving permission request:`, JSON.stringify(params));
-        // Respond with the allow_always optionId from the provided options
+        // Respond with outcome format: { outcome: { outcome: 'selected', optionId: '...' } }
         const allowOption = params?.options?.find((o: any) => o.kind === 'allow_always') || params?.options?.find((o: any) => o.kind === 'allow_once');
-        rpc.respond(id, { selectedOptionId: allowOption?.optionId || 'allow_always' });
+        const optionId = allowOption?.optionId || 'allow_always';
+        rpc.respond(id, { outcome: { outcome: 'selected', optionId } });
       } else if (method === 'terminal/create') {
         const result = handleTerminalCreate(params ?? {}, proc.cachedCwd);
         rpc.respond(id, result);

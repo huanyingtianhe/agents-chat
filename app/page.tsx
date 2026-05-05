@@ -1478,6 +1478,12 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
+      // Also persist last active chat ID
+      void fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: currentId }),
+      }).catch(() => { /* ignore */ });
     } catch { /* ignore */ }
 
     setChatHistory(prev => {

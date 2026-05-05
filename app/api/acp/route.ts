@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import { getToken } from 'next-auth/jwt';
 import { updateChatAgentSession, getChat, saveChat } from '@/lib/chatStore';
 import { isAdminToken, getUserEmail, canModify, canTalkTo, getAuthToken } from '@/lib/auth';
@@ -632,6 +633,11 @@ async function doBootAgent(agentId: string): Promise<void> {
       if (config.yolo && !args.includes('--yolo')) args.push('--yolo');
       const cwd = config.cwd || process.cwd();
       proc.cachedCwd = cwd;
+
+      // Validate cwd exists before spawning
+      if (!existsSync(cwd)) {
+        throw new Error(`Agent working directory does not exist: ${cwd}`);
+      }
 
       console.log(`[ACP:${agentId}] Spawning ${command} ${args.join(' ')} (cwd: ${cwd})`);
       const cp = spawn(command, args, {

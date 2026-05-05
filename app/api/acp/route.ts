@@ -639,6 +639,7 @@ async function doBootAgent(agentId: string): Promise<void> {
         cwd,
         env: process.env,
         windowsHide: true,
+        shell: true,
       });
 
       cp.stderr?.on('data', () => {});

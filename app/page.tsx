@@ -2104,6 +2104,9 @@ export default function Page() {
                       <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); loadNodes(); setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: defaultCwd }); setShowAddRemoteAgent(true); }}>
                         🌐 Add Agent from Remote Node
                       </button>
+                      <button className="nodeAddMenuItem" onClick={() => setShowAgentAddMenu(false)}>
+                        ✕ Cancel
+                      </button>
                     </div>
                   )}
                 </div>

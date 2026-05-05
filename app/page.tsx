@@ -498,7 +498,7 @@ export default function Page() {
     // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
       if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
-      const lastChatId = data.lastChatId as string | null;
+      const lastChatId = (data.lastChatId as string | null) || (data.chats?.[0]?.id as string | null);
       if (lastChatId) {
         setCurrentChatId(lastChatId);
         setActiveSidebarChatId(lastChatId);

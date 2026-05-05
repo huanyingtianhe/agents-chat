@@ -2096,9 +2096,11 @@ export default function Page() {
                   <button className="sidebarToggle" onClick={() => setShowAgentAddMenu(p => !p)} title="Add agent">+</button>
                   {showAgentAddMenu && (
                     <div className="nodeAddMenu">
+                      {isAdmin && (
                         <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); setShowAddAgent(true); }}>
                           🖥️ Add Agent in Server
                         </button>
+                      )}
                       <button className="nodeAddMenuItem" onClick={() => { setShowAgentAddMenu(false); loadNodes(); setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: defaultCwd }); setShowAddRemoteAgent(true); }}>
                         🌐 Add Agent from Remote Node
                       </button>

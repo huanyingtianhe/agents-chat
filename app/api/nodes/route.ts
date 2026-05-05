@@ -25,18 +25,20 @@ const probeCache = new Map<string, { online: boolean; ts: number }>();
 const PROBE_TTL_MS = 30_000;
 
 // Cache discovered hybrid connections for 60s
-let discoveryCache: { names: string[]; ts: number } | null = null;
+type DiscoveredNode = { name: string; createdBy: string };
+let discoveryCache: { nodes: DiscoveredNode[]; ts: number } | null = null;
 const DISCOVERY_TTL_MS = 60_000;
 
 /**
  * Discover hybrid connections from the Azure Relay namespace via ARM REST API.
  * Uses `az account get-access-token` to get a management token.
+ * Returns name and createdBy (from systemData) for each connection.
  */
-async function discoverHybridConnections(): Promise<string[]> {
+async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
   if (!RELAY_SUBSCRIPTION_ID || !RELAY_RESOURCE_GROUP || !RELAY_NAMESPACE) return [];
 
   if (discoveryCache && Date.now() - discoveryCache.ts < DISCOVERY_TTL_MS) {
-    return discoveryCache.names;
+    return discoveryCache.nodes;
   }
 
   try {
@@ -54,28 +56,31 @@ async function discoverHybridConnections(): Promise<string[]> {
 
     if (!res.ok) {
       console.error(`[Nodes] ARM API error: ${res.status} ${res.statusText}`);
-      return discoveryCache?.names || [];
+      return discoveryCache?.nodes || [];
     }
 
     const data = await res.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const names: string[] = (data.value || []).map((hc: any) => hc.name as string);
-    discoveryCache = { names, ts: Date.now() };
-    return names;
+    const nodes: DiscoveredNode[] = (data.value || []).map((hc: any) => ({
+      name: hc.name as string,
+      createdBy: (hc.systemData?.createdBy as string) || '',
+    }));
+    discoveryCache = { nodes, ts: Date.now() };
+    return nodes;
   } catch (err) {
     console.error('[Nodes] Discovery failed:', err);
-    return discoveryCache?.names || [];
+    return discoveryCache?.nodes || [];
   }
 }
 
 /**
  * Merge auto-discovered nodes with manual nodes from SQLite.
- * Manual nodes take priority for labels. Discovered nodes are system-managed.
+ * Manual nodes take priority for labels. Discovered node owner comes from systemData.createdBy.
  */
 type MergedNode = { name: string; label: string; owner: string; manual: boolean };
 
 async function getAllMergedNodes(): Promise<MergedNode[]> {
-  const [manualNodes, discoveredNames] = await Promise.all([
+  const [manualNodes, discoveredNodes] = await Promise.all([
     Promise.resolve(configStore.getAllNodes()),
     discoverHybridConnections(),
   ]);
@@ -83,16 +88,16 @@ async function getAllMergedNodes(): Promise<MergedNode[]> {
   const manualMap = new Map(manualNodes.map(n => [n.name, n]));
   const merged: MergedNode[] = [];
 
-  // Add all discovered nodes (use manual label/owner if available)
-  for (const name of discoveredNames) {
-    const manual = manualMap.get(name);
+  // Add all discovered nodes (use manual label/owner if available, fall back to systemData.createdBy)
+  for (const disc of discoveredNodes) {
+    const manual = manualMap.get(disc.name);
     merged.push({
-      name,
-      label: manual?.label || name,
-      owner: manual?.owner || 'system',
+      name: disc.name,
+      label: manual?.label || disc.name,
+      owner: manual?.owner || disc.createdBy || 'system',
       manual: !!manual,
     });
-    manualMap.delete(name);
+    manualMap.delete(disc.name);
   }
 
   // Add any manual nodes not found in discovery

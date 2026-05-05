@@ -1661,14 +1661,8 @@ export default function Page() {
     } catch { /* ignore */ }
 
     const errors: string[] = [];
-    for (const agent of agents) {
-      try {
-        const data = await acp({ action: 'new-session', agentId: agent.id, chatId: newId });
-        if (!data.ok) errors.push(`${agent.id}: ${data.error || 'failed'}`);
-      } catch (err) {
-        errors.push(`${agent.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    // Sessions are created lazily when user first sends a message to each agent
+    // No need to eagerly create sessions for all agents here
 
     sessionRunsRef.current = {};
     orchestrationsRef.current = {};
@@ -1676,7 +1670,7 @@ export default function Page() {
     if (errors.length) {
       addMessage({ type: 'system', content: `⚠️ New chat created with errors: ${errors.join(', ')}` });
     } else {
-      addMessage({ type: 'system', content: `✅ New chat "${newName}" created. All agent sessions reset.` });
+      addMessage({ type: 'system', content: `✅ New chat "${newName}" created.` });
     }
 
     setShowChatsPanel(false);

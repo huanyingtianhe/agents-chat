@@ -1327,10 +1327,15 @@ export async function POST(req: NextRequest) {
       // Switch to the correct session for this chat (if known)
       if (chatId) {
         const chatSessionId = getChatSession(sess, chatId);
-        if (chatSessionId && chatSessionId !== sess.sessionId) {
-          sess.sessionId = chatSessionId;
-          sess.activeTurn = null;
-          sess.phase = 'idle';
+        if (chatSessionId) {
+          if (chatSessionId !== sess.sessionId) {
+            sess.sessionId = chatSessionId;
+            sess.activeTurn = null;
+            sess.phase = 'idle';
+          }
+        } else {
+          // New chat with no prior session — clear so ensureUserSession creates a fresh one
+          sess.sessionId = null;
         }
       }
 

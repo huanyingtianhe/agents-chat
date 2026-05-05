@@ -221,6 +221,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    if (action === 'update-node') {
+      const { name, label } = body;
+      if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });
+      const nodeRecord = configStore.getNodeByName(name);
+      if (!nodeRecord) return NextResponse.json({ ok: false, error: 'node not found' }, { status: 404 });
+      if (!canModify(token, nodeRecord.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+      configStore.updateNode(name, { label });
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === 'remove-node') {
       const { name } = body;
       if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });

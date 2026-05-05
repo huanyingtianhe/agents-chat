@@ -423,6 +423,8 @@ export default function Page() {
   const [showAddNode, setShowAddNode] = useState(false);
   const [newNodeForm, setNewNodeForm] = useState({ name: '', label: '' });
   const [addNodeLoading, setAddNodeLoading] = useState(false);
+  const [editingNodeName, setEditingNodeName] = useState<string | null>(null);
+  const [editingNodeLabel, setEditingNodeLabel] = useState('');
   const [showNodeAddMenu, setShowNodeAddMenu] = useState(false);
   const [showSetupScript, setShowSetupScript] = useState(false);
   const [showAddRelayAgent, setShowAddRelayAgent] = useState(false);
@@ -720,6 +722,17 @@ export default function Page() {
       }
     } catch (err) {
       console.error('Failed to check node', err);
+    }
+  }
+
+  async function handleRenameNode(name: string, newLabel: string) {
+    try {
+      const res = await nodesApi({ action: 'update-node', name, label: newLabel });
+      if (res.ok) {
+        setNodesData(prev => prev.map(n => n.name === name ? { ...n, label: newLabel } : n));
+      }
+    } catch (err) {
+      console.error('Failed to rename node', err);
     }
   }
 
@@ -2145,7 +2158,19 @@ export default function Page() {
                 <button key={node.name} className="agentListItem" onClick={() => handleRefreshNode(node.name)} title={`Click to refresh — ${node.online ? 'Online' : 'Offline'}`}>
                   <span className="agentListAvatar nodeAvatar" data-online={node.online ? '' : undefined}>{node.label.slice(0, 1).toUpperCase()}</span>
                   <span className="agentListInfo">
-                    <span className="agentListName">{node.label}</span>
+                    {editingNodeName === node.name ? (
+                      <input
+                        className="nodeEditInput"
+                        value={editingNodeLabel}
+                        onChange={(e) => setEditingNodeLabel(e.target.value)}
+                        onBlur={() => { if (editingNodeLabel.trim() && editingNodeLabel !== node.label) handleRenameNode(node.name, editingNodeLabel.trim()); setEditingNodeName(null); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } if (e.key === 'Escape') { setEditingNodeName(null); } }}
+                        onClick={(e) => e.stopPropagation()}
+                        autoFocus
+                      />
+                    ) : (
+                      <span className="agentListName" onDoubleClick={(e) => { if (node.canModify) { e.stopPropagation(); setEditingNodeName(node.name); setEditingNodeLabel(node.label); } }} title={node.canModify ? 'Double-click to rename' : undefined}>{node.label}</span>
+                    )}
                     <span className="agentListId">{node.name}{!node.manual ? ' · auto' : ''}</span>
                   </span>
                   <span className={`agentListStatus ${node.online ? 'running' : ''}`}>{node.online ? '●' : '○'}</span>
@@ -2906,6 +2931,17 @@ export default function Page() {
         .agentListItem:hover .nodeActionBtn { opacity: 1; }
         .nodeRemoveBtn:hover { color: #e53e3e; background: rgba(229,62,62,0.1); }
         .nodeActionBtn:hover { color: var(--accent); background: rgba(99,102,241,0.1); }
+        .nodeEditInput {
+          font-size: 13px;
+          font-weight: 600;
+          background: var(--bg);
+          border: 1px solid var(--accent);
+          border-radius: 4px;
+          color: var(--text);
+          padding: 2px 6px;
+          width: 100%;
+          outline: none;
+        }
         .nodeAddForm {
           padding: 12px;
           border-top: 1px solid var(--border);

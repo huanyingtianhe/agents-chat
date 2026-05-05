@@ -2135,21 +2135,19 @@ export default function Page() {
               <span>Nodes</span>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button className="sidebarToggle" onClick={() => loadNodes()} title="Refresh all">↻</button>
-                {isAdmin && (
-                  <div style={{ position: 'relative' }}>
-                    <button className="sidebarToggle" onClick={() => setShowNodeAddMenu(p => !p)} title="Add node">+</button>
-                    {showNodeAddMenu && (
-                      <div className="nodeAddMenu">
-                        <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowSetupScript(true); }}>
-                          📦 Download Setup Kit
-                        </button>
-                        <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowAddNode(true); }}>
-                          ✏️ Add Manually
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div style={{ position: 'relative' }}>
+                  <button className="sidebarToggle" onClick={() => setShowNodeAddMenu(p => !p)} title="Add node">+</button>
+                  {showNodeAddMenu && (
+                    <div className="nodeAddMenu">
+                      <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowSetupScript(true); }}>
+                        📦 Download Setup Kit
+                      </button>
+                      <button className="nodeAddMenuItem" onClick={() => { setShowNodeAddMenu(false); setShowAddNode(true); }}>
+                        ✏️ Add Manually
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button className="sidebarToggle" onClick={() => setShowNodesPanel(false)}>→</button>
               </div>
             </div>

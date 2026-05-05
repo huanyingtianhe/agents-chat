@@ -324,13 +324,16 @@ export function createNode(node: { name: string; label?: string; owner: string }
   return getNodeByName(node.name)!;
 }
 
-export function updateNode(name: string, updates: { label?: string }): NodeRecord | null {
+export function updateNode(name: string, updates: { label?: string; owner?: string }): NodeRecord | null {
   const db = getDb();
   const existing = getNodeByName(name);
   if (!existing) return null;
 
   if (updates.label !== undefined) {
     db.prepare("UPDATE nodes SET label = ?, updated_at = datetime('now') WHERE name = ?").run(updates.label, name);
+  }
+  if (updates.owner !== undefined) {
+    db.prepare("UPDATE nodes SET owner = ?, updated_at = datetime('now') WHERE name = ?").run(updates.owner, name);
   }
   return getNodeByName(name);
 }

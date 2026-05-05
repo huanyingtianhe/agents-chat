@@ -61,10 +61,18 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
 
     const data = await res.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const nodes: DiscoveredNode[] = (data.value || []).map((hc: any) => ({
-      name: hc.name as string,
-      createdBy: (hc.systemData?.createdBy as string) || '',
-    }));
+    const nodes: DiscoveredNode[] = (data.value || []).map((hc: any) => {
+      const name = hc.name as string;
+      // Try systemData.createdBy first, then extract alias from name pattern: cpc-{alias}-{suffix}
+      let createdBy = (hc.systemData?.createdBy as string) || '';
+      if (!createdBy) {
+        const parts = name.split('-');
+        if (parts.length >= 3 && parts[0] === 'cpc') {
+          createdBy = `${parts[1]}@microsoft.com`;
+        }
+      }
+      return { name, createdBy };
+    });
     discoveryCache = { nodes, ts: Date.now() };
     return nodes;
   } catch (err) {
@@ -82,7 +90,7 @@ type MergedNode = { name: string; label: string; owner: string; manual: boolean 
 async function getAllMergedNodes(): Promise<MergedNode[]> {
   const discoveredNodes = await discoverHybridConnections();
 
-  // Persist any newly discovered nodes to SQLite
+  // Persist any newly discovered nodes to SQLite, update 'system' owners if we now have a real one
   for (const disc of discoveredNodes) {
     const existing = configStore.getNodeByName(disc.name);
     if (!existing) {
@@ -91,6 +99,9 @@ async function getAllMergedNodes(): Promise<MergedNode[]> {
         label: disc.name,
         owner: disc.createdBy || 'system',
       });
+    } else if (existing.owner === 'system' && disc.createdBy && disc.createdBy !== 'system') {
+      // Update owner if we now have a real creator and the current owner is just the default
+      configStore.updateNode(disc.name, { owner: disc.createdBy });
     }
   }
 

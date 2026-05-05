@@ -75,37 +75,35 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
 
 /**
  * Merge auto-discovered nodes with manual nodes from SQLite.
- * Manual nodes take priority for labels. Discovered node owner comes from systemData.createdBy.
+ * Newly discovered nodes are persisted to SQLite with owner from systemData.createdBy.
  */
 type MergedNode = { name: string; label: string; owner: string; manual: boolean };
 
 async function getAllMergedNodes(): Promise<MergedNode[]> {
-  const [manualNodes, discoveredNodes] = await Promise.all([
-    Promise.resolve(configStore.getAllNodes()),
-    discoverHybridConnections(),
-  ]);
+  const discoveredNodes = await discoverHybridConnections();
 
-  const manualMap = new Map(manualNodes.map(n => [n.name, n]));
-  const merged: MergedNode[] = [];
-
-  // Add all discovered nodes (use manual label/owner if available, fall back to systemData.createdBy)
+  // Persist any newly discovered nodes to SQLite
   for (const disc of discoveredNodes) {
-    const manual = manualMap.get(disc.name);
-    merged.push({
-      name: disc.name,
-      label: manual?.label || disc.name,
-      owner: manual?.owner || disc.createdBy || 'system',
-      manual: !!manual,
-    });
-    manualMap.delete(disc.name);
+    const existing = configStore.getNodeByName(disc.name);
+    if (!existing) {
+      configStore.createNode({
+        name: disc.name,
+        label: disc.name,
+        owner: disc.createdBy || 'system',
+      });
+    }
   }
 
-  // Add any manual nodes not found in discovery
-  for (const node of manualMap.values()) {
-    merged.push({ name: node.name, label: node.label, owner: node.owner, manual: true });
-  }
+  // Return all nodes from SQLite (includes both manually created and auto-persisted)
+  const allNodes = configStore.getAllNodes();
+  const discoveredNames = new Set(discoveredNodes.map(d => d.name));
 
-  return merged;
+  return allNodes.map(node => ({
+    name: node.name,
+    label: node.label,
+    owner: node.owner,
+    manual: !discoveredNames.has(node.name),
+  }));
 }
 
 /**

@@ -295,8 +295,8 @@ export function deleteAgent(agentId: string): boolean {
 function rowToNode(row: any): NodeRecord {
   return {
     name: row.name,
-    label: row.label,
-    owner: row.owner,
+    label: row.label || row.name,
+    owner: row.owner || 'system',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

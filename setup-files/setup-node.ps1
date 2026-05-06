@@ -8,8 +8,37 @@ param(
     [string]$RelayConnectionString = $env:RELAY_CONNECTION_STRING,
     [string]$ConnectionName = $env:COMPUTERNAME.ToLower(),
     [string]$KeyVaultName = "agents-chat-kv",
-    [string]$SecretName = "relay-connection-string"
+    [string]$SecretName = "relay-connection-string",
+    [switch]$RegisterStartup,
+    [switch]$UnregisterStartup
 )
+
+$TaskName = "AgentsChatNode"
+
+# ─── Register/unregister as a scheduled task that starts on login ───
+if ($RegisterStartup) {
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if (-not $scriptPath) { $scriptPath = Join-Path (Get-Location) "setup-node.ps1" }
+    $argList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+    if ($RelayConnectionString) { $argList += " -RelayConnectionString `"$RelayConnectionString`"" }
+    if ($ConnectionName -ne $env:COMPUTERNAME.ToLower()) { $argList += " -ConnectionName `"$ConnectionName`"" }
+
+    $action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument $argList -WorkingDirectory (Split-Path $scriptPath)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited -Force | Out-Null
+    Write-Host "Registered scheduled task '$TaskName' to start on login." -ForegroundColor Green
+    Write-Host "  Script: $scriptPath" -ForegroundColor Gray
+    Write-Host "  To remove: .\setup-node.ps1 -UnregisterStartup" -ForegroundColor Gray
+    exit 0
+}
+
+if ($UnregisterStartup) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "Removed scheduled task '$TaskName'." -ForegroundColor Green
+    exit 0
+}
 
 # If no connection string provided, fetch from Azure Key Vault
 if (-not $RelayConnectionString) {

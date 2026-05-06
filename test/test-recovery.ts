@@ -59,7 +59,7 @@ async function compareAndRecover(
     }
   }
 
-  return { pendingUserMessage: userText };
+  return {};
 }
 
 /* ── Test helpers ── */
@@ -158,7 +158,7 @@ async function test4_userMsgNoReply_replayHasReply() {
 }
 
 async function test5_userMsgNoReply_replayAlsoNoReply() {
-  console.log('\nTest 5: User sent message, ACP also has no reply → pendingUserMessage (re-send)');
+  console.log('\nTest 5: User sent message, ACP also has no reply → ignore missing response');
   const id = 'test-pending';
   await seedChat(id, [
     { id: '1', type: 'user', content: 'Hello', ts: 1000 },
@@ -172,19 +172,19 @@ async function test5_userMsgNoReply_replayAlsoNoReply() {
   ];
   const result = await compareAndRecover(TEST_USER, id, TEST_AGENT, replay);
   assert(result.recoveredMessages === undefined, 'no recoveredMessages');
-  assert(result.pendingUserMessage === 'Explain quantum physics', 'correct pendingUserMessage');
+  assert(result.pendingUserMessage === undefined, 'no pendingUserMessage');
   await cleanup(id);
 }
 
 async function test6_userMsgNoReply_emptyReplay() {
-  console.log('\nTest 6: User sent message, empty replay (agent restarted fresh) → pendingUserMessage');
+  console.log('\nTest 6: User sent message, empty replay (agent restarted fresh) → ignore missing response');
   const id = 'test-empty-replay';
   await seedChat(id, [
     { id: '1', type: 'user', content: 'Write me a poem', ts: 1000 },
   ]);
   const result = await compareAndRecover(TEST_USER, id, TEST_AGENT, []);
   assert(result.recoveredMessages === undefined, 'no recoveredMessages');
-  assert(result.pendingUserMessage === 'Write me a poem', 'correct pendingUserMessage');
+  assert(result.pendingUserMessage === undefined, 'no pendingUserMessage');
   await cleanup(id);
 }
 

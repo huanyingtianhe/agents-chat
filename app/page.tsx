@@ -398,6 +398,7 @@ export default function Page() {
   const [chatName, setChatName] = useState('New Chat');
   const [chatCounter, setChatCounter] = useState(1);
   const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
+  const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
   const [activeSidebarChatId, setActiveSidebarChatId] = useState<string>('chat-1');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>([]);
@@ -455,6 +456,7 @@ export default function Page() {
   const inputHistoryIndexRef = useRef(-1);
   const inputDraftRef = useRef('');
   const needsContextRestoreRef = useRef(false);
+  const currentAgentSessionsRef = useRef<Record<string, string>>({});
 
   /* ── Derived ── */
 
@@ -501,6 +503,7 @@ export default function Page() {
       if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
       const lastChatId = (data.lastChatId as string | null) || (data.chats?.[0]?.id as string | null);
       if (lastChatId) {
+        currentChatIdRef.current = lastChatId;
         setCurrentChatId(lastChatId);
         setActiveSidebarChatId(lastChatId);
         // Load that chat's messages from server
@@ -509,9 +512,11 @@ export default function Page() {
           .then(chatData => {
             if (chatData.ok && chatData.chat) {
               const msgs = chatData.chat.messages || [];
+              currentAgentSessionsRef.current = chatData.chat.agentSessions || {};
               setMessages(msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
               setChatName(chatData.chat.name || lastChatId);
               needsContextRestoreRef.current = true;
+              setLoadedChatIdForResume(lastChatId);
             }
           })
           .catch(() => { /* ignore */ });
@@ -560,62 +565,56 @@ export default function Page() {
   }, [input]);
 
   // Resume agent sessions once after auth state is determined
-  const sessionResumedRef = useRef(false);
+  const sessionResumedChatIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!mounted || authStatus === 'loading') return;
-    if (sessionResumedRef.current) return;
-    sessionResumedRef.current = true;
     const activeChatId = currentChatIdRef.current;
     if (!activeChatId || activeChatId === 'chat-1') return;
+    if (loadedChatIdForResume !== activeChatId) return;
+    if (sessionResumedChatIdRef.current === activeChatId) return;
+    sessionResumedChatIdRef.current = activeChatId;
     needsContextRestoreRef.current = true;
-    fetch(`/api/chats?id=${encodeURIComponent(activeChatId)}`)
-      .then(r => r.json())
-      .then(async (data: any) => {
-        if (data.ok && data.chat) {
-          const sessions = data.chat.agentSessions || {};
-          const entries = Object.entries(sessions)
-            .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
-            .filter(([, sid]) => !!sid) as [string, string][];
-          if (entries.length > 0) {
-            const results = await Promise.allSettled(
-              entries.map(([agentId, sessionId]) =>
-                acp({ action: 'resume-session', agentId, sessionId, chatId: activeChatId })
-              )
-            );
-            const allLoaded = results.every(
-              r => r.status === 'fulfilled' && (r as any).value?.loaded === true
-            );
-            if (allLoaded) {
-              needsContextRestoreRef.current = false;
+    const sessions = currentAgentSessionsRef.current;
+    const entries = Object.entries(sessions)
+      .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
+      .filter(([, sid]) => !!sid) as [string, string][];
+    if (entries.length === 0) return;
+    void (async () => {
+      try {
+        const results = await Promise.allSettled(
+          entries.map(([agentId, sessionId]) =>
+            acp({ action: 'resume-session', agentId, sessionId, chatId: activeChatId })
+          )
+        );
+        const allLoaded = results.every(
+          r => r.status === 'fulfilled' && (r as any).value?.loaded === true
+        );
+        if (allLoaded) {
+          needsContextRestoreRef.current = false;
+        }
+        // Handle recovered messages and pending user messages from session/load replay
+        for (const [index, r] of results.entries()) {
+          if (r.status !== 'fulfilled') continue;
+          const agentId = entries[index]?.[0];
+          const val = (r as any).value;
+          if (agentId && val?.sessionId) {
+            currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
+          }
+          if (agentId && val?.activeTurn && !val.activeTurn.done) {
+            resumeActiveTurn(agentId, val.activeTurn);
+          }
+          // Append recovered agent messages that were in ACP but missing from our DB
+          if (val?.recoveredMessages?.length > 0) {
+            for (const rm of val.recoveredMessages) {
+              addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
             }
-            // Handle recovered messages and pending user messages from session/load replay
-            for (const r of results) {
-              if (r.status !== 'fulfilled') continue;
-              const val = (r as any).value;
-              // Append recovered agent messages that were in ACP but missing from our DB
-              if (val?.recoveredMessages?.length > 0) {
-                for (const rm of val.recoveredMessages) {
-                  addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
-                }
-                addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
-              }
-              // Auto-resend pending user message that was never answered
-              if (val?.pendingUserMessage) {
-                const agentId = entries[0]?.[0];
-                if (agentId) {
-                  addMessage({ type: 'system', content: '🔄 Re-sending unanswered message from previous session...' });
-                  setIsSending(true);
-                  const orchestrationId = `orch-${makeId()}`;
-                  void dispatchToAgent(agentId, val.pendingUserMessage, orchestrationId, 'worker');
-                }
-              }
-            }
+            addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
           }
         }
-      })
-      .catch(() => { /* ignore */ });
+      } catch { /* ignore */ }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, authStatus, acp]);
+  }, [mounted, authStatus, loadedChatIdForResume, acp]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -768,7 +767,7 @@ export default function Page() {
 
     // Include chat history only when session needs context restoration
     // (after restart, imported chat, etc.)
-    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: currentChatId };
+    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: currentChatId, messageId: pendingId };
     if (needsContextRestoreRef.current) {
       sendBody.chatHistory = messages
         .filter(m => m.type === 'user' || m.type === 'agent')
@@ -788,6 +787,10 @@ export default function Page() {
       });
       finalizeRun(runKey);
       return false;
+    }
+
+    if (sendResult?.sessionId) {
+      currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: sendResult.sessionId };
     }
 
     current.ptyTurnId = sendResult?.turn?.id;
@@ -829,6 +832,29 @@ export default function Page() {
 
     await sendAcpPrompt(runKey, agentId, pendingId, content);
     return runKey;
+  }
+
+  function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string }) {
+    const pendingId = turn.messageId || `pending-${makeId()}`;
+    const existing = messagesRef.current.find(m => m.id === pendingId);
+    if (existing) {
+      updateMessage(pendingId, { pending: true, agentId, content: turn.fullText || existing.content || '', statusText: 'Thinking', ptyPhase: 'thinking' });
+    } else {
+      addMessage({ id: pendingId, type: 'agent', content: turn.fullText || '', agentId, pending: true, statusText: 'Thinking', ptyPhase: 'thinking' });
+    }
+
+    const runKey = `acp:${agentId}`;
+    if (!sessionRunsRef.current[runKey]) {
+      sessionRunsRef.current[runKey] = {
+        agentId,
+        pendingId,
+        orchestrationId: `orch-${makeId()}`,
+        kind: 'worker',
+        currentText: turn.fullText || '',
+      };
+      setIsSending(true);
+      void pollAcpAgent(agentId);
+    }
   }
 
   function finalizeRun(runKey: string) {
@@ -957,8 +983,6 @@ export default function Page() {
           });
           await acp({ action: 'turn-clear', agentId }).catch(() => null);
           finalizeRun(runKey);
-          // Auto-save chat to persist agent sessions after each turn
-          void saveCurrentChatToHistory();
           return;
         } else {
           const patch: Partial<ChatMessage> = {
@@ -1483,16 +1507,19 @@ export default function Page() {
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
     const persistable = currentMessages
       .filter(m => !(m.type === 'system' && m.ts !== 0))
-      .map(m => m.pending ? { ...m, pending: false, content: m.content || '⏹ (interrupted by chat switch)', statusText: undefined, ptyPhase: undefined } : m);
+      .map(m => {
+        if (!m.pending) return m;
+        const hasStoredParts = !!(m.parts && m.parts.length > 0);
+        return {
+          ...m,
+          pending: false,
+          content: m.content || (hasStoredParts ? '' : '⏹ (interrupted by chat switch)'),
+          statusText: undefined,
+          ptyPhase: undefined,
+        };
+      });
 
-    // Get current agent session IDs from SQLite (each chat stores its own sessions)
-    let agentSessions: Record<string, string> = {};
-    try {
-      const existing = await fetch(`/api/chats?id=${encodeURIComponent(currentId)}`).then(r => r.json());
-      if (existing.ok && existing.chat?.agentSessions) {
-        agentSessions = existing.chat.agentSessions;
-      }
-    } catch { /* ignore */ }
+    const agentSessions = currentAgentSessionsRef.current;
 
     const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
     const savedAt = preserveOrder ? (existingHistoryEntry?.ts ?? Date.now()) : Date.now();
@@ -1568,6 +1595,7 @@ export default function Page() {
         targetMessages = data.chat.messages || [];
         targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
+        currentAgentSessionsRef.current = agentSessions;
       }
     } catch {
       addMessage({ type: 'system', content: 'Failed to load chat. Please try again.' });
@@ -1624,23 +1652,21 @@ export default function Page() {
         needsContextRestoreRef.current = false;
       }
       // Handle recovered messages and pending user messages
-      for (const r of resumeResults) {
+      for (const [index, r] of resumeResults.entries()) {
         if (r.status !== 'fulfilled') continue;
+        const agentId = sessionEntries[index]?.[0];
         const val = r.value;
+        if (agentId && val?.sessionId) {
+          currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
+        }
+        if (agentId && val?.activeTurn && !val.activeTurn.done) {
+          resumeActiveTurn(agentId, val.activeTurn);
+        }
         if (val?.recoveredMessages?.length > 0) {
           for (const rm of val.recoveredMessages) {
             addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
           }
           addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
-        }
-        if (val?.pendingUserMessage) {
-          const agentId = sessionEntries[0]?.[0];
-          if (agentId) {
-            addMessage({ type: 'system', content: '🔄 Re-sending unanswered message from previous session...' });
-            setIsSending(true);
-            const orchestrationId = `orch-${makeId()}`;
-            void dispatchToAgent(agentId, val.pendingUserMessage, orchestrationId, 'worker');
-          }
         }
       }
     }
@@ -1663,6 +1689,7 @@ export default function Page() {
     setChatName(newName);
     setChatCounter(newCount);
     currentChatIdRef.current = newId;
+    currentAgentSessionsRef.current = {};
     setCurrentChatId(newId);
     setActiveSidebarChatId(newId);
 

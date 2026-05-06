@@ -7,7 +7,7 @@
  *   2. Send a message, wait for reply
  *   3. Corrupt SQLite (remove agent reply) → simulate crash
  *   4. Call resume-session → verify recoveredMessages
- *   5. Test pendingUserMessage (user msg never sent to ACP)
+ *   5. Verify missing responses are ignored instead of resent
  *
  * Run:  npx tsx test-recovery-e2e.ts
  */
@@ -261,8 +261,8 @@ async function test1_sendAndRecover() {
   await deleteChat(E2E_USER, TEST_CHAT_ID);
 }
 
-async function test2_pendingUserMessage() {
-  console.log('\n═══ E2E Test 2: Pending user message (never sent to ACP) ═══');
+async function test2_missingResponseIgnored() {
+  console.log('\n═══ E2E Test 2: Missing response is ignored ═══');
   const chatId = `e2e-pending-${Date.now()}`;
 
   // Step 1: Ensure agent is ready
@@ -292,7 +292,7 @@ async function test2_pendingUserMessage() {
   });
 
   // Step 4: Use a fake sessionId that doesn't exist in ACP, forcing session/load
-  // to fail and fall back to session/new which checks for pending user messages.
+  // to fail and fall back to session/new.
   console.log('  → Calling resume-session with non-existent sessionId (force fallback)...');
   const fakeSessionId = `fake-sess-${Date.now()}`;
   await saveChat(E2E_USER, {
@@ -317,9 +317,8 @@ async function test2_pendingUserMessage() {
   console.log('  → resume-session response:', JSON.stringify(resumeRes).slice(0, 400));
   assert(resumeRes.ok === true, 'Resume OK');
   // session/load should fail for fake ID → falls back to session/new
-  // The fallback path checks for pending user messages
   assert(resumeRes.loaded === false, 'Session not loaded (fallback to new)');
-  assert(resumeRes.pendingUserMessage === unsent, 'pendingUserMessage matches unsent message');
+  assert(resumeRes.pendingUserMessage === undefined, 'No pending user message is returned');
 
   // Cleanup
   await acp({ action: 'turn-clear', agentId: AGENT_ID, userId: 'admin' });
@@ -395,7 +394,7 @@ async function main() {
   console.log('✅ Authenticated as admin\n');
 
   await test1_sendAndRecover();
-  await test2_pendingUserMessage();
+  await test2_missingResponseIgnored();
   await test3_nothingToRecover();
 
   console.log(`\n=== E2E Results: ${passed} passed, ${failed} failed ===`);

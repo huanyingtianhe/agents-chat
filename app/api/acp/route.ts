@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
 import { getToken } from 'next-auth/jwt';
-import { updateChatAgentSession, getChat, saveChat } from '@/lib/chatStore';
+import { updateChatAgentSession, getChat, saveChat, StoredMessage } from '@/lib/chatStore';
 import { isAdminToken, getUserEmail, canModify, canTalkTo, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
 
@@ -35,6 +35,10 @@ type TurnEvent = {
 
 type TurnState = {
   id: string;
+  messageId: string;
+  agentId: string;
+  userId: string;
+  chatId?: string;
   prompt: string;
   startedAt: number;
   fullText: string;
@@ -43,7 +47,14 @@ type TurnState = {
   statusText: string;
   error?: string;
   events: TurnEvent[];
+  lastPersistedAt: number;
+  persistTimer?: ReturnType<typeof setTimeout>;
 };
+
+type StoredContentPart =
+  | { kind: 'thinking'; text: string }
+  | { kind: 'tool'; toolName: string; args?: string; result?: string; done: boolean }
+  | { kind: 'text'; text: string };
 
 type AgentConfig = {
   id: string;
@@ -797,6 +808,7 @@ async function doBootAgent(agentId: string): Promise<void> {
         turn.statusText = 'Thinking';
         turn.events.push({ type: 'thinking', ts: Date.now() });
       }
+      scheduleTurnPersist(turn);
     };
 
     console.log(`[ACP:${agentId}] Initializing...`);
@@ -858,10 +870,110 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
-function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string): TurnState {
+function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
+  const parts: StoredContentPart[] = [];
+  const toolMap = new Map<string, StoredContentPart & { kind: 'tool' }>();
+  for (const evt of events) {
+    if (evt.type === 'thinking' && evt.text) {
+      const last = parts[parts.length - 1];
+      if (last && last.kind === 'thinking') {
+        last.text += evt.text;
+      } else {
+        parts.push({ kind: 'thinking', text: evt.text });
+      }
+    } else if (evt.type === 'tool_start' && evt.toolName) {
+      const toolPart: StoredContentPart & { kind: 'tool' } = {
+        kind: 'tool',
+        toolName: evt.toolName,
+        args: evt.toolArgs,
+        done: false,
+      };
+      if (evt.toolCallId) toolMap.set(evt.toolCallId, toolPart);
+      parts.push(toolPart);
+    } else if (evt.type === 'tool_complete') {
+      const existing = evt.toolCallId ? toolMap.get(evt.toolCallId) : null;
+      if (existing) {
+        existing.result = evt.toolResult;
+        existing.done = true;
+      } else {
+        parts.push({ kind: 'tool', toolName: evt.toolName || 'tool', result: evt.toolResult, done: true });
+      }
+    } else if (evt.type === 'text_chunk' && evt.text) {
+      const last = parts[parts.length - 1];
+      if (last && last.kind === 'text') {
+        last.text += evt.text;
+      } else {
+        parts.push({ kind: 'text', text: evt.text });
+      }
+    }
+  }
+  return parts;
+}
+
+async function persistTurnSnapshot(turn: TurnState): Promise<void> {
+  if (!turn.chatId) return;
+  const chat = await getChat(turn.userId, turn.chatId);
+  if (!chat) return;
+
+  const parts = buildStoredParts(turn.events);
+  const content = turn.done
+    ? (turn.fullText.trim() || (turn.error ? `⚠️ ${turn.error}` : ''))
+    : turn.fullText.trim();
+  const existingIndex = chat.messages.findIndex(m => m.id === turn.messageId);
+  const existing = existingIndex >= 0 ? chat.messages[existingIndex] : null;
+  const message = {
+    ...(existing || {}),
+    id: turn.messageId,
+    type: 'agent' as const,
+    content,
+    agentId: turn.agentId,
+    ts: existing?.ts ?? turn.startedAt,
+    pending: !turn.done,
+    statusText: turn.done ? undefined : turn.statusText,
+    ptyPhase: turn.done ? undefined : turn.phase,
+    parts: parts.length ? parts : undefined,
+  } as StoredMessage & { pending?: boolean; statusText?: string; ptyPhase?: string; parts?: StoredContentPart[] };
+
+  if (existingIndex >= 0) {
+    chat.messages[existingIndex] = message;
+  } else {
+    chat.messages.push(message);
+  }
+  chat.ts = Date.now();
+  await saveChat(turn.userId, chat);
+  turn.lastPersistedAt = Date.now();
+}
+
+function scheduleTurnPersist(turn: TurnState): void {
+  if (!turn.chatId || turn.persistTimer) return;
+  const elapsed = Date.now() - turn.lastPersistedAt;
+  const delay = Math.max(0, 2000 - elapsed);
+  turn.persistTimer = setTimeout(() => {
+    turn.persistTimer = undefined;
+    void persistTurnSnapshot(turn).catch(err => {
+      console.warn(`[ACP:${turn.agentId}] Failed to persist turn snapshot:`, err instanceof Error ? err.message : String(err));
+    });
+  }, delay);
+}
+
+async function flushTurnPersist(turn: TurnState): Promise<void> {
+  if (turn.persistTimer) {
+    clearTimeout(turn.persistTimer);
+    turn.persistTimer = undefined;
+  }
+  await persistTurnSnapshot(turn).catch(err => {
+    console.warn(`[ACP:${turn.agentId}] Failed to flush turn snapshot:`, err instanceof Error ? err.message : String(err));
+  });
+}
+
+function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string, messageId?: string): TurnState {
   const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turn: TurnState = {
     id: turnId,
+    messageId: messageId || `pending-${turnId}`,
+    agentId,
+    userId,
+    chatId,
     prompt,
     startedAt: Date.now(),
     fullText: '',
@@ -869,6 +981,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     phase: 'thinking',
     statusText: 'Thinking',
     events: [],
+    lastPersistedAt: 0,
   };
 
   sess.activeTurn = turn;
@@ -880,7 +993,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       sessionId: sess.sessionId,
       prompt: [{ type: 'text', text: prompt }],
     })
-    .then((result: Record<string, unknown> | undefined) => {
+    .then(async (result: Record<string, unknown> | undefined) => {
       const stopReason = result?.stopReason ?? 'unknown';
       const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
       console.log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
@@ -890,6 +1003,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         turn.statusText = '';
         sess.phase = 'idle';
       }
+      await flushTurnPersist(turn);
       // Don't clear events here — let frontend poll one last time with full events.
       // Events are cleared in turn-clear or auto-release.
       turn.prompt = '';
@@ -947,6 +1061,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           turn.statusText = '';
           sess.phase = 'idle';
         }
+        await flushTurnPersist(turn);
         turn.prompt = '';
         setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
       } catch (retryErr) {
@@ -958,6 +1073,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           turn.statusText = turn.error;
           sess.phase = 'idle';
         }
+        await flushTurnPersist(turn);
         turn.prompt = '';
         setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
       }
@@ -971,6 +1087,7 @@ function serializeTurn(turn: TurnState | null, sinceEvent?: number) {
   const events = typeof sinceEvent === 'number' ? turn.events.slice(sinceEvent) : turn.events;
   return {
     id: turn.id,
+    messageId: turn.messageId,
     prompt: turn.prompt,
     startedAt: turn.startedAt,
     fullText: turn.fullText.trim(),
@@ -989,7 +1106,6 @@ function serializeTurn(turn: TurnState | null, sinceEvent?: number) {
  * After session/load replays the conversation, compare replayed messages
  * with what's stored in SQLite. Returns:
  * - recoveredMessages: agent messages that were in the ACP session but missing from SQLite
- * - pendingUserMessage: if the last stored message is a user message with no agent reply
  */
 async function compareAndRecover(
   userId: string,
@@ -998,7 +1114,6 @@ async function compareAndRecover(
   replayMessages: { role: 'user' | 'agent'; text: string }[],
 ): Promise<{
   recoveredMessages?: { type: 'agent'; content: string; agentId: string; ts: number }[];
-  pendingUserMessage?: string;
 }> {
   if (!chatId) return {};
 
@@ -1049,8 +1164,7 @@ async function compareAndRecover(
     }
   }
 
-  // ACP has no reply after the user's last message → re-send it
-  return { pendingUserMessage: userText };
+  return {};
 }
 
 /* ──────────────────── API Handler ──────────────────── */
@@ -1314,6 +1428,7 @@ export async function POST(req: NextRequest) {
 
       const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
       const chatId = body?.chatId as string | undefined;
+      const messageId = typeof body?.messageId === 'string' ? body.messageId : undefined;
 
       if (!proc.ready) {
         if (!proc.booting) {
@@ -1358,8 +1473,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
 
-      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId);
-      return NextResponse.json({ ok: true, phase: sess.phase, turn: serializeTurn(turn) });
+      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId, messageId);
+      return NextResponse.json({ ok: true, phase: sess.phase, sessionId: sess.sessionId, turn: serializeTurn(turn) });
     }
 
     if (action === 'poll') {
@@ -1462,12 +1577,15 @@ export async function POST(req: NextRequest) {
       // Detach current session (ACP has no session/close — sessions persist for future session/load)
       // If this session is known to be active in the agent, just switch to it
       if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
+        const activeTurn = sess.sessionId === savedSessionId && sess.activeTurn && !sess.activeTurn.done
+          ? sess.activeTurn
+          : null;
         sess.sessionId = savedSessionId;
         if (chatId) pushChatSession(sess, chatId, savedSessionId);
-        sess.activeTurn = null;
-        sess.phase = 'idle';
+        sess.activeTurn = activeTurn;
+        sess.phase = activeTurn ? 'busy' : 'idle';
         console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
-        return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+        return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
       }
       // Try session/load if the agent supports it
       if (proc.supportsLoadSession) {
@@ -1499,13 +1617,16 @@ export async function POST(req: NextRequest) {
           if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
           const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
           if (alreadyLoaded) {
+            const activeTurn = sess.sessionId === savedSessionId && sess.activeTurn && !sess.activeTurn.done
+              ? sess.activeTurn
+              : null;
             sess.sessionId = savedSessionId;
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
-            sess.activeTurn = null;
-            sess.phase = 'idle';
+            sess.activeTurn = activeTurn;
+            sess.phase = activeTurn ? 'busy' : 'idle';
             proc.knownSessions.add(savedSessionId);
             console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
-            return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true });
+            return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
           }
           console.log(`[ACP:${agentId}] session/load failed for ${savedSessionId}: ${errStr}, falling back to session/new`);
         }
@@ -1525,19 +1646,8 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
         }
-        // Check if last message is an unanswered user question
-        let pendingUserMessage: string | undefined;
-        if (chatId) {
-          const chat = await getChat(userId, chatId);
-          if (chat && chat.messages.length > 0) {
-            const lastMsg = chat.messages[chat.messages.length - 1];
-            if (lastMsg.type === 'user') {
-              pendingUserMessage = lastMsg.content;
-            }
-          }
-        }
         console.log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
-        return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false, pendingUserMessage });
+        return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
       } catch (newErr) {
         const msg = newErr instanceof Error ? newErr.message : String(newErr);
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });

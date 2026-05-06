@@ -8,7 +8,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 
-const BASE = 'http://localhost:3010';
+const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'admin123';
 
@@ -378,6 +378,275 @@ test.describe('Chat UI', () => {
     // The user message should be visible — loaded from SQLite via lastChatId
     await expect(chatArea.locator('.message.user:has-text("lastChatId test")')).toBeVisible({ timeout: 15000 });
     console.log('PASS: lastChatId restored from server, chat loaded from SQLite after reload');
+  });
+
+  test('should not resend unanswered message when resuming multiple saved sessions', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = 'UI recovery should not resend this message';
+    const chatId = `ui-no-resend-${Date.now()}`;
+    const resumeRequests: string[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        resumeRequests.push(body.agentId);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: false, pendingUserMessage: pendingText }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI no resend regression',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
+
+    await expect(chatArea.locator('text=Re-sending unanswered message')).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent')).toHaveCount(0);
+    await expect(chatArea.locator('text=turn_in_progress')).toHaveCount(0);
+    console.log('PASS: multiple resume results did not trigger UI auto-resend');
+  });
+
+  test('should render streaming thinking parts without frontend stream saves', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = 'stream persistence regression message';
+    const thinkingText = 'planning saved before completion';
+    const finalText = 'Final answer after saved thinking.';
+    let finishTurn = false;
+    let pollCount = 0;
+    const chatPosts: any[] = [];
+
+    await page.route('**/api/chats', async (route) => {
+      if (route.request().method() === 'POST') {
+        chatPosts.push(route.request().postDataJSON());
+      }
+      await route.continue();
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-stream-persist' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: finishTurn ? 'idle' : 'busy',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-stream-persist',
+              fullText: finishTurn ? finalText : '',
+              done: finishTurn,
+              phase: finishTurn ? 'done' : 'thinking',
+              statusText: finishTurn ? '' : 'Thinking',
+              events: finishTurn
+                ? [
+                    { type: 'thinking', ts: Date.now(), text: thinkingText },
+                    { type: 'text_chunk', ts: Date.now(), text: finalText },
+                  ]
+                : [{ type: 'thinking', ts: Date.now(), text: thinkingText }],
+              totalEvents: finishTurn ? 2 : 1,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator(`.message.user:has-text("${userText}")`)).toBeVisible({ timeout: 15000 });
+    await expect(chatArea.locator(`.thinkingPartText:has-text("${thinkingText}")`)).toBeVisible({ timeout: 15000 });
+
+    await expect.poll(() => chatPosts.some((body) => body?.chat?.messages?.some((message: any) => message.type === 'user' && message.content === userText)), { timeout: 10000 }).toBe(true);
+    const chatSaveCountAfterUserMessage = chatPosts.filter((body) => body?.chat).length;
+    await page.waitForTimeout(2500);
+    expect(chatPosts.filter((body) => body?.chat).length).toBe(chatSaveCountAfterUserMessage);
+
+    expect(pollCount).toBeGreaterThan(0);
+    finishTurn = true;
+    await expect(chatArea.locator(`.message.agent:has-text("${finalText}")`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+    await page.waitForTimeout(500);
+    expect(chatPosts.filter((body) => body?.chat).length).toBe(chatSaveCountAfterUserMessage);
+
+    console.log('PASS: streaming thinking parts render without frontend stream saves');
+  });
+
+  test('should continue polling an active turn after page refresh', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const chatId = `ui-refresh-active-${Date.now()}`;
+    const pendingId = `pending-refresh-${Date.now()}`;
+    const userText = 'refresh should keep active turn attached';
+    const thinkingText = 'still working after refresh';
+    const finalText = 'Finished after refresh.';
+    let pollCount = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            sessionId: body.sessionId,
+            loaded: true,
+            activeTurn: {
+              id: 'turn-refresh-active',
+              messageId: pendingId,
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [{ type: 'thinking', ts: Date.now(), text: thinkingText }],
+              totalEvents: 1,
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-refresh-active',
+              messageId: pendingId,
+              fullText: finalText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [
+                { type: 'thinking', ts: Date.now(), text: thinkingText },
+                { type: 'text_chunk', ts: Date.now(), text: finalText },
+              ],
+              totalEvents: 2,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingId, userText, thinkingText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: userText,
+        ts: now,
+        messages: [
+          { id: 'u-refresh', type: 'user', content: userText, ts: now - 1000 },
+          {
+            id: pendingId,
+            type: 'agent',
+            content: '',
+            agentId: 'alpha',
+            ts: now,
+            pending: false,
+            parts: [{ kind: 'thinking', text: thinkingText }],
+          },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingId, userText, thinkingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${userText}")`)).toBeVisible({ timeout: 15000 });
+    await expect(chatArea.locator(`.message.agent:has-text("${finalText}")`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+    expect(pollCount).toBeGreaterThan(0);
+
+    console.log('PASS: refreshed page reattached to active turn and finished polling');
   });
 
   test('should switch lastChatId when creating new chat', async ({ page }) => {

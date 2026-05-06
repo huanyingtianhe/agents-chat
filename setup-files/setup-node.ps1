@@ -137,7 +137,7 @@ $relayLog = Join-Path $logDir "relay.log"
 
 function Start-Copilot {
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting Copilot ACP on port $Port..." -ForegroundColor Yellow
-    return Start-Process -FilePath "copilot" -ArgumentList "--acp", "--port", "$Port" `
+    return Start-Process -FilePath "agency" -ArgumentList "copilot", "--acp", "--port", "$Port", "--yolo" `
         -RedirectStandardOutput $copilotLog -RedirectStandardError (Join-Path $logDir "copilot-err.log") `
         -WindowStyle Hidden -PassThru
 }

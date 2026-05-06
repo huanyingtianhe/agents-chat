@@ -448,6 +448,7 @@ export default function Page() {
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const inputHistoryRef = useRef<string[]>([]);
@@ -530,8 +531,21 @@ export default function Page() {
 
   useEffect(() => {
     const el = chatContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const container = el;
+    function handleScroll() {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      shouldStickToBottomRef.current = distanceFromBottom < 80;
+    }
+    handleScroll();
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
     const el = composerRef.current;
@@ -1046,6 +1060,7 @@ export default function Page() {
       const autoStep = (ext.autoStep as number) || 0;
       const schedulerAgentId = SCHEDULER_AGENT_ID;
       const agentList = (ext.autoAgentList as string) || '';
+      const autoOriginalText = (ext.autoOriginalText as string) || state.originalTask;
       const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
 
       // Helper: clear previous turn and wait before next dispatch
@@ -1107,12 +1122,16 @@ export default function Page() {
           const evalPrompt = [
             'You are a ROUTING-ONLY scheduler evaluating a step result. Your ONLY job is to decide next action and output JSON.',
             'DO NOT use any tools. DO NOT read files. DO NOT run commands. Just evaluate and decide.',
+            'Respect explicit agent mentions, role assignments, and ordering in the original user message.',
+            'If the user assigned separate agents to testing/review and coding/fixing, keep those responsibilities separate.',
             `\nOriginal task: ${state.originalTask}`,
+            `\nOriginal user message with agent mentions: ${autoOriginalText}`,
             `\nAvailable agents:\n${agentList}`,
             `\nStep ${autoStep} — Agent "${targetAgent}" responded:\n${agentResult}`,
             autoHistory.length > 1 ? `\nPrior steps:\n${autoHistory.slice(0, -1).map((h) => `Step ${h.step} (${h.agent}): ${h.instruction}`).join('\n')}` : '',
             `\nSteps remaining: ${AUTO_MAX_STEPS - autoStep}`,
             '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
+            'The nextAgent value must be one of the available mentioned agents above.',
             '- If done: { "done": true, "summary": "<brief conclusion>" }',
             '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context>" }',
           ].join('\n');
@@ -1133,7 +1152,7 @@ export default function Page() {
 
   /* ── Auto (Scheduler) orchestration ── */
 
-  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string) {
+  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string) {
     const schedulerAgentId = SCHEDULER_AGENT_ID;
     const agentList = agentIds.map((id) => {
       const a = agents.find((x) => x.id === id);
@@ -1145,10 +1164,15 @@ export default function Page() {
     const planPrompt = [
       'You are a ROUTING-ONLY scheduler. Your ONLY job is to pick which agent handles the task and output JSON.',
       'DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
-      'Just read the task and decide which agent should handle it.',
+      'Just read the task and decide which agent should handle the next step.',
+      'Respect explicit agent mentions, role assignments, and ordering in the original user message.',
+      'If the user assigns one agent to test/review/check and another to code/fix/implement, do not combine those responsibilities into one agent.',
+      'For conditional workflows, choose the first required step now; after that agent responds, evaluate whether another mentioned agent should act next.',
       `\nAvailable agents:\n${agentList}`,
-      `\nUser task: ${task}`,
+      `\nOriginal user message with agent mentions: ${originalText}`,
+      `\nCleaned task text: ${task}`,
       '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
+      'The nextAgent value must be one of the available mentioned agents above.',
       '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
       'If no agent is needed: { "done": true, "summary": "<your answer>" }',
     ].join('\n');
@@ -1165,6 +1189,7 @@ export default function Page() {
     if (state) {
       (state as Record<string, unknown>).autoHistory = history;
       (state as Record<string, unknown>).autoAgentList = agentList;
+      (state as Record<string, unknown>).autoOriginalText = originalText;
       (state as Record<string, unknown>).autoStep = 0;
       (state as Record<string, unknown>).autoPhase = 'awaiting-plan'; // 'awaiting-plan' | 'awaiting-execution' | 'awaiting-eval' | 'done'
     }
@@ -1192,6 +1217,7 @@ export default function Page() {
     }
 
     setIsSending(true);
+    shouldStickToBottomRef.current = true;
     addMessage({ type: 'user', content: text });
     setInput('');
 
@@ -1214,7 +1240,7 @@ export default function Page() {
         return;
       }
       if (orchestrationMode === 'auto') {
-        void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage);
+        void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, text);
       } else if (orchestrationMode === 'discussion') {
         await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
       } else {
@@ -1255,6 +1281,7 @@ export default function Page() {
     orchestrationsRef.current = {};
     setIsSending(false);
     addMessage({ type: 'system', content: '⏹ Conversation stopped.' });
+    void saveCurrentChatToHistory();
   }
 
   /* ── Agent settings ── */

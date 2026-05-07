@@ -140,7 +140,10 @@ export default function SharedChatPage() {
 
       <style jsx>{`
         .sharePage {
+          height: 100dvh;
           min-height: 100vh;
+          overflow-x: hidden;
+          overflow-y: auto;
           background: #07111f;
           color: #e8f4ff;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

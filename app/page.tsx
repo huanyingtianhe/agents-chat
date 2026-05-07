@@ -106,6 +106,14 @@ type ChatHistoryEntry = {
   agentSessions?: Record<string, string>;
 };
 
+type ShareDialog = {
+  variant: 'link' | 'error';
+  title: string;
+  url?: string;
+  detail?: string;
+  copied?: boolean;
+};
+
 type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
 
 const AUTO_MAX_STEPS = 5;
@@ -407,6 +415,7 @@ export default function Page() {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  const [shareDialog, setShareDialog] = useState<ShareDialog | null>(null);
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -666,6 +675,16 @@ export default function Page() {
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
     messagesRef.current = messagesRef.current.map((m) => (m.id === id ? { ...m, ...patch } : m));
     setMessages(messagesRef.current);
+  }
+
+  async function copyShareDialogLink() {
+    if (!shareDialog?.url) return;
+    try {
+      await navigator.clipboard.writeText(shareDialog.url);
+      setShareDialog((prev) => prev ? { ...prev, copied: true, detail: 'Copied to clipboard.' } : prev);
+    } catch {
+      setShareDialog((prev) => prev ? { ...prev, copied: false, detail: 'Could not copy automatically. Select the link and copy it manually.' } : prev);
+    }
   }
 
   async function loadAgents() {
@@ -1748,13 +1767,12 @@ export default function Page() {
       const data = await res.json();
       if (data.ok && data.url) {
         const fullUrl = `${window.location.origin}${data.url}`;
-        await navigator.clipboard.writeText(fullUrl);
-        addMessage({ type: 'system', content: `🔗 Share link copied to clipboard: ${fullUrl}` });
+        setShareDialog({ variant: 'link', title: 'Share this conversation', url: fullUrl });
       } else {
-        addMessage({ type: 'system', content: `❌ Share failed: ${data.error || 'unknown error'}` });
+        setShareDialog({ variant: 'error', title: 'Share failed', detail: data.error || 'unknown error' });
       }
     } catch {
-      addMessage({ type: 'system', content: '❌ Failed to create share link' });
+      setShareDialog({ variant: 'error', title: 'Failed to create share link' });
     }
   }
 
@@ -2361,6 +2379,35 @@ export default function Page() {
                 {addAgentLoading ? 'Creating...' : 'Create Remote Agent'}
               </button>
               <button className="secondary" onClick={() => setShowAddRemoteAgent(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Share link dialog ── */}
+      {shareDialog && (
+        <div className="modalOverlay" onClick={() => setShareDialog(null)}>
+          <div className={`modal shareLinkModal ${shareDialog.variant}`} role="dialog" aria-modal="true" aria-labelledby="shareDialogTitle" onClick={(e) => e.stopPropagation()}>
+            <h2 id="shareDialogTitle">{shareDialog.title}</h2>
+            {shareDialog.url ? (
+              <>
+                <p className="shareDialogText">Anyone with this link can view the shared conversation.</p>
+                <input
+                  className="shareLinkInput"
+                  readOnly
+                  value={shareDialog.url}
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+              </>
+            ) : (
+              <p className="shareDialogText">{shareDialog.detail}</p>
+            )}
+            {shareDialog.detail && shareDialog.url ? <p className="shareDialogStatus">{shareDialog.detail}</p> : null}
+            <div className="modalActions">
+              {shareDialog.url ? (
+                <button type="button" onClick={() => void copyShareDialogLink()}>{shareDialog.copied ? 'Copied' : 'Copy'}</button>
+              ) : null}
+              <button type="button" className="secondary" onClick={() => setShareDialog(null)}>Close</button>
             </div>
           </div>
         </div>
@@ -3580,6 +3627,27 @@ export default function Page() {
         .modalActions .secondary { background: transparent; }
         .modalActions .danger { background: #d9363e; color: #fff; border: none; }
         .modalActions .danger:hover { background: #c22d35; }
+        .shareLinkModal {
+          width: min(560px, 100%);
+        }
+        .shareLinkModal.error h2 {
+          color: var(--danger);
+        }
+        .shareDialogText {
+          margin: 0 0 14px;
+          color: var(--text-soft);
+          line-height: 1.5;
+        }
+        .shareLinkInput {
+          margin-bottom: 10px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 13px;
+        }
+        .shareDialogStatus {
+          margin: 0 0 14px;
+          color: var(--success);
+          font-size: 13px;
+        }
         .agentSettingsModal { width: min(580px, 100%); }
         .fieldHint { font-size: 12px; color: var(--muted); margin-top: 4px; }
         .remoteAgentSelect {

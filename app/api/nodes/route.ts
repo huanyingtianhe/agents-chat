@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
+import { getNodeOwner } from '@/lib/nodeOwner';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -25,14 +26,14 @@ const probeCache = new Map<string, { online: boolean; ts: number }>();
 const PROBE_TTL_MS = 30_000;
 
 // Cache discovered hybrid connections for 60s
-type DiscoveredNode = { name: string; createdBy: string };
+type DiscoveredNode = { name: string; owner: string };
 let discoveryCache: { nodes: DiscoveredNode[]; ts: number } | null = null;
 const DISCOVERY_TTL_MS = 60_000;
 
 /**
  * Discover hybrid connections from the Azure Relay namespace via ARM REST API.
  * Uses `az account get-access-token` to get a management token.
- * Returns name and createdBy (from systemData) for each connection.
+ * Returns name and owner from properties.userMetadata, falling back to the connection name pattern.
  */
 async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
   if (!RELAY_SUBSCRIPTION_ID || !RELAY_RESOURCE_GROUP || !RELAY_NAMESPACE) return [];
@@ -63,15 +64,8 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const nodes: DiscoveredNode[] = (data.value || []).map((hc: any) => {
       const name = hc.name as string;
-      // Try systemData.createdBy first, then extract alias from name pattern: cpc-{alias}-{suffix}
-      let createdBy = (hc.systemData?.createdBy as string) || '';
-      if (!createdBy) {
-        const parts = name.split('-');
-        if (parts.length >= 3 && parts[0] === 'cpc') {
-          createdBy = `${parts[1]}@microsoft.com`;
-        }
-      }
-      return { name, createdBy };
+      const owner = getNodeOwner(hc.properties?.userMetadata, name);
+      return { name, owner };
     });
     discoveryCache = { nodes, ts: Date.now() };
     return nodes;
@@ -83,25 +77,24 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
 
 /**
  * Merge auto-discovered nodes with manual nodes from SQLite.
- * Newly discovered nodes are persisted to SQLite with owner from systemData.createdBy.
+ * Newly discovered nodes are persisted to SQLite with owner from Hybrid Connection metadata or name fallback.
  */
 type MergedNode = { name: string; label: string; owner: string; manual: boolean };
 
 async function getAllMergedNodes(): Promise<MergedNode[]> {
   const discoveredNodes = await discoverHybridConnections();
 
-  // Persist any newly discovered nodes to SQLite, update 'system' owners if we now have a real one
+  // Persist any newly discovered nodes to SQLite, keeping metadata owner as the source of truth.
   for (const disc of discoveredNodes) {
     const existing = configStore.getNodeByName(disc.name);
     if (!existing) {
       configStore.createNode({
         name: disc.name,
         label: disc.name,
-        owner: disc.createdBy || 'system',
+        owner: disc.owner || 'system',
       });
-    } else if (existing.owner === 'system' && disc.createdBy && disc.createdBy !== 'system') {
-      // Update owner if we now have a real creator and the current owner is just the default
-      configStore.updateNode(disc.name, { owner: disc.createdBy });
+    } else if (disc.owner && existing.owner !== disc.owner) {
+      configStore.updateNode(disc.name, { owner: disc.owner });
     }
   }
 

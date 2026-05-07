@@ -10,3 +10,4 @@ cookie.jar
 tsconfig.tsbuildinfo
 .omc
 certificates/
+setup-files/logs/*

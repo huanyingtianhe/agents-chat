@@ -4,7 +4,7 @@ node_modules/
 .next/
 .data/
 *.OPLOG.md
-test-results/.last-run.json
+test-results/
 cj.txt
 cookie.jar
 tsconfig.tsbuildinfo

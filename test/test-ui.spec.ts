@@ -535,6 +535,255 @@ test.describe('Chat UI', () => {
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });
 
+  test('chat-scoped active turns: same chat rejects second send while another chat can keep its own active turn', async ({ page }) => {
+    const agentId = 'alpha';
+    const activeTurns = new Map<string, { id: string; messageId: string; text: string }>();
+    const sendRequests: any[] = [];
+    const pollRequests: any[] = [];
+    let sendSeq = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: agentId, name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        const chatId = body.chatId || '__default';
+        const existing = activeTurns.get(chatId);
+        if (existing) {
+          await route.fulfill({
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: false, error: 'turn_in_progress' }),
+          });
+          return;
+        }
+        const turn = { id: `turn-${++sendSeq}`, messageId: body.messageId, text: body.text };
+        activeTurns.set(chatId, turn);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${chatId}`, turn: { id: turn.id, messageId: turn.messageId } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollRequests.push(body);
+        const chatId = body.chatId || '__default';
+        const turn = activeTurns.get(chatId);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: turn ? 'busy' : 'idle',
+            ready: true,
+            booting: false,
+            sessionId: `session-${chatId}`,
+            activeTurn: turn
+              ? {
+                  id: turn.id,
+                  messageId: turn.messageId,
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Thinking',
+                  events: [{ type: 'thinking', ts: Date.now(), text: `working on ${turn.text}` }],
+                  totalEvents: 1,
+                }
+              : null,
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    const firstChatId = `chat-e2e-${Date.now()}`;
+    await page.evaluate(async (firstChatId) => {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: { id: firstChatId, name: 'E2E Chat', ts: Date.now(), messages: [], agentSessions: {} } }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: firstChatId }),
+      });
+    }, firstChatId);
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(page.locator(`button:has-text("E2E Chat")`)).toBeVisible({ timeout: 10000 });
+    await page.evaluate(async ({ agentId, firstChatId }) => {
+      await fetch('/api/acp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send', agentId, text: 'first chat active turn', messageId: `msg-${Date.now()}-a`, chatId: firstChatId }),
+      });
+      await fetch('/api/acp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send', agentId, text: 'duplicate same chat turn', messageId: `msg-${Date.now()}-b`, chatId: firstChatId }),
+      });
+      await fetch('/api/acp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send', agentId, text: 'second chat active turn', messageId: `msg-${Date.now()}-c`, chatId: 'chat-e2e-other' }),
+      });
+      await fetch('/api/acp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'poll', agentId, chatId: firstChatId }),
+      });
+      await fetch('/api/acp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'poll', agentId, chatId: 'chat-e2e-other' }),
+      });
+    }, { agentId, firstChatId });
+
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(3);
+    await expect.poll(() => pollRequests.length, { timeout: 10000 }).toBeGreaterThan(0);
+
+    const sendsByChat = sendRequests.reduce((acc, body) => {
+      acc[body.chatId] = (acc[body.chatId] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    expect(sendsByChat[firstChatId]).toBe(2);
+    expect(sendsByChat['chat-e2e-other']).toBe(1);
+    expect(activeTurns.has(firstChatId)).toBe(true);
+    expect(activeTurns.has('chat-e2e-other')).toBe(true);
+    expect(pollRequests.some((body) => body.chatId === firstChatId)).toBe(true);
+    expect(pollRequests.some((body) => body.chatId === 'chat-e2e-other')).toBe(true);
+  });
+
+
+  test('switching chats preserves active turn instead of marking it interrupted', async ({ page }) => {
+    const agentId = 'alpha';
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const firstText = 'keep running while switching chats';
+    const thinkingText = `working on ${firstText}`;
+    const firstFinal = 'First chat finished after switching back.';
+    const activeTurns = new Map<string, { id: string; messageId: string; text: string; pollCount: number }>();
+    let sendSeq = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: agentId, name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        const chatId = body.chatId || '__default';
+        const turn = { id: `turn-switch-${++sendSeq}`, messageId: body.messageId, text: body.text, pollCount: 0 };
+        activeTurns.set(chatId, turn);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${chatId}`, turn: { id: turn.id, messageId: turn.messageId } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        const chatId = body.chatId || '__default';
+        const turn = activeTurns.get(chatId);
+        if (turn) turn.pollCount += 1;
+        const shouldFinish = !!turn && turn.text === firstText && turn.pollCount >= 3;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: turn && !shouldFinish ? 'busy' : 'idle',
+            ready: true,
+            booting: false,
+            sessionId: `session-${chatId}`,
+            activeTurn: turn
+              ? {
+                  id: turn.id,
+                  messageId: turn.messageId,
+                  fullText: shouldFinish ? firstFinal : '',
+                  done: shouldFinish,
+                  phase: shouldFinish ? 'done' : 'thinking',
+                  statusText: shouldFinish ? '' : 'Thinking',
+                  events: shouldFinish
+                    ? [
+                        { type: 'thinking', ts: Date.now(), text: thinkingText },
+                        { type: 'text_chunk', ts: Date.now(), text: firstFinal },
+                      ]
+                    : [{ type: 'thinking', ts: Date.now(), text: thinkingText }],
+                  totalEvents: shouldFinish ? 2 : 1,
+                }
+              : null,
+          }),
+        });
+        if (shouldFinish) activeTurns.delete(chatId);
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await textarea.fill(firstText);
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator(`.message.user:has-text("${firstText}")`)).toBeVisible({ timeout: 15000 });
+    await expect(chatArea.locator(`.thinkingPartText:has-text("${thinkingText}")`)).toBeVisible({ timeout: 15000 });
+
+    const firstChatState = await page.evaluate(async () => {
+      const data = await fetch('/api/chats').then((r) => r.json());
+      const firstChatId = data.lastChatId;
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: { id: 'chat-switch-target', name: 'Switch target', ts: Date.now(), messages: [], agentSessions: {} } }),
+      });
+      return { firstChatId };
+    });
+
+    const firstChatRow = page.locator('.chatHistoryRow', { hasText: firstText }).first();
+    const switchTargetRow = page.locator('.chatHistoryRow', { hasText: 'Switch target' }).first();
+    await expect(firstChatRow.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
+    await expect(firstChatRow).toContainText('Thinking');
+    await expect(switchTargetRow).toBeVisible({ timeout: 5000 });
+    const firstRowBeforeSwitch = await firstChatRow.boundingBox();
+    const targetRowBeforeSwitch = await switchTargetRow.boundingBox();
+
+    await page.click('button:has-text("Switch target")');
+    await page.waitForTimeout(500);
+    await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 5000 });
+    await expect(page.locator('button[aria-label="Send message"]')).toBeVisible({ timeout: 5000 });
+    await expect(firstChatRow.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
+    const firstRowAfterSwitch = await firstChatRow.boundingBox();
+    const targetRowAfterSwitch = await switchTargetRow.boundingBox();
+    expect(firstRowBeforeSwitch?.y).toBe(firstRowAfterSwitch?.y);
+    expect(targetRowBeforeSwitch?.y).toBe(targetRowAfterSwitch?.y);
+
+    const savedFirstChat = await page.evaluate(async (firstChatId) => {
+      const data = await fetch(`/api/chats?id=${encodeURIComponent(firstChatId)}`).then((r) => r.json());
+      return data.chat;
+    }, firstChatState.firstChatId);
+    const savedPending = savedFirstChat.messages.find((message: any) => message.agentId === agentId);
+    expect(savedPending?.pending).toBe(true);
+    expect(savedPending?.content || '').not.toContain('interrupted by chat switch');
+
+    await page.click(`button:has-text("${firstText}")`);
+    await expect(chatArea.locator(`.message.agent:has-text("${firstFinal}")`)).toBeVisible({ timeout: 15000 });
+    await expect(firstChatRow.locator('.chatStatusBadge.done')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
+  });
+
   test('should continue polling an active turn after page refresh', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const chatId = `ui-refresh-active-${Date.now()}`;

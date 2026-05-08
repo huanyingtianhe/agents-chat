@@ -466,7 +466,8 @@ type UserSession = {
   sessionId: string | null;
   /** Map of chatId → list of sessionIds (append-only). Last element is the current session. */
   chatSessions: Map<string, string[]>;
-  activeTurn: TurnState | null;
+  /** Map of chatId → active turn for that chat. Allows concurrent turns across different chats. */
+  activeTurns: Map<string, TurnState>;
   phase: 'idle' | 'busy' | 'booting';
   turnCount: number;
   lastActive: number;
@@ -511,7 +512,7 @@ const STALE_SESSION_MS = 30 * 60_000;
 function cleanupStaleSessions() {
   const now = Date.now();
   for (const [key, sess] of getUserSessions()) {
-    if (now - sess.lastActive > STALE_SESSION_MS && sess.phase === 'idle') {
+    if (now - sess.lastActive > STALE_SESSION_MS && sess.activeTurns.size === 0) {
       getUserSessions().delete(key);
     }
   }
@@ -561,7 +562,7 @@ function getUserSession(agentId: string, userId: string): UserSession {
     sess = {
       sessionId: null,
       chatSessions: new Map(),
-      activeTurn: null,
+      activeTurns: new Map(),
       phase: 'idle',
       turnCount: 0,
       lastActive: Date.now(),
@@ -569,8 +570,16 @@ function getUserSession(agentId: string, userId: string): UserSession {
     sessions.set(key, sess);
   }
   sess.lastActive = Date.now();
-  // Ensure chatSessions exists for sessions created before this field was added
+  // Ensure chatSessions and activeTurns exist for sessions created before these fields were added
   if (!sess.chatSessions) sess.chatSessions = new Map();
+  if (!sess.activeTurns) sess.activeTurns = new Map();
+  // Migrate legacy activeTurn to activeTurns map
+  if ((sess as any).activeTurn) {
+    const legacyTurn = (sess as any).activeTurn as TurnState;
+    const key = legacyTurn.chatId || '__default';
+    sess.activeTurns.set(key, legacyTurn);
+    delete (sess as any).activeTurn;
+  }
   return sess;
 }
 
@@ -578,6 +587,31 @@ function getUserSession(agentId: string, userId: string): UserSession {
 function findUserSessionBySessionId(sessionId: string): UserSession | undefined {
   for (const sess of getUserSessions().values()) {
     if (sess.sessionId === sessionId) return sess;
+    // Also check chatSessions — different chats may use different sessionIds
+    for (const [, sessionList] of sess.chatSessions) {
+      if (sessionList.includes(sessionId)) return sess;
+    }
+  }
+  return undefined;
+}
+
+/** Find the chatId whose current session matches the given sessionId. */
+function findChatIdBySessionId(sess: UserSession, sessionId: string): string | undefined {
+  for (const [chatId, sessionList] of sess.chatSessions) {
+    if (sessionList.length > 0 && sessionList[sessionList.length - 1] === sessionId) return chatId;
+  }
+  return undefined;
+}
+
+/** Find the active turn for a notification's sessionId. */
+function findTurnBySessionId(sessionId: string): TurnState | undefined {
+  const sess = findUserSessionBySessionId(sessionId);
+  if (!sess) return undefined;
+  const chatId = findChatIdBySessionId(sess, sessionId);
+  if (chatId) return sess.activeTurns.get(chatId);
+  // Fallback: check all active turns for one matching this sessionId's chat
+  for (const turn of sess.activeTurns.values()) {
+    if (turn.chatId && getChatSession(sess, turn.chatId) === sessionId) return turn;
   }
   return undefined;
 }
@@ -626,11 +660,13 @@ async function doBootAgent(agentId: string): Promise<void> {
           if (key.startsWith(`${agentId}:`)) {
             sess.phase = 'idle';
             sess.sessionId = null;
-            if (sess.activeTurn && !sess.activeTurn.done) {
-              sess.activeTurn.done = true;
-              sess.activeTurn.phase = 'done';
-              sess.activeTurn.error = `Relay disconnected: ${reason}`;
-              sess.activeTurn.statusText = sess.activeTurn.error;
+            for (const [chatId, turn] of sess.activeTurns) {
+              if (!turn.done) {
+                turn.done = true;
+                turn.phase = 'done';
+                turn.error = `Relay disconnected: ${reason}`;
+                turn.statusText = turn.error;
+              }
             }
           }
         }
@@ -671,11 +707,13 @@ async function doBootAgent(agentId: string): Promise<void> {
           if (key.startsWith(`${agentId}:`)) {
             sess.phase = 'idle';
             sess.sessionId = null;
-            if (sess.activeTurn && !sess.activeTurn.done) {
-              sess.activeTurn.done = true;
-              sess.activeTurn.phase = 'done';
-              sess.activeTurn.error = `ACP process exited (code ${code})`;
-              sess.activeTurn.statusText = sess.activeTurn.error;
+            for (const [chatId, turn] of sess.activeTurns) {
+              if (!turn.done) {
+                turn.done = true;
+                turn.phase = 'done';
+                turn.error = `ACP process exited (code ${code})`;
+                turn.statusText = turn.error;
+              }
             }
           }
         }
@@ -773,7 +811,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
 
       const turn = notifSessionId
-        ? findUserSessionBySessionId(notifSessionId)?.activeTurn
+        ? findTurnBySessionId(notifSessionId)
         : undefined;
       if (!turn || turn.done) return;
 
@@ -858,13 +896,22 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
   return [];
 }
 
+async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise<{ cwd: string; mcpServers: Record<string, unknown>[] }> {
+  const params = { cwd: proc.cachedCwd, mcpServers: [] as Record<string, unknown>[] };
+  // noTools and relay/remote agents get no MCP servers. Remote nodes should not inherit
+  // the Next.js server host's ~/.copilot/mcp-config.json.
+  if (!proc.config.noTools && !proc.config.relay) {
+    params.mcpServers = await loadMcpServers(isAdmin);
+  }
+  return params;
+}
+
 async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId: string, userId: string, isAdmin: boolean): Promise<void> {
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
-  // noTools agents get no MCP servers to prevent tool usage and speed up responses
-  const mcpServers = proc.config.noTools ? [] : await loadMcpServers(isAdmin);
-  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${mcpServers.length}, noTools=${!!proc.config.noTools})...`);
-  const result = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+  const sessionParams = await buildSessionParams(proc, isAdmin);
+  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay})...`);
+  const result = await proc.rpc.send('session/new', sessionParams);
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
@@ -966,6 +1013,18 @@ async function flushTurnPersist(turn: TurnState): Promise<void> {
   });
 }
 
+function finishTurnAfterPromptResult(turn: TurnState, promptResult: Record<string, unknown> | undefined): void {
+  const stopReason = typeof promptResult?.stopReason === 'string' ? promptResult.stopReason : 'unknown';
+  if (stopReason !== 'end_turn' && !turn.fullText.trim()) {
+    turn.error = `Agent stopped without a response (stopReason=${stopReason})`;
+    turn.statusText = turn.error;
+  } else {
+    turn.statusText = '';
+  }
+  turn.done = true;
+  turn.phase = 'done';
+}
+
 function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string, messageId?: string): TurnState {
   const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turn: TurnState = {
@@ -984,7 +1043,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     lastPersistedAt: 0,
   };
 
-  sess.activeTurn = turn;
+  const turnChatKey = chatId || '__default';
+  sess.activeTurns.set(turnChatKey, turn);
   sess.phase = 'busy';
   sess.turnCount++;
 
@@ -998,10 +1058,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
       console.log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
       if (!turn.done) {
-        turn.done = true;
-        turn.phase = 'done';
-        turn.statusText = '';
-        sess.phase = 'idle';
+        finishTurnAfterPromptResult(turn, result);
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
       }
       await flushTurnPersist(turn);
       // Don't clear events here — let frontend poll one last time with full events.
@@ -1009,8 +1067,9 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       turn.prompt = '';
       // Auto-release turn reference after 30s so GC can reclaim memory
       setTimeout(() => {
-        if (sess.activeTurn === turn) {
-          sess.activeTurn = null;
+        if (sess.activeTurns.get(turnChatKey) === turn) {
+          sess.activeTurns.delete(turnChatKey);
+          if (sess.activeTurns.size === 0) sess.phase = 'idle';
         }
       }, 30_000);
     })
@@ -1019,8 +1078,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       const errMsg = err.message || '';
       console.log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
       try {
-        const mcpServers = await loadMcpServers(isAdmin);
-        const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const session = await proc.rpc!.send('session/new', sessionParams);
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
@@ -1056,14 +1115,12 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
         console.log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
         if (!turn.done) {
-          turn.done = true;
-          turn.phase = 'done';
-          turn.statusText = '';
-          sess.phase = 'idle';
+          finishTurnAfterPromptResult(turn, retryResult as Record<string, unknown> | undefined);
+          if (sess.activeTurns.size === 0) sess.phase = 'idle';
         }
         await flushTurnPersist(turn);
         turn.prompt = '';
-        setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
+        setTimeout(() => { if (sess.activeTurns.get(turnChatKey) === turn) { sess.activeTurns.delete(turnChatKey); if (sess.activeTurns.size === 0) sess.phase = 'idle'; } }, 30_000);
       } catch (retryErr) {
         // Recovery also failed — report original error
         if (!turn.done) {
@@ -1071,11 +1128,11 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           turn.phase = 'done';
           turn.error = errMsg || (retryErr instanceof Error ? retryErr.message : String(retryErr));
           turn.statusText = turn.error;
-          sess.phase = 'idle';
+          if (sess.activeTurns.size === 0) sess.phase = 'idle';
         }
         await flushTurnPersist(turn);
         turn.prompt = '';
-        setTimeout(() => { if (sess.activeTurn === turn) sess.activeTurn = null; }, 30_000);
+        setTimeout(() => { if (sess.activeTurns.get(turnChatKey) === turn) { sess.activeTurns.delete(turnChatKey); if (sess.activeTurns.size === 0) sess.phase = 'idle'; } }, 30_000);
       }
     });
 
@@ -1390,6 +1447,8 @@ export async function POST(req: NextRequest) {
     const sess = getUserSession(agentId, userId);
 
     if (action === 'status') {
+      const chatId = body?.chatId as string | undefined;
+      const turnChatKey = chatId || '__default';
       return NextResponse.json({
         ok: true,
         agentId,
@@ -1397,7 +1456,7 @@ export async function POST(req: NextRequest) {
         ready: proc.ready,
         booting: proc.booting,
         sessionId: sess.sessionId,
-        activeTurn: serializeTurn(sess.activeTurn),
+        activeTurn: serializeTurn(sess.activeTurns.get(turnChatKey) ?? null),
         error: proc.error,
       });
     }
@@ -1449,8 +1508,7 @@ export async function POST(req: NextRequest) {
         if (chatSessionId) {
           if (chatSessionId !== sess.sessionId) {
             sess.sessionId = chatSessionId;
-            sess.activeTurn = null;
-            sess.phase = 'idle';
+            // Don't null activeTurns — other chats may have active turns
           }
         } else {
           // New chat with no prior session — clear so ensureUserSession creates a fresh one
@@ -1469,7 +1527,9 @@ export async function POST(req: NextRequest) {
 
       console.log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
 
-      if (sess.activeTurn && !sess.activeTurn.done) {
+      const turnChatKey = chatId || '__default';
+      const existingTurn = sess.activeTurns.get(turnChatKey);
+      if (existingTurn && !existingTurn.done) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
 
@@ -1478,39 +1538,54 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'poll') {
+      const chatId = body?.chatId as string | undefined;
+      const turnChatKey = chatId || '__default';
       return NextResponse.json({
         ok: true,
         phase: sess.sessionId ? sess.phase : (proc.booting ? 'booting' : (proc.ready ? 'idle' : 'idle')),
         ready: proc.ready,
         booting: proc.booting,
         sessionId: sess.sessionId,
-        activeTurn: serializeTurn(sess.activeTurn),
+        activeTurn: serializeTurn(sess.activeTurns.get(turnChatKey) ?? null),
       });
     }
 
     if (action === 'turn-clear') {
-      if (sess.activeTurn) {
-        sess.activeTurn.events = [];
-        sess.activeTurn = null;
+      const chatId = body?.chatId as string | undefined;
+      const turnChatKey = chatId || '__default';
+      const turn = sess.activeTurns.get(turnChatKey);
+      if (turn) {
+        turn.events = [];
+        sess.activeTurns.delete(turnChatKey);
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
       }
       return NextResponse.json({ ok: true });
     }
 
     if (action === 'interrupt') {
-      if (sess.activeTurn && !sess.activeTurn.done && proc.rpc && sess.sessionId) {
-        try {
-          await proc.rpc.send('session/cancel', { sessionId: sess.sessionId }, 5000);
-        } catch {
+      const chatId = body?.chatId as string | undefined;
+      const turnChatKey = chatId || '__default';
+      const turn = sess.activeTurns.get(turnChatKey);
+      if (turn && !turn.done && proc.rpc) {
+        // Find the correct sessionId for this chat's turn
+        const interruptSessionId = chatId ? getChatSession(sess, chatId) : sess.sessionId;
+        if (interruptSessionId) {
           try {
-            proc.rpc.writeRaw(
-              JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: sess.sessionId } })
-            );
-          } catch { /* ignore */ }
+            await proc.rpc.send('session/cancel', { sessionId: interruptSessionId }, 5000);
+          } catch {
+            try {
+              proc.rpc.writeRaw(
+                JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: interruptSessionId } })
+              );
+            } catch { /* ignore */ }
+          }
         }
-        sess.activeTurn.done = true;
-        sess.activeTurn.phase = 'done';
-        sess.activeTurn.statusText = 'Interrupted';
-        sess.phase = 'idle';
+        turn.done = true;
+        turn.phase = 'done';
+        turn.statusText = 'Interrupted';
+        if (sess.activeTurns.size === 0 || [...sess.activeTurns.values()].every(t => t.done)) {
+          sess.phase = 'idle';
+        }
       }
       return NextResponse.json({ ok: true });
     }
@@ -1529,13 +1604,16 @@ export async function POST(req: NextRequest) {
       }
       try {
         // Note: ACP has no session/close — old session persists on the agent for future session/load
-        const mcpServers = await loadMcpServers(isAdmin);
-        const session = await proc.rpc.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const session = await proc.rpc.send('session/new', sessionParams);
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
-        sess.activeTurn = null;
-        sess.phase = 'idle';
+        // Clear only this chat's active turn
+        if (chatId) {
+          sess.activeTurns.delete(chatId);
+        }
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
         // Persist session ID to SQLite
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
@@ -1577,13 +1655,17 @@ export async function POST(req: NextRequest) {
       // Detach current session (ACP has no session/close — sessions persist for future session/load)
       // If this session is known to be active in the agent, just switch to it
       if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
-        const activeTurn = sess.sessionId === savedSessionId && sess.activeTurn && !sess.activeTurn.done
-          ? sess.activeTurn
+        const turnChatKey = chatId || '__default';
+        const chatTurn = sess.activeTurns.get(turnChatKey);
+        const activeTurn = sess.sessionId === savedSessionId && chatTurn && !chatTurn.done
+          ? chatTurn
           : null;
         sess.sessionId = savedSessionId;
         if (chatId) pushChatSession(sess, chatId, savedSessionId);
-        sess.activeTurn = activeTurn;
-        sess.phase = activeTurn ? 'busy' : 'idle';
+        if (!activeTurn && chatTurn) {
+          // Don't remove other chats' turns
+        }
+        sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
         console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
         return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
       }
@@ -1593,12 +1675,12 @@ export async function POST(req: NextRequest) {
         const replayBuffers = getReplayBuffers();
         replayBuffers.set(savedSessionId, []);
         try {
-          const mcpServers = await loadMcpServers(isAdmin);
-          await proc.rpc!.send('session/load', { sessionId: savedSessionId, cwd: proc.cachedCwd, mcpServers });
+          const sessionParams = await buildSessionParams(proc, isAdmin);
+          await proc.rpc!.send('session/load', { sessionId: savedSessionId, ...sessionParams });
           sess.sessionId = savedSessionId;
           if (chatId) pushChatSession(sess, chatId, savedSessionId);
-          sess.activeTurn = null;
-          sess.phase = 'idle';
+          // Don't clear other chats' active turns
+          if (sess.activeTurns.size === 0) sess.phase = 'idle';
           proc.knownSessions.add(savedSessionId);
 
           // Extract replay buffer and compare with SQLite
@@ -1617,13 +1699,14 @@ export async function POST(req: NextRequest) {
           if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
           const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
           if (alreadyLoaded) {
-            const activeTurn = sess.sessionId === savedSessionId && sess.activeTurn && !sess.activeTurn.done
-              ? sess.activeTurn
+            const turnChatKey = chatId || '__default';
+            const chatTurn = sess.activeTurns.get(turnChatKey);
+            const activeTurn = sess.sessionId === savedSessionId && chatTurn && !chatTurn.done
+              ? chatTurn
               : null;
             sess.sessionId = savedSessionId;
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
-            sess.activeTurn = activeTurn;
-            sess.phase = activeTurn ? 'busy' : 'idle';
+            sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
             proc.knownSessions.add(savedSessionId);
             console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
             return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
@@ -1635,12 +1718,12 @@ export async function POST(req: NextRequest) {
       }
       // Fall back to creating a new session — the frontend will inject chat history on first turn
       try {
-        const mcpServers = await loadMcpServers(isAdmin);
-        const session = await proc.rpc!.send('session/new', { cwd: proc.cachedCwd, mcpServers });
+        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const session = await proc.rpc!.send('session/new', sessionParams);
         sess.sessionId = session.sessionId;
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
-        sess.activeTurn = null;
-        sess.phase = 'idle';
+        // Don't clear other chats' active turns
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
         proc.knownSessions.add(session.sessionId);
         // Update SQLite with the new sessionId
         if (chatId) {

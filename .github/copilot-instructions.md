@@ -50,6 +50,11 @@ Follow TDD when implementing new features:
 2. Implement the feature to make tests pass
 3. Add Playwright E2E tests for user-facing behavior
 
+Testing expectations by change type:
+- UX / frontend behavior changes must include or update Playwright E2E coverage.
+- Backend / API behavior changes must include or update API tests.
+- If a change crosses both boundaries, include both E2E and API coverage where practical.
+
 ## Conventions
 
 - **No CSS modules or Tailwind** — all styling is `styled-jsx` inside components or `globals.css`.

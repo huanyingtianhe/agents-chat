@@ -124,7 +124,7 @@ function normalizeChatHistory(chats: ChatHistoryEntry[]): ChatHistoryEntry[] {
   for (const chat of chats) {
     if (!byId.has(chat.id)) byId.set(chat.id, chat);
   }
-  return Array.from(byId.values()).sort((a, b) => (b.ts - a.ts) || b.id.localeCompare(a.id));
+  return Array.from(byId.values());
 }
 
 type SessionRunContext = {
@@ -133,6 +133,7 @@ type SessionRunContext = {
   orchestrationId: string;
   kind: 'worker' | 'summary';
   currentText: string;
+  chatId: string;
   round?: number;
   relation?: string;
   ptyTurnId?: string;
@@ -402,7 +403,7 @@ export default function Page() {
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
-  const [isSending, setIsSending] = useState(false);
+  const [runVersion, setRunVersion] = useState(0);
   const [chatName, setChatName] = useState('New Chat');
   const [chatCounter, setChatCounter] = useState(1);
   const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
@@ -451,6 +452,7 @@ export default function Page() {
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const chatMessagesRef = useRef<Record<string, ChatMessage[]>>({});
   const currentChatIdRef = useRef(currentChatId);
   currentChatIdRef.current = currentChatId;
   const chatNameRef = useRef(chatName);
@@ -489,6 +491,20 @@ export default function Page() {
   const activeTheme = THEMES[themeId];
   const themeStyle = activeTheme.values as React.CSSProperties;
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
+  const isCurrentChatSending = useMemo(() => Object.values(sessionRunsRef.current).some((run) => run.chatId === currentChatId), [currentChatId, runVersion]);
+
+  const getChatSidebarStatus = useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
+    const hasActiveRun = Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId);
+    const chatMessages = chatMessagesRef.current[chatId] || (chatId === currentChatId ? messages : []);
+    const pendingAgent = [...chatMessages].reverse().find((m) => m.type === 'agent' && m.pending);
+    if (hasActiveRun || pendingAgent) {
+      return { label: pendingAgent?.statusText || 'Running', kind: 'running' };
+    }
+    const lastAgent = [...chatMessages].reverse().find((m) => m.type === 'agent');
+    if (!lastAgent) return null;
+    if ((lastAgent.content || '').trim().startsWith('⚠️')) return { label: 'Error', kind: 'error' };
+    return { label: 'Done', kind: 'done' };
+  }, [currentChatId, messages, runVersion]);
 
   const visibleMessages = useMemo(() => {
     if (!selectedAgentFilter) return messages;
@@ -522,7 +538,7 @@ export default function Page() {
             if (chatData.ok && chatData.chat) {
               const msgs = chatData.chat.messages || [];
               currentAgentSessionsRef.current = chatData.chat.agentSessions || {};
-              setMessages(msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
+              setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
               setChatName(chatData.chat.name || lastChatId);
               needsContextRestoreRef.current = true;
               setLoadedChatIdForResume(lastChatId);
@@ -665,16 +681,30 @@ export default function Page() {
 
   /* ── Core functions ── */
 
-  function addMessage(msg: Omit<ChatMessage, 'id' | 'ts'> & { id?: string; ts?: number }) {
+  function setMessagesForChat(chatId: string, nextMessages: ChatMessage[]) {
+    chatMessagesRef.current[chatId] = nextMessages;
+    if (currentChatIdRef.current === chatId) {
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+    } else {
+      notifyRunStateChanged();
+    }
+  }
+
+  function addMessage(msg: Omit<ChatMessage, 'id' | 'ts'> & { id?: string; ts?: number }, chatId = currentChatIdRef.current) {
     const next: ChatMessage = { id: msg.id || makeId(), ts: msg.ts || Date.now(), ...msg };
-    messagesRef.current = [...messagesRef.current, next];
-    setMessages(messagesRef.current);
+    const base = chatMessagesRef.current[chatId] || (chatId === currentChatIdRef.current ? messagesRef.current : []);
+    setMessagesForChat(chatId, [...base, next]);
     return next.id;
   }
 
-  function updateMessage(id: string, patch: Partial<ChatMessage>) {
-    messagesRef.current = messagesRef.current.map((m) => (m.id === id ? { ...m, ...patch } : m));
-    setMessages(messagesRef.current);
+  function updateMessage(id: string, patch: Partial<ChatMessage>, chatId = currentChatIdRef.current) {
+    const base = chatMessagesRef.current[chatId] || (chatId === currentChatIdRef.current ? messagesRef.current : []);
+    setMessagesForChat(chatId, base.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
+  function notifyRunStateChanged() {
+    setRunVersion((version) => version + 1);
   }
 
   async function copyShareDialogLink() {
@@ -782,13 +812,15 @@ export default function Page() {
     if (!run || run.ptySendStarted) return false;
 
     run.ptySendStarted = true;
-    updateMessage(pendingId, { statusText: 'Connecting', pending: true, ptyPhase: 'loading-environment' });
+    updateMessage(pendingId, { statusText: 'Connecting', pending: true, ptyPhase: 'loading-environment' }, run.chatId);
 
-    // Include chat history only when session needs context restoration
-    // (after restart, imported chat, etc.)
-    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: currentChatId, messageId: pendingId };
+    // Capture the chat that owns this run. Polling and send failures must keep
+    // using this chat even if the user switches chats while the turn is active.
+    const sendChatId = run.chatId;
+    const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: sendChatId, messageId: pendingId };
     if (needsContextRestoreRef.current) {
-      sendBody.chatHistory = messages
+      const historyMessages = chatMessagesRef.current[sendChatId] || (sendChatId === currentChatIdRef.current ? messagesRef.current : []);
+      sendBody.chatHistory = historyMessages
         .filter(m => m.type === 'user' || m.type === 'agent')
         .slice(-20)
         .map(m => ({ type: m.type, content: m.content, agentId: (m as any).agentId }));
@@ -803,7 +835,7 @@ export default function Page() {
       updateMessage(pendingId, {
         content: `⚠️ ${sendResult.error || 'Send failed'}`,
         pending: false,
-      });
+      }, sendChatId);
       finalizeRun(runKey);
       return false;
     }
@@ -815,10 +847,10 @@ export default function Page() {
     current.ptyTurnId = sendResult?.turn?.id;
 
     if (sendResult?.phase === 'booting') {
-      updateMessage(pendingId, { statusText: 'Starting environment', ptyPhase: 'loading-environment', pending: true });
+      updateMessage(pendingId, { statusText: 'Starting environment', ptyPhase: 'loading-environment', pending: true }, sendChatId);
     }
 
-    void pollAcpAgent(agentId);
+    void pollAcpAgent(agentId, sendChatId);
     return true;
   }
 
@@ -827,8 +859,9 @@ export default function Page() {
     content: string,
     orchestrationId: string,
     kind: 'worker' | 'summary' = 'worker',
-    options?: { round?: number; relation?: string; summary?: boolean },
+    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string },
   ) {
+    const dispatchChatId = options?.chatId || currentChatIdRef.current;
     const pendingId = `pending-${makeId()}`;
     addMessage({
       id: pendingId,
@@ -839,30 +872,33 @@ export default function Page() {
       round: options?.round,
       relation: options?.relation,
       summary: options?.summary,
-    });
+    }, dispatchChatId);
 
-    const runKey = `acp:${agentId}`;
+    const runKey = `acp:${agentId}:${dispatchChatId}`;
     sessionRunsRef.current[runKey] = {
       agentId, pendingId, orchestrationId, kind,
       currentText: '',
+      chatId: dispatchChatId,
       round: options?.round,
       relation: options?.relation,
     };
+    notifyRunStateChanged();
 
     await sendAcpPrompt(runKey, agentId, pendingId, content);
     return runKey;
   }
 
   function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string }) {
+    const resumeChatId = currentChatIdRef.current;
     const pendingId = turn.messageId || `pending-${makeId()}`;
-    const existing = messagesRef.current.find(m => m.id === pendingId);
+    const existing = (chatMessagesRef.current[resumeChatId] || messagesRef.current).find(m => m.id === pendingId);
     if (existing) {
-      updateMessage(pendingId, { pending: true, agentId, content: turn.fullText || existing.content || '', statusText: 'Thinking', ptyPhase: 'thinking' });
+      updateMessage(pendingId, { pending: true, agentId, content: turn.fullText || existing.content || '', statusText: 'Thinking', ptyPhase: 'thinking' }, resumeChatId);
     } else {
-      addMessage({ id: pendingId, type: 'agent', content: turn.fullText || '', agentId, pending: true, statusText: 'Thinking', ptyPhase: 'thinking' });
+      addMessage({ id: pendingId, type: 'agent', content: turn.fullText || '', agentId, pending: true, statusText: 'Thinking', ptyPhase: 'thinking' }, resumeChatId);
     }
 
-    const runKey = `acp:${agentId}`;
+    const runKey = `acp:${agentId}:${resumeChatId}`;
     if (!sessionRunsRef.current[runKey]) {
       sessionRunsRef.current[runKey] = {
         agentId,
@@ -870,9 +906,10 @@ export default function Page() {
         orchestrationId: `orch-${makeId()}`,
         kind: 'worker',
         currentText: turn.fullText || '',
+        chatId: resumeChatId,
       };
-      setIsSending(true);
-      void pollAcpAgent(agentId);
+      notifyRunStateChanged();
+      void pollAcpAgent(agentId, resumeChatId);
     }
   }
 
@@ -880,24 +917,19 @@ export default function Page() {
     const run = sessionRunsRef.current[runKey];
     if (!run) return;
 
-    updateMessage(run.pendingId, { pending: false, statusText: undefined, ptyPhase: undefined });
+    updateMessage(run.pendingId, { pending: false, statusText: undefined, ptyPhase: undefined }, run.chatId);
     const orchestration = orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
       orchestration.results[run.agentId] = run.currentText || '';
       void maybeAdvanceOrchestration(run.orchestrationId);
     }
     delete sessionRunsRef.current[runKey];
-
-    // Only clear isSending when no active runs remain AND no orchestration will continue
-    const hasActiveRuns = Object.keys(sessionRunsRef.current).length > 0;
-    const hasActiveOrch = orchestration && !orchestration.summaryStarted && run.kind === 'worker';
-    if (!hasActiveRuns && !hasActiveOrch) {
-      setIsSending(false);
-    }
+    notifyRunStateChanged();
   }
 
-  async function pollAcpAgent(agentId: string) {
-    const runKey = `acp:${agentId}`;
+  async function pollAcpAgent(agentId: string, chatId?: string) {
+    const effectiveChatId = chatId || currentChatIdRef.current;
+    const runKey = `acp:${agentId}:${effectiveChatId}`;
     let consecutiveErrors = 0;
     const MAX_ERRORS = 10;
     const POLL_TIMEOUT = 10 * 60_000; // 10 min safety timeout
@@ -912,21 +944,21 @@ export default function Page() {
         updateMessage(current.pendingId, {
           content: current.currentText || '⚠️ Response timed out',
           pending: false,
-        });
+        }, effectiveChatId);
         finalizeRun(runKey);
         return;
       }
 
       let result: any;
       try {
-        result = await acp({ action: 'poll', agentId });
+        result = await acp({ action: 'poll', agentId, chatId: effectiveChatId });
       } catch (err) {
         consecutiveErrors++;
         if (consecutiveErrors >= MAX_ERRORS) {
           updateMessage(current.pendingId, {
             content: current.currentText || `⚠️ Lost connection to agent (${err instanceof Error ? err.message : 'network error'})`,
             pending: false,
-          });
+          }, effectiveChatId);
           finalizeRun(runKey);
           return;
         }
@@ -999,8 +1031,8 @@ export default function Page() {
             content: serverText || (turn.error ? `⚠️ ${turn.error}` : ''),
             pending: false,
             parts: parts.length ? parts : undefined,
-          });
-          await acp({ action: 'turn-clear', agentId }).catch(() => null);
+          }, effectiveChatId);
+          await acp({ action: 'turn-clear', agentId, chatId: effectiveChatId }).catch(() => null);
           finalizeRun(runKey);
           return;
         } else {
@@ -1014,7 +1046,7 @@ export default function Page() {
             patch.content = serverText;
             current.currentText = serverText;
           }
-          updateMessage(current.pendingId, patch);
+          updateMessage(current.pendingId, patch, effectiveChatId);
         }
       }
 
@@ -1108,7 +1140,7 @@ export default function Page() {
 
       // Helper: clear previous turn and wait before next dispatch
       const prepareNextDispatch = async (agentId: string) => {
-        await acp({ action: 'turn-clear', agentId }).catch(() => null);
+        await acp({ action: 'turn-clear', agentId, chatId: currentChatIdRef.current }).catch(() => null);
         await new Promise((r) => setTimeout(r, 800));
       };
 
@@ -1188,8 +1220,7 @@ export default function Page() {
       } catch (err) {
         console.error('[Auto] orchestration step failed:', err);
         addMessage({ type: 'system', content: `⚠️ Auto orchestration error: ${err instanceof Error ? err.message : String(err)}` });
-        setIsSending(false);
-      }
+        }
     }
   }
 
@@ -1259,7 +1290,6 @@ export default function Page() {
       };
     }
 
-    setIsSending(true);
     shouldStickToBottomRef.current = true;
     addMessage({ type: 'user', content: text });
     setInput('');
@@ -1290,14 +1320,30 @@ export default function Page() {
         await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
       }
     } catch (err) {
-      setIsSending(false);
       addMessage({ type: 'system', content: `Send failed: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
 
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'test' && process.env.NEXT_PUBLIC_E2E_TESTS !== '1') return;
+    const testWindow = window as typeof window & {
+      __TEST_dispatchToAgent?: typeof dispatchToAgent;
+      __TEST_getCurrentChatId?: () => string;
+    };
+    testWindow.__TEST_dispatchToAgent = dispatchToAgent;
+    testWindow.__TEST_getCurrentChatId = () => currentChatIdRef.current;
+    return () => {
+      delete testWindow.__TEST_dispatchToAgent;
+      delete testWindow.__TEST_getCurrentChatId;
+    };
+  }, [dispatchToAgent]);
+
   async function handleStop() {
     // Interrupt all active agent runs
-    const activeRuns = { ...sessionRunsRef.current };
+    const stopChatId = currentChatIdRef.current;
+    const activeRuns = Object.fromEntries(
+      Object.entries(sessionRunsRef.current).filter(([, run]) => run.chatId === stopChatId)
+    );
     const agentIds = new Set<string>();
     for (const run of Object.values(activeRuns)) {
       agentIds.add(run.agentId);
@@ -1305,24 +1351,24 @@ export default function Page() {
 
     for (const agentId of agentIds) {
       try {
-        await acp({ action: 'interrupt', agentId });
+        await acp({ action: 'interrupt', agentId, chatId: stopChatId });
       } catch { /* ignore */ }
     }
 
-    // Finalize all pending runs
+    // Finalize pending runs for the current chat only
     for (const [runKey, run] of Object.entries(activeRuns)) {
       updateMessage(run.pendingId, {
         content: run.currentText || '⏹ Stopped',
         pending: false,
         statusText: undefined,
         ptyPhase: undefined,
-      });
+      }, run.chatId);
       delete sessionRunsRef.current[runKey];
     }
+    notifyRunStateChanged();
 
     // Clear orchestrations
     orchestrationsRef.current = {};
-    setIsSending(false);
     addMessage({ type: 'system', content: '⏹ Conversation stopped.' });
     void saveCurrentChatToHistory();
   }
@@ -1519,29 +1565,20 @@ export default function Page() {
   /* ── New chat ── */
 
   async function saveCurrentChatToHistory(preserveOrder = false) {
-    const currentMessages = messagesRef.current;
     const currentId = currentChatIdRef.current;
+    const currentMessages = chatMessagesRef.current[currentId] || messagesRef.current;
     const currentName = chatNameRef.current;
     const userMsgs = currentMessages.filter(m => m.type === 'user');
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
     const persistable = currentMessages
-      .filter(m => !(m.type === 'system' && m.ts !== 0))
-      .map(m => {
-        if (!m.pending) return m;
-        const hasStoredParts = !!(m.parts && m.parts.length > 0);
-        return {
-          ...m,
-          pending: false,
-          content: m.content || (hasStoredParts ? '' : '⏹ (interrupted by chat switch)'),
-          statusText: undefined,
-          ptyPhase: undefined,
-        };
-      });
+      .filter(m => !(m.type === 'system' && m.ts !== 0));
 
     const agentSessions = currentAgentSessionsRef.current;
 
     const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
-    const savedAt = preserveOrder ? (existingHistoryEntry?.ts ?? Date.now()) : Date.now();
+    // Keep the sidebar timestamp stable for existing chats. It represents the
+    // chat's list/order timestamp, not every background turn update.
+    const savedAt = existingHistoryEntry?.ts ?? Date.now();
     const chatData = { id: currentId, name, ts: savedAt, messages: persistable, agentSessions };
 
     // Save to server
@@ -1561,11 +1598,8 @@ export default function Page() {
 
     setChatHistory(prev => {
       const entry = { id: currentId, name, ts: savedAt, agentSessions };
-      if (preserveOrder) {
-        if (prev.some(c => c.id === currentId)) {
-          return prev.map(c => c.id === currentId ? entry : c);
-        }
-        return [...prev, entry];
+      if (prev.some(c => c.id === currentId)) {
+        return prev.map(c => c.id === currentId ? entry : c);
       }
       return normalizeChatHistory([entry, ...prev]);
     });
@@ -1574,7 +1608,7 @@ export default function Page() {
 
   function clearChatMessages() {
     const initial: ChatMessage[] = [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }];
-    setMessages(initial);
+    setMessagesForChat(currentChatIdRef.current, initial);
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
@@ -1584,12 +1618,6 @@ export default function Page() {
     if (chatId === currentChatId) {
       setOpenChatMenuId(null);
       setShowChatsPanel(false);
-      return;
-    }
-
-    // Block switching while agents are still responding
-    if (isSending || Object.keys(sessionRunsRef.current).length > 0) {
-      addMessage({ type: 'system', content: '⚠️ Please wait for the current response to finish, or stop it first.' });
       return;
     }
 
@@ -1611,7 +1639,7 @@ export default function Page() {
         return;
       }
       if (data.ok && data.chat) {
-        targetMessages = data.chat.messages || [];
+        targetMessages = chatMessagesRef.current[chatId] || data.chat.messages || [];
         targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
         currentAgentSessionsRef.current = agentSessions;
@@ -1626,15 +1654,14 @@ export default function Page() {
       targetMessages = [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }];
     }
 
-    setMessages(targetMessages);
-    setChatName(targetName);
     currentChatIdRef.current = chatId;
+    setMessagesForChat(chatId, targetMessages);
+    setChatName(targetName);
     setCurrentChatId(chatId);
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
-    sessionRunsRef.current = {};
-    orchestrationsRef.current = {};
+    // Keep active runs for other chats alive; pollers use their captured chatId.
     setChatHistory(prev => {
       if (prev.some(c => c.id === chatId)) {
         return prev.map(c => c.id === chatId ? { ...c, name: targetName, agentSessions } : c);
@@ -1704,10 +1731,10 @@ export default function Page() {
     // Use timestamp-based ID to avoid collisions after reload
     const newId = `chat-${Date.now()}-${newCount}`;
 
+    currentChatIdRef.current = newId;
     clearChatMessages();
     setChatName(newName);
     setChatCounter(newCount);
-    currentChatIdRef.current = newId;
     currentAgentSessionsRef.current = {};
     setCurrentChatId(newId);
     setActiveSidebarChatId(newId);
@@ -1737,8 +1764,7 @@ export default function Page() {
     // Sessions are created lazily when user first sends a message to each agent
     // No need to eagerly create sessions for all agents here
 
-    sessionRunsRef.current = {};
-    orchestrationsRef.current = {};
+    // Keep active runs for other chats alive; pollers use their captured chatId.
 
     if (errors.length) {
       addMessage({ type: 'system', content: `⚠️ New chat created with errors: ${errors.join(', ')}` });
@@ -1860,23 +1886,27 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && (
             <div className="participantsList">
-              <button className="newChatButton" onClick={() => void createNewChat()} disabled={isSending}>+ New Chat</button>
+              <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat</button>
               {(() => {
                 const allChats = chatHistory.some(c => c.id === currentChatId)
                   ? chatHistory
-                  : [{ id: currentChatId, name: chatName, ts: Date.now() }, ...chatHistory];
+                  : [{ id: currentChatId, name: chatName, ts: chatHistory[0]?.ts ? chatHistory[0].ts + 1 : Date.now() }, ...chatHistory];
                 const uniqueChats = normalizeChatHistory(allChats);
                 return uniqueChats.map((chat) => {
                   const isCurrent = chat.id === currentChatId;
                   const isActive = chat.id === activeSidebarChatId;
+                  const sidebarStatus = getChatSidebarStatus(chat.id);
                   return (
                     <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
                       <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isCurrent ? undefined : loadChat(chat.id)}>
                         <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
                         <span className="chatHistoryText">
                           <span className="chatHistoryName">{isCurrent ? chatName : chat.name}</span>
-                          <span className="chatHistoryMeta" suppressHydrationWarning>
-                            {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
+                          <span className="chatHistoryMetaRow">
+                            <span className="chatHistoryMeta" suppressHydrationWarning>
+                              {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
+                            </span>
+                            {sidebarStatus ? <span className={`chatStatusBadge ${sidebarStatus.kind}`}>{sidebarStatus.label}</span> : null}
                           </span>
                         </span>
                       </button>
@@ -2108,7 +2138,7 @@ export default function Page() {
                           }
                           if (e.key === 'Escape') { e.preventDefault(); setInput((p) => p.replace(/@(\S*)$/, '')); return; }
                         }
-                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (isSending) { void handleStop(); } else { void handleSend(); } }
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (isCurrentChatSending) { void handleStop(); } else { void handleSend(); } }
                         if (filteredAgents.length === 0) {
                           const caretStart = e.currentTarget.selectionStart ?? 0;
                           const caretEnd = e.currentTarget.selectionEnd ?? 0;
@@ -2144,7 +2174,7 @@ export default function Page() {
                       spellCheck={false}
                     />
                     <div className="composerActions composerInlineActions">
-                      {isSending
+                      {isCurrentChatSending
                         ? <button className="sendButton stopButton" onClick={() => void handleStop()} aria-label="Stop generation">⏹</button>
                         : <button className="sendButton" onClick={() => void handleSend()} disabled={agents.length === 0 || !input.trim()} aria-label="Send message">
                             <span className="sendButtonIcon">↑</span>
@@ -2826,7 +2856,24 @@ export default function Page() {
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
         .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; word-break: break-word; }
+        .chatHistoryMetaRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         .chatHistoryMeta { font-size: 11px; color: var(--muted); }
+        .chatStatusBadge {
+          display: inline-flex;
+          align-items: center;
+          max-width: 96px;
+          padding: 1px 6px;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 700;
+          line-height: 1.4;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .chatStatusBadge.running { color: var(--accent); background: var(--accent-soft); }
+        .chatStatusBadge.done { color: var(--success); background: rgba(134, 239, 172, 0.12); }
+        .chatStatusBadge.error { color: var(--danger); background: rgba(239, 68, 68, 0.12); }
         .chatHistoryRow {
           display: flex;
           align-items: center;

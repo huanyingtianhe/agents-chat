@@ -4,8 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
+import { remark } from 'remark';
+import remarkRehype from 'remark-rehype';
+import rehypeStringify from 'rehype-stringify';
 
 /* ────────── Helpers ────────── */
+
+// Convert markdown string to HTML string (for live-edit mode)
+const mdProcessor = remark().use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true }).use(rehypeStringify, { allowDangerousHtml: true });
+function markdownToHtml(md: string): string {
+  return String(mdProcessor.processSync(md));
+}
 
 // Detect file paths ending in .html/.htm in text and wrap them with report links
 const HTML_FILE_RE = /(?:[A-Za-z]:\\|\/|~\/)[^\s"'<>*?|]+\.html?/gi;
@@ -78,6 +89,63 @@ type Agent = {
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
+
+type FileTreeNode = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children: FileTreeNode[];
+};
+
+function getFileIcon(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  const icons: Record<string, string> = {
+    md: '📝', ts: '🟦', tsx: '⚛️', js: '🟨', jsx: '⚛️',
+    json: '📋', yaml: '⚙️', yml: '⚙️', toml: '⚙️',
+    py: '🐍', rs: '🦀', go: '🔵', java: '☕',
+    css: '🎨', html: '🌐', htm: '🌐', xml: '📄',
+    sh: '🖥️', bash: '🖥️', ps1: '🖥️', bat: '🖥️', cmd: '🖥️',
+    txt: '📄', csv: '📊', env: '🔒', gitignore: '👁️',
+  };
+  return icons[ext] || '📄';
+}
+
+function isMarkdownFile(filePath: string): boolean {
+  return filePath.toLowerCase().endsWith('.md');
+}
+
+function buildFileTree(files: { path: string; name: string }[]): FileTreeNode[] {
+  const root: FileTreeNode[] = [];
+  for (const file of files) {
+    const parts = file.path.split('/');
+    let current = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const dirPath = parts.slice(0, i + 1).join('/');
+      if (isLast) {
+        current.push({ name: part, path: file.path, isDir: false, children: [] });
+      } else {
+        let dir = current.find(n => n.isDir && n.name === part);
+        if (!dir) {
+          dir = { name: part, path: dirPath, isDir: true, children: [] };
+          current.push(dir);
+        }
+        current = dir.children;
+      }
+    }
+  }
+  // Sort: dirs first, then files, alphabetically
+  const sortTree = (nodes: FileTreeNode[]) => {
+    nodes.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const n of nodes) if (n.isDir) sortTree(n.children);
+  };
+  sortTree(root);
+  return root;
+}
 
 type ContentPart =
   | { kind: 'thinking'; text: string }
@@ -442,6 +510,30 @@ export default function Page() {
   const [relayAgentNode, setRelayAgentNode] = useState('');
   const [newRelayAgentForm, setNewRelayAgentForm] = useState({ id: '', name: '', cwd: defaultCwd });
 
+  // Markdown files panel
+  const [leftSidebarTab, setLeftSidebarTab] = useState<'chats' | 'files'>('chats');
+  const [mdFilesList, setMdFilesList] = useState<{ path: string; name: string; mtime: string }[]>([]);
+  const [mdFilesLoading, setMdFilesLoading] = useState(false);
+  const [mdSelectedAgentId, setMdSelectedAgentId] = useState<string | null>(null);
+  const [mdSelectedFile, setMdSelectedFile] = useState<string | null>(null);
+  const [mdFileContent, setMdFileContent] = useState('');
+  const [mdEditContent, setMdEditContent] = useState('');
+  const [mdFileMtime, setMdFileMtime] = useState<string | null>(null);
+  const [mdSaving, setMdSaving] = useState(false);
+  const [mdDirty, setMdDirty] = useState(false);
+  const [mdEditorOpen, setMdEditorOpen] = useState(false);
+  const [mdEditorMode, setMdEditorMode] = useState<'split' | 'live'>('live');
+  const [mdLiveHtml, setMdLiveHtml] = useState('');
+  const [mdExpandedDirs, setMdExpandedDirs] = useState<Set<string>>(new Set());
+  const [mdDiffOnly, setMdDiffOnly] = useState(false);
+  const mdLiveRef = useRef<HTMLDivElement>(null);
+  const turndownRef = useRef<TurndownService | null>(null);
+  if (!turndownRef.current) {
+    const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', emDelimiter: '*' });
+    td.use(gfm);
+    turndownRef.current = td;
+  }
+
   // Agent settings
   const [showAgentSettings, setShowAgentSettings] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
@@ -493,7 +585,18 @@ export default function Page() {
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
   const isCurrentChatSending = useMemo(() => Object.values(sessionRunsRef.current).some((run) => run.chatId === currentChatId), [currentChatId, runVersion]);
 
-  const getChatSidebarStatus = useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
+  const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
+
+  function toggleMdDir(dirPath: string) {
+    setMdExpandedDirs(prev => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+  }
+
+  const getChatSidebarStatus= useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
     const hasActiveRun = Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId);
     const chatMessages = chatMessagesRef.current[chatId] || (chatId === currentChatId ? messages : []);
     const pendingAgent = [...chatMessages].reverse().find((m) => m.type === 'agent' && m.pending);
@@ -748,6 +851,109 @@ export default function Page() {
     } finally {
       setNodesLoading(false);
     }
+  }
+
+  /* ── Markdown Files helpers ── */
+
+  const [mdFilesError, setMdFilesError] = useState<string | null>(null);
+
+  async function loadMdFiles(agentId: string, diff = false) {
+    setMdFilesLoading(true);
+    setMdFilesList([]);
+    setMdFilesError(null);
+    setMdExpandedDirs(new Set());
+    try {
+      const url = `/api/markdown?agentId=${encodeURIComponent(agentId)}${diff ? '&diff=true' : ''}`;
+      const res = await fetch(url);
+      if (res.status === 403) {
+        setMdFilesError('unauthorized');
+        return;
+      }
+      const data = await res.json();
+      if (data.files) setMdFilesList(data.files);
+    } catch (err) {
+      console.error('Failed to load files', err);
+    } finally {
+      setMdFilesLoading(false);
+    }
+  }
+
+  async function openMdFile(filePath: string) {
+    if (!mdSelectedAgentId) return;
+    if (mdDirty) {
+      if (!confirm('You have unsaved changes. Discard?')) return;
+    }
+    try {
+      const res = await fetch(`/api/markdown?agentId=${encodeURIComponent(mdSelectedAgentId)}&path=${encodeURIComponent(filePath)}`);
+      const data = await res.json();
+      if (data.content !== undefined) {
+        setMdSelectedFile(filePath);
+        setMdFileContent(data.content);
+        setMdEditContent(data.content);
+        setMdFileMtime(data.mtime || null);
+        setMdDirty(false);
+        setMdLiveHtml(markdownToHtml(data.content));
+        setMdEditorOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to read markdown file', err);
+    }
+  }
+
+  // Sync live editor HTML back to markdown
+  function syncLiveToMarkdown(): string {
+    if (mdEditorMode === 'live' && mdLiveRef.current) {
+      const html = mdLiveRef.current.innerHTML;
+      const md = turndownRef.current!.turndown(html);
+      setMdEditContent(md);
+      setMdDirty(md !== mdFileContent);
+      return md;
+    }
+    return mdEditContent;
+  }
+
+  async function saveMdFile() {
+    if (!mdSelectedAgentId || !mdSelectedFile) return;
+    const content = syncLiveToMarkdown();
+    setMdSaving(true);
+    try {
+      const res = await fetch('/api/markdown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: mdSelectedAgentId,
+          path: mdSelectedFile,
+          content,
+          mtime: mdFileMtime,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setMdFileContent(content);
+        setMdFileMtime(data.mtime || null);
+        setMdDirty(false);
+        // Refresh file list to update mtimes
+        loadMdFiles(mdSelectedAgentId, mdDiffOnly);
+      } else if (data.error === 'conflict') {
+        alert('File was modified externally. Please close and reopen the file.');
+      } else {
+        alert(`Save failed: ${data.error || 'unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Failed to save markdown file', err);
+      alert('Save failed — see console for details.');
+    } finally {
+      setMdSaving(false);
+    }
+  }
+
+  function closeMdEditor() {
+    setMdEditorOpen(false);
+    setMdSelectedFile(null);
+    setMdFileContent('');
+    setMdEditContent('');
+    setMdFileMtime(null);
+    setMdDirty(false);
   }
 
   async function handleAddNode() {
@@ -1877,14 +2083,18 @@ export default function Page() {
       {mobilePanelOpen ? <div className="mobilePanelBackdrop" onClick={() => { setShowChatsPanel(false); setShowAgentsPanel(false); setShowNodesPanel(false); }} /> : null}
 
       <div className={`chatLayout ${sidebarCollapsed ? 'sidebarCollapsed' : ''} ${(showAgentsPanel || showNodesPanel) ? 'agentsSidebarOpen' : ''}`}>
-        {/* ── Left sidebar: chats ── */}
+        {/* ── Left sidebar: chats + files ── */}
         <aside className={`participantsSidebar ${showChatsPanel ? 'mobilePanelVisible' : ''}`}>
           <div className="participantsHeader">
-            <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed((p) => !p)}>
-              Chats
+            <div className="leftSidebarTabs">
+              <button className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => setLeftSidebarTab('chats')}>💬 Chats</button>
+              <button className={`leftSidebarTab ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('files'); }}>📄 Files</button>
+            </div>
+            <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed((p) => !p)} style={{ cursor: 'pointer', fontSize: '12px', opacity: 0.6 }}>
+              {sidebarCollapsed ? '→' : '←'}
             </span>
           </div>
-          {!sidebarCollapsed && (
+          {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
               <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat</button>
               {(() => {
@@ -1960,10 +2170,178 @@ export default function Page() {
               })()}
             </div>
           )}
+          {!sidebarCollapsed && leftSidebarTab === 'files' && (
+            <div className="mdFilesTab">
+              <div style={{ padding: '4px 0 8px' }}>
+                <select
+                  className="remoteAgentSelect"
+                  value={mdSelectedAgentId || ''}
+                  onChange={(e) => {
+                    const id = e.target.value || null;
+                    setMdSelectedAgentId(id);
+                    if (id) loadMdFiles(id, mdDiffOnly);
+                    else setMdFilesList([]);
+                  }}
+                >
+                  <option value="">Select agent…</option>
+                  {agents.filter(a => a.cwd && !a.relay && a.id !== SCHEDULER_AGENT_ID).map(a => (
+                    <option key={a.id} value={a.id}>{a.canTalk === false ? '🔒 ' : ''}{a.name || a.id}</option>
+                  ))}
+                </select>
+                <button
+                  className={`mdDiffToggle ${mdDiffOnly ? 'active' : ''}`}
+                  title={mdDiffOnly ? 'Showing changed files (git diff)' : 'Show only changed files'}
+                  onClick={() => {
+                    const next = !mdDiffOnly;
+                    setMdDiffOnly(next);
+                    if (mdSelectedAgentId) loadMdFiles(mdSelectedAgentId, next);
+                  }}
+                >
+                  {mdDiffOnly ? '🔀 Changed' : '🔀 Diff'}
+                </button>
+              </div>
+              <div className="mdFilesList">
+                {mdFilesLoading && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>Loading…</div>}
+                {!mdFilesLoading && mdFilesError === 'unauthorized' && (
+                  <div className="muted" style={{ padding: 16, textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, marginBottom: 8 }}>🔒</div>
+                    <div>Not authorized</div>
+                    <div style={{ fontSize: 11, marginTop: 4 }}>You don&apos;t have access to this agent&apos;s files</div>
+                  </div>
+                )}
+                {!mdFilesLoading && !mdFilesError && mdSelectedAgentId && mdFilesList.length === 0 && (
+                  <div className="muted" style={{ padding: 16, textAlign: 'center' }}>{mdDiffOnly ? 'No changed files' : 'No files found'}</div>
+                )}
+                {!mdFilesLoading && mdFileTree.length > 0 && (
+                  <div className="mdTree">
+                    {(function renderNodes(nodes: FileTreeNode[], depth: number): React.ReactNode[] {
+                      return nodes.map(node => {
+                        if (node.isDir) {
+                          const expanded = mdExpandedDirs.has(node.path);
+                          return (
+                            <div key={node.path}>
+                              <button
+                                className="mdTreeDir"
+                                style={{ paddingLeft: `${depth * 14}px` }}
+                                onClick={() => toggleMdDir(node.path)}
+                              >
+                                <span className="mdTreeArrow">{expanded ? '▾' : '▸'}</span>
+                                <span className="mdTreeDirIcon">📁</span>
+                                <span className="mdTreeLabel">{node.name}</span>
+                              </button>
+                              {expanded && node.children.length > 0 && renderNodes(node.children, depth + 1)}
+                            </div>
+                          );
+                        }
+                        return (
+                          <button
+                            key={node.path}
+                            className={`mdTreeFile ${mdSelectedFile === node.path ? 'active' : ''}`}
+                            style={{ paddingLeft: `${depth * 14}px` }}
+                            title={node.path}
+                            onClick={() => openMdFile(node.path)}
+                          >
+                            <span className="mdTreeFileIcon">{getFileIcon(node.name)}</span>
+                            <span className="mdTreeLabel">{node.name}</span>
+                          </button>
+                        );
+                      });
+                    })(mdFileTree, 0)}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* ── Main chat area ── */}
         <div className="chatMain">
+          {mdEditorOpen && mdSelectedFile ? (
+            /* ── Inline File Editor ── */
+            <div className="mdEditorInline">
+              <div className="mdEditorToolbar">
+                <div className="mdEditorToolbarLeft">
+                  <span className="mdEditorFilePath">{getFileIcon(mdSelectedFile)} {mdSelectedFile}</span>
+                  {mdDirty && <span className="mdDirtyBadge">● Unsaved</span>}
+                </div>
+                <div className="mdEditorToolbarRight">
+                  {isMarkdownFile(mdSelectedFile) && (
+                    <div className="mdModeToggle">
+                      <button className={`mdModeBtn ${mdEditorMode === 'split' ? 'active' : ''}`} onClick={() => {
+                        if (mdEditorMode === 'live') {
+                          const md = syncLiveToMarkdown();
+                          setMdEditContent(md);
+                        }
+                        setMdEditorMode('split');
+                      }}>Split</button>
+                      <button className={`mdModeBtn ${mdEditorMode === 'live' ? 'active' : ''}`} onClick={() => {
+                        setMdLiveHtml(markdownToHtml(mdEditContent));
+                        setMdEditorMode('live');
+                      }}>Live Edit</button>
+                    </div>
+                  )}
+                  <button className="mdEditorBtn" onClick={() => void saveMdFile()} disabled={mdSaving || !mdDirty}>
+                    {mdSaving ? 'Saving…' : '💾 Save'}
+                  </button>
+                  <button className="mdEditorBtn secondary" onClick={() => {
+                    if (isMarkdownFile(mdSelectedFile) && mdEditorMode === 'live') {
+                      const md = syncLiveToMarkdown();
+                      if (md !== mdFileContent) { if (!confirm('Discard changes?')) return; }
+                    } else if (mdDirty) { if (!confirm('Discard changes?')) return; }
+                    closeMdEditor();
+                  }}>
+                    ✕ Close
+                  </button>
+                </div>
+              </div>
+              {isMarkdownFile(mdSelectedFile) ? (
+                mdEditorMode === 'split' ? (
+                  <div className="mdEditorSplit">
+                    <div className="mdEditorPane mdEditorEditPane">
+                      <textarea
+                        className="mdEditorTextarea"
+                        value={mdEditContent}
+                        onChange={(e) => { setMdEditContent(e.target.value); setMdDirty(e.target.value !== mdFileContent); }}
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div className="mdEditorPane mdEditorPreviewPane">
+                      <div className="markdownBody">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{mdEditContent}</ReactMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mdEditorLive">
+                    <div
+                      ref={mdLiveRef}
+                      className="mdLiveEditable markdownBody"
+                      contentEditable
+                      suppressContentEditableWarning
+                      dangerouslySetInnerHTML={{ __html: mdLiveHtml }}
+                      onInput={() => {
+                        if (mdLiveRef.current) {
+                          const html = mdLiveRef.current.innerHTML;
+                          const md = turndownRef.current!.turndown(html);
+                          setMdDirty(md !== mdFileContent);
+                        }
+                      }}
+                    />
+                  </div>
+                )
+              ) : (
+                <div className="mdEditorSimple">
+                  <textarea
+                    className="mdEditorTextarea"
+                    value={mdEditContent}
+                    onChange={(e) => { setMdEditContent(e.target.value); setMdDirty(e.target.value !== mdFileContent); }}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+          <>
           <section className="chatContainer" ref={chatContainerRef}>
             {visibleMessages.map((message) => (
               <div key={message.id} className={`message ${message.type} ${message.summary ? 'summaryCard' : ''}`}>
@@ -2186,6 +2564,8 @@ export default function Page() {
               </div>
             </div>
           </section>
+          </>
+          )}
         </div>
 
         {/* ── Right sidebar: agents ── */}
@@ -2302,7 +2682,9 @@ export default function Page() {
             )}
           </aside>
         )}
+
       </div>
+
 
       {/* ── Setup script modal ── */}
       {showSetupScript && (
@@ -2606,6 +2988,8 @@ export default function Page() {
           transition: background 220ms ease, color 220ms ease;
         }
         .header {
+          position: relative;
+          z-index: 10;
           display: flex;
           justify-content: space-between;
           align-items: center;
@@ -2688,6 +3072,7 @@ export default function Page() {
           position: absolute;
           top: calc(100% + 10px);
           right: 0;
+          z-index: 100;
           min-width: 220px;
           padding: 8px;
           border-radius: 16px;
@@ -2792,6 +3177,8 @@ export default function Page() {
           min-height: 0;
           overflow-y: auto;
           overflow-x: hidden;
+          display: flex;
+          flex-direction: column;
         }
         .participantsHeader {
           color: var(--text);
@@ -2810,6 +3197,108 @@ export default function Page() {
         }
         .participantsHeaderLabel:hover {
           color: var(--accent);
+        }
+        .leftSidebarTabs {
+          display: flex;
+          gap: 2px;
+          flex: 1;
+        }
+        .leftSidebarTab {
+          flex: 1;
+          padding: 6px 8px;
+          border: none;
+          background: transparent;
+          color: var(--text-soft);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          border-radius: 8px;
+          transition: all 0.15s ease;
+        }
+        .leftSidebarTab:hover {
+          background: var(--accent-soft);
+          color: var(--text);
+        }
+        .leftSidebarTab.active {
+          background: var(--accent-soft);
+          color: var(--accent);
+        }
+        .mdFilesTab {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-height: 0;
+          flex: 1;
+        }
+        .mdFilesTab .remoteAgentSelect {
+          font-size: 12px;
+          padding: 8px 10px;
+        }
+        .mdFilesList {
+          overflow-y: auto;
+          min-height: 0;
+        }
+        .mdTree {
+          font-size: 12px;
+        }
+        .mdTreeDir, .mdTreeFile {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          width: 100%;
+          padding: 4px 8px;
+          border: none;
+          background: transparent;
+          color: var(--text);
+          font-size: 12px;
+          cursor: pointer;
+          border-radius: 6px;
+          text-align: left;
+          white-space: nowrap;
+        }
+        .mdTreeLabel {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          min-width: 0;
+        }
+        .mdTreeDir:hover, .mdTreeFile:hover {
+          background: var(--accent-soft);
+        }
+        .mdTreeFile.active {
+          background: var(--accent-soft);
+          color: var(--accent);
+        }
+        .mdTreeArrow {
+          font-size: 14px;
+          width: 16px;
+          flex-shrink: 0;
+          color: var(--text-soft);
+        }
+        .mdDiffToggle {
+          margin-top: 4px;
+          padding: 3px 8px;
+          font-size: 12px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: transparent;
+          color: var(--text-soft);
+          cursor: pointer;
+          width: 100%;
+          text-align: center;
+        }
+        .mdDiffToggle:hover { background: var(--hover-bg); }
+        .mdDiffToggle.active {
+          background: var(--accent);
+          color: #fff;
+          border-color: var(--accent);
+        }
+        .mdTreeDirIcon, .mdTreeFileIcon {
+          font-size: 12px;
+          flex-shrink: 0;
+        }
+        .mdTreeLabel {
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .participantsList {
           display: grid;
@@ -2972,8 +3461,10 @@ export default function Page() {
           background: var(--panel-bg);
           backdrop-filter: blur(16px);
           min-height: 0;
-          overflow-y: auto;
+          overflow: hidden;
           padding: 0;
+          display: flex;
+          flex-direction: column;
         }
         .agentsSidebarHeader {
           display: flex;
@@ -3006,6 +3497,9 @@ export default function Page() {
         }
         .agentsSidebarSection {
           padding: 4px 12px 12px;
+          flex: 1;
+          overflow-y: auto;
+          min-height: 0;
         }
         .agentListItem {
           display: flex;
@@ -3696,6 +4190,149 @@ export default function Page() {
           font-size: 13px;
         }
         .agentSettingsModal { width: min(580px, 100%); }
+        /* ── Inline Markdown Editor ── */
+        .mdEditorInline {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          overflow: hidden;
+        }
+        .mdEditorToolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px 16px;
+          border-bottom: 1px solid var(--border);
+          background: var(--header-bg);
+          backdrop-filter: blur(18px);
+          flex-shrink: 0;
+        }
+        .mdEditorToolbarLeft {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+        .mdEditorFilePath {
+          font-size: 14px;
+          font-weight: 600;
+          color: var(--text);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .mdEditorToolbarRight {
+          display: flex;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+        .mdEditorBtn {
+          padding: 4px 12px;
+          border-radius: 6px;
+          border: 1px solid var(--border);
+          background: var(--accent);
+          color: #fff;
+          font-size: 13px;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .mdEditorBtn:hover:not(:disabled) { opacity: 0.85; }
+        .mdEditorBtn:disabled { opacity: 0.4; cursor: default; }
+        .mdEditorBtn.secondary {
+          background: transparent;
+          color: var(--text-soft);
+          border-color: var(--border);
+        }
+        .mdEditorBtn.secondary:hover:not(:disabled) { background: var(--hover-bg); }
+        .mdEditorSplit {
+          flex: 1;
+          display: flex;
+          min-height: 0;
+          overflow: hidden;
+        }
+        .mdEditorPane {
+          flex: 1;
+          min-width: 0;
+          overflow-y: auto;
+        }
+        .mdEditorEditPane {
+          border-right: 1px solid var(--border);
+        }
+        .mdEditorTextarea {
+          width: 100%;
+          height: 100%;
+          padding: 16px;
+          background: var(--input-bg);
+          border: none;
+          color: var(--text);
+          font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+          font-size: 13px;
+          line-height: 1.6;
+          resize: none;
+          outline: none;
+          tab-size: 2;
+        }
+        .mdEditorPreviewPane {
+          padding: 16px 24px;
+        }
+        .mdDirtyBadge {
+          font-size: 12px;
+          color: #f0a020;
+          white-space: nowrap;
+        }
+        .mdModeToggle {
+          display: flex;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          overflow: hidden;
+        }
+        .mdModeBtn {
+          padding: 3px 10px;
+          font-size: 12px;
+          border: none;
+          background: transparent;
+          color: var(--text-soft);
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .mdModeBtn.active {
+          background: var(--accent);
+          color: #fff;
+        }
+        .mdModeBtn:hover:not(.active) { background: var(--hover-bg); }
+        .mdEditorLive {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+        }
+        .mdEditorSimple {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+        }
+        .mdEditorSimple .mdEditorTextarea {
+          flex: 1;
+          border: none;
+          border-radius: 0;
+        }
+        .mdLiveEditable {
+          min-height: 100%;
+          padding: 20px 32px;
+          outline: none;
+          cursor: text;
+        }
+        .mdLiveEditable:focus {
+          box-shadow: inset 0 0 0 2px var(--accent);
+          border-radius: 4px;
+        }
+        .mdFileItem {
+          cursor: pointer;
+        }
+        .mdFileIcon {
+          font-size: 14px !important;
+          min-width: 28px !important;
+          min-height: 28px !important;
+        }
         .fieldHint { font-size: 12px; color: var(--muted); margin-top: 4px; }
         .remoteAgentSelect {
           width: 100%;

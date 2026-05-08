@@ -9,6 +9,7 @@
     "start:prod": "next build && next start --port 3010"
   },
   "dependencies": {
+    "@types/turndown": "^5.0.6",
     "better-sqlite3": "^12.9.0",
     "hyco-ws": "^1.0.5",
     "next": "16.2.3",
@@ -16,7 +17,12 @@
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "rehype-stringify": "^10.0.1",
+    "remark": "^15.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-rehype": "^11.1.2",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

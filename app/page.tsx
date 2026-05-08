@@ -2086,13 +2086,25 @@ export default function Page() {
         {/* ── Left sidebar: chats + files ── */}
         <aside className={`participantsSidebar ${showChatsPanel ? 'mobilePanelVisible' : ''}`}>
           <div className="participantsHeader">
-            <div className="leftSidebarTabs">
-              <button className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => setLeftSidebarTab('chats')}>💬 Chats</button>
-              <button className={`leftSidebarTab ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('files'); }}>📄 Files</button>
-            </div>
-            <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed((p) => !p)} style={{ cursor: 'pointer', fontSize: '12px', opacity: 0.6 }}>
-              {sidebarCollapsed ? '→' : '←'}
-            </span>
+            {sidebarCollapsed ? (
+              <button
+                className="sidebarExpandBtn"
+                onClick={() => setSidebarCollapsed(false)}
+                title="Expand sidebar"
+              >
+                ☰
+              </button>
+            ) : (
+              <>
+                <div className="leftSidebarTabs">
+                  <button className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => setLeftSidebarTab('chats')}>💬 Chats</button>
+                  <button className={`leftSidebarTab ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('files'); }}>📄 Files</button>
+                </div>
+                <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed(true)} style={{ cursor: 'pointer', fontSize: '14px', opacity: 0.6 }} title="Collapse sidebar">
+                  ◀
+                </span>
+              </>
+            )}
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
@@ -3188,6 +3200,21 @@ export default function Page() {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+        .sidebarExpandBtn {
+          width: 100%;
+          padding: 8px;
+          border: none;
+          background: transparent;
+          color: var(--text);
+          font-size: 20px;
+          cursor: pointer;
+          border-radius: 8px;
+          transition: background 160ms ease;
+        }
+        .sidebarExpandBtn:hover {
+          background: var(--accent-soft);
+          color: var(--accent);
         }
         .participantsHeaderLabel {
           cursor: pointer;

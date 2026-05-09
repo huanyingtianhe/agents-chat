@@ -485,6 +485,7 @@ export default function Page() {
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
   const [shareDialog, setShareDialog] = useState<ShareDialog | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -817,6 +818,29 @@ export default function Page() {
       setShareDialog((prev) => prev ? { ...prev, copied: true, detail: 'Copied to clipboard.' } : prev);
     } catch {
       setShareDialog((prev) => prev ? { ...prev, copied: false, detail: 'Could not copy automatically. Select the link and copy it manually.' } : prev);
+    }
+  }
+
+  function getMessageCopyText(message: ChatMessage): string {
+    if (message.parts && message.parts.length > 0) {
+      return message.parts
+        .filter((part) => part.kind === 'text' || part.kind === 'thinking')
+        .map((part) => part.text)
+        .join('') || message.content || '';
+    }
+    return message.content || '';
+  }
+
+  async function copyMessageToClipboard(message: ChatMessage) {
+    const text = getMessageCopyText(message);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((current) => current === message.id ? null : current);
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to copy message', err);
     }
   }
 
@@ -2357,6 +2381,15 @@ export default function Page() {
           <section className="chatContainer" ref={chatContainerRef}>
             {visibleMessages.map((message) => (
               <div key={message.id} className={`message ${message.type} ${message.summary ? 'summaryCard' : ''}`}>
+                <button
+                  type="button"
+                  className="messageCopyButton"
+                  aria-label="Copy message"
+                  title="Copy message"
+                  onClick={() => void copyMessageToClipboard(message)}
+                >
+                  {copiedMessageId === message.id ? 'Copied' : 'Copy'}
+                </button>
                 {message.type !== 'user' && (
                   <div className="messageHeader">
                     <span className="agentName">{message.type === 'system' ? 'System' : (agents.find((a) => a.id === message.agentId)?.name || message.agentId || 'agent')}</span>
@@ -3758,6 +3791,33 @@ export default function Page() {
           line-height: 1.58;
           border: 1px solid var(--border);
           box-shadow: 0 14px 30px rgba(0,0,0,0.08);
+          position: relative;
+        }
+        .messageCopyButton {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          border: 1px solid var(--border);
+          background: rgba(15, 23, 42, 0.72);
+          color: var(--text-soft);
+          border-radius: 999px;
+          padding: 3px 8px;
+          font-size: 10px;
+          font-weight: 700;
+          cursor: pointer;
+          opacity: 0;
+          transform: translateY(-2px);
+          transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+          z-index: 1;
+        }
+        .message:hover .messageCopyButton,
+        .message:focus-within .messageCopyButton {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        .messageCopyButton:hover {
+          color: var(--accent);
+          border-color: var(--border-strong);
         }
         .message.user {
           align-self: flex-end;

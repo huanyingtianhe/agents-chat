@@ -18,7 +18,6 @@ const SKIP_DIRS = new Set([
 ]);
 
 const MAX_DEPTH = 8;
-const MAX_FILES = 1000;
 
 // Binary/non-text extensions to exclude from file listing
 const SKIP_EXTENSIONS = new Set([
@@ -62,7 +61,7 @@ async function collectFiles(
   depth: number,
   result: { path: string; name: string; mtime: string }[],
 ): Promise<void> {
-  if (depth > MAX_DEPTH || result.length >= MAX_FILES) return;
+  if (depth > MAX_DEPTH) return;
 
   let entries;
   try {
@@ -72,8 +71,6 @@ async function collectFiles(
   }
 
   for (const entry of entries) {
-    if (result.length >= MAX_FILES) break;
-
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       await collectFiles(path.join(dir, entry.name), baseCwd, depth + 1, result);

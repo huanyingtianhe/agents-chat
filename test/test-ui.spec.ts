@@ -75,6 +75,42 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
+  test('should copy chat message content from message copy button', async ({ page }) => {
+    await page.evaluate(async () => {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat: {
+            id: 'copy-message-chat',
+            name: 'Copy message chat',
+            ts: Date.now(),
+            messages: [
+              { id: 'copy-user', type: 'user', content: 'copy this user message', ts: Date.now() },
+              { id: 'copy-agent', type: 'agent', agentId: 'alpha', content: 'copy this **agent** message', ts: Date.now() + 1 },
+            ],
+            agentSessions: {},
+          },
+        }),
+      });
+    });
+    await page.click('button:has-text("Copy message chat")');
+
+    let copiedText = '';
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (text: string) => { (window as any).__copiedText = text; } },
+      });
+    });
+
+    const agentMessage = page.locator('.message.agent', { hasText: 'copy this agent message' });
+    await agentMessage.locator('button[aria-label="Copy message"]').click();
+    copiedText = await page.evaluate(() => (window as any).__copiedText || '');
+    expect(copiedText).toBe('copy this **agent** message');
+    await expect(agentMessage.locator('button[aria-label="Copy message"]')).toContainText('Copied');
+  });
+
   test('should display agent in sidebar', async ({ page }) => {
     // Open agents panel
     await page.click('button[title="Agents"]');

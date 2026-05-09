@@ -75,7 +75,7 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
-  test('should copy chat message content from message copy button', async ({ page }) => {
+  test('should copy only answer text from the below-message copy button', async ({ page }) => {
     await page.evaluate(async () => {
       await fetch('/api/chats', {
         method: 'POST',
@@ -87,7 +87,18 @@ test.describe('Chat UI', () => {
             ts: Date.now(),
             messages: [
               { id: 'copy-user', type: 'user', content: 'copy this user message', ts: Date.now() },
-              { id: 'copy-agent', type: 'agent', agentId: 'alpha', content: 'copy this **agent** message', ts: Date.now() + 1 },
+              {
+                id: 'copy-agent',
+                type: 'agent',
+                agentId: 'alpha',
+                content: '',
+                parts: [
+                  { kind: 'thinking', text: 'do not copy thinking' },
+                  { kind: 'tool', toolName: 'terminal', args: 'do not copy args', result: 'do not copy result', done: true },
+                  { kind: 'text', text: 'copy only this answer' },
+                ],
+                ts: Date.now() + 1,
+              },
             ],
             agentSessions: {},
           },
@@ -104,11 +115,16 @@ test.describe('Chat UI', () => {
       });
     });
 
-    const agentMessage = page.locator('.message.agent', { hasText: 'copy this agent message' });
-    await agentMessage.locator('button[aria-label="Copy message"]').click();
+    const agentMessage = page.locator('.message.agent', { hasText: 'copy only this answer' });
+    const copyButton = agentMessage.locator('.messageActions button[aria-label="Copy answer"]');
+    await expect(copyButton).toBeVisible();
+    expect(await copyButton.evaluate((button) => button.parentElement?.classList.contains('messageActions'))).toBe(true);
+    await copyButton.click();
     copiedText = await page.evaluate(() => (window as any).__copiedText || '');
-    expect(copiedText).toBe('copy this **agent** message');
-    await expect(agentMessage.locator('button[aria-label="Copy message"]')).toContainText('Copied');
+    expect(copiedText).toBe('copy only this answer');
+    expect(copiedText).not.toContain('thinking');
+    expect(copiedText).not.toContain('tool');
+    await expect(copyButton).toContainText('Copied');
   });
 
   test('should display agent in sidebar', async ({ page }) => {

@@ -110,8 +110,50 @@ function getFileIcon(name: string): string {
   return icons[ext] || '📄';
 }
 
+type MdConflictState = {
+  path: string;
+  baseContent: string;
+  mineContent: string;
+  serverContent: string;
+  serverMtime: string | null;
+  mode: 'choice' | 'manual';
+};
+
+type DiffLine = {
+  type: 'same' | 'removed' | 'added' | 'changed';
+  serverLine?: string;
+  mineLine?: string;
+  key: string;
+};
+
+function buildSimpleLineDiff(serverContent: string, mineContent: string): DiffLine[] {
+  const serverLines = serverContent.split('\n');
+  const mineLines = mineContent.split('\n');
+  const max = Math.max(serverLines.length, mineLines.length);
+  const rows: DiffLine[] = [];
+  for (let i = 0; i < max; i++) {
+    const serverLine = serverLines[i];
+    const mineLine = mineLines[i];
+    if (serverLine === mineLine) {
+      rows.push({ type: 'same', serverLine, mineLine, key: `same-${i}` });
+    } else if (serverLine === undefined) {
+      rows.push({ type: 'added', mineLine, key: `added-${i}` });
+    } else if (mineLine === undefined) {
+      rows.push({ type: 'removed', serverLine, key: `removed-${i}` });
+    } else {
+      rows.push({ type: 'changed', serverLine, mineLine, key: `changed-${i}` });
+    }
+  }
+  return rows;
+}
+
 function isMarkdownFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith('.md');
+}
+
+function isHtmlFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return lower.endsWith('.html') || lower.endsWith('.htm');
 }
 
 function buildFileTree(files: { path: string; name: string }[]): FileTreeNode[] {
@@ -525,6 +567,8 @@ export default function Page() {
   const [mdEditorOpen, setMdEditorOpen] = useState(false);
   const [mdEditorMode, setMdEditorMode] = useState<'split' | 'live'>('live');
   const [mdLiveHtml, setMdLiveHtml] = useState('');
+  const [mdConflict, setMdConflict] = useState<MdConflictState | null>(null);
+  const [mdConflictResolvedContent, setMdConflictResolvedContent] = useState('');
   const [mdExpandedDirs, setMdExpandedDirs] = useState<Set<string>>(new Set());
   const [mdDiffOnly, setMdDiffOnly] = useState(false);
   const mdLiveRef = useRef<HTMLDivElement>(null);
@@ -824,7 +868,7 @@ export default function Page() {
   function getMessageCopyText(message: ChatMessage): string {
     if (message.parts && message.parts.length > 0) {
       return message.parts
-        .filter((part) => part.kind === 'text' || part.kind === 'thinking')
+        .filter((part) => part.kind === 'text')
         .map((part) => part.text)
         .join('') || message.content || '';
     }
@@ -916,7 +960,7 @@ export default function Page() {
         setMdEditContent(data.content);
         setMdFileMtime(data.mtime || null);
         setMdDirty(false);
-        setMdLiveHtml(markdownToHtml(data.content));
+        setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
         setMdEditorOpen(true);
       }
     } catch (err) {
@@ -936,9 +980,10 @@ export default function Page() {
     return mdEditContent;
   }
 
-  async function saveMdFile() {
+  async function saveMdFile(contentOverride?: string, mtimeOverride?: string | null) {
     if (!mdSelectedAgentId || !mdSelectedFile) return;
-    const content = syncLiveToMarkdown();
+    const content = contentOverride ?? syncLiveToMarkdown();
+    const mtimeToSave = mtimeOverride !== undefined ? mtimeOverride : mdFileMtime;
     setMdSaving(true);
     try {
       const res = await fetch('/api/markdown', {
@@ -948,18 +993,33 @@ export default function Page() {
           agentId: mdSelectedAgentId,
           path: mdSelectedFile,
           content,
-          mtime: mdFileMtime,
+          mtime: mtimeToSave,
         }),
       });
       const data = await res.json();
       if (data.ok) {
         setMdFileContent(content);
+        setMdEditContent(content);
         setMdFileMtime(data.mtime || null);
         setMdDirty(false);
+        setMdConflict(null);
+        setMdConflictResolvedContent('');
+        if (mdSelectedFile && isMarkdownFile(mdSelectedFile)) setMdLiveHtml(markdownToHtml(content));
+        else setMdLiveHtml('');
         // Refresh file list to update mtimes
         loadMdFiles(mdSelectedAgentId, mdDiffOnly);
       } else if (data.error === 'conflict') {
-        alert('File was modified externally. Please close and reopen the file.');
+        const serverContent = typeof data.serverContent === 'string' ? data.serverContent : mdFileContent;
+        const serverMtime = typeof data.serverMtime === 'string' ? data.serverMtime : null;
+        setMdConflict({
+          path: mdSelectedFile,
+          baseContent: mdFileContent,
+          mineContent: content,
+          serverContent,
+          serverMtime,
+          mode: 'choice',
+        });
+        setMdConflictResolvedContent(content);
       } else {
         alert(`Save failed: ${data.error || 'unknown error'}`);
       }
@@ -971,6 +1031,46 @@ export default function Page() {
     }
   }
 
+  function applyMdContent(content: string, mtime: string | null, dirty: boolean) {
+    setMdFileContent(content);
+    setMdEditContent(content);
+    setMdFileMtime(mtime);
+    setMdDirty(dirty);
+    if (mdSelectedFile && isMarkdownFile(mdSelectedFile)) setMdLiveHtml(markdownToHtml(content));
+    else setMdLiveHtml('');
+  }
+
+  function resolveMdConflictByReload() {
+    if (!mdConflict) return;
+    applyMdContent(mdConflict.serverContent, mdConflict.serverMtime, false);
+    setMdConflict(null);
+    setMdConflictResolvedContent('');
+    if (mdSelectedAgentId) loadMdFiles(mdSelectedAgentId, mdDiffOnly);
+  }
+
+  function beginManualMdConflictResolution() {
+    if (!mdConflict) return;
+    setMdConflictResolvedContent(mdConflict.mineContent);
+    setMdConflict({ ...mdConflict, mode: 'manual' });
+  }
+
+  function keepServerVersion() {
+    if (!mdConflict) return;
+    setMdConflictResolvedContent(mdConflict.serverContent);
+  }
+
+  function keepMineVersion() {
+    if (!mdConflict) return;
+    setMdConflictResolvedContent(mdConflict.mineContent);
+  }
+
+  async function handleSaveManualMdConflict() {
+    if (!mdConflict) return;
+    setMdEditContent(mdConflictResolvedContent);
+    setMdDirty(mdConflictResolvedContent !== mdFileContent);
+    await saveMdFile(mdConflictResolvedContent, mdConflict.serverMtime);
+  }
+
   function closeMdEditor() {
     setMdEditorOpen(false);
     setMdSelectedFile(null);
@@ -978,6 +1078,9 @@ export default function Page() {
     setMdEditContent('');
     setMdFileMtime(null);
     setMdDirty(false);
+    setMdLiveHtml('');
+    setMdConflict(null);
+    setMdConflictResolvedContent('');
   }
 
   async function handleAddNode() {
@@ -2295,6 +2398,73 @@ export default function Page() {
           {mdEditorOpen && mdSelectedFile ? (
             /* ── Inline File Editor ── */
             <div className="mdEditorInline">
+              {mdConflict && mdConflict.mode === 'choice' && (
+                <div className="mdConflictBackdrop" role="dialog" aria-modal="true" aria-labelledby="md-conflict-title">
+                  <div className="mdConflictDialog">
+                    <h2 id="md-conflict-title">File changed on disk</h2>
+                    <p>
+                      Someone else saved <strong>{mdConflict.path}</strong> after you opened it. Choose how to resolve the conflict.
+                    </p>
+                    <div className="mdConflictActions">
+                      <button className="mdEditorBtn danger" onClick={resolveMdConflictByReload}>
+                        Reload
+                      </button>
+                      <button className="mdEditorBtn" onClick={beginManualMdConflictResolution}>
+                        Handle conflict manually
+                      </button>
+                      <button className="mdEditorBtn secondary" onClick={() => setMdConflict(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="mdConflictNote">Reload will discard your current unsaved changes.</p>
+                  </div>
+                </div>
+              )}
+              {mdConflict && mdConflict.mode === 'manual' && (
+                <div className="mdConflictDiffPage">
+                  <div className="mdConflictDiffHeader">
+                    <div>
+                      <h2>Resolve conflict: {mdConflict.path}</h2>
+                      <p>Review the server version and your version. Edit the resolved content, or use the quick choices to keep server / keep mine.</p>
+                    </div>
+                    <div className="mdConflictActions">
+                      <button className="mdEditorBtn secondary" onClick={keepServerVersion}>keep server</button>
+                      <button className="mdEditorBtn secondary" onClick={keepMineVersion}>keep mine</button>
+                      <button className="mdEditorBtn" onClick={() => void handleSaveManualMdConflict()} disabled={mdSaving}>
+                        {mdSaving ? 'Saving…' : 'Save resolved'}
+                      </button>
+                      <button className="mdEditorBtn secondary" onClick={() => setMdConflict({ ...mdConflict, mode: 'choice' })}>Back</button>
+                    </div>
+                  </div>
+                  <div className="mdConflictDiffGrid" aria-label="Conflict diff">
+                    <div className="mdConflictDiffColumn">
+                      <div className="mdConflictColumnTitle">Server</div>
+                      <pre>{mdConflict.serverContent}</pre>
+                    </div>
+                    <div className="mdConflictDiffColumn">
+                      <div className="mdConflictColumnTitle">Mine</div>
+                      <pre>{mdConflict.mineContent}</pre>
+                    </div>
+                  </div>
+                  <div className="mdConflictDiffRows">
+                    {buildSimpleLineDiff(mdConflict.serverContent, mdConflict.mineContent).map((line, index) => (
+                      <div key={line.key} className={`mdConflictDiffRow ${line.type}`}>
+                        <span className="mdConflictLineNo">{index + 1}</span>
+                        <code>{line.serverLine ?? ''}</code>
+                        <code>{line.mineLine ?? ''}</code>
+                      </div>
+                    ))}
+                  </div>
+                  <label className="mdConflictResolvedLabel" htmlFor="md-conflict-resolved">Resolved content</label>
+                  <textarea
+                    id="md-conflict-resolved"
+                    className="mdConflictResolvedTextarea"
+                    value={mdConflictResolvedContent}
+                    onChange={(e) => setMdConflictResolvedContent(e.target.value)}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
               <div className="mdEditorToolbar">
                 <div className="mdEditorToolbarLeft">
                   <span className="mdEditorFilePath">{getFileIcon(mdSelectedFile)} {mdSelectedFile}</span>
@@ -2316,6 +2486,7 @@ export default function Page() {
                       }}>Live Edit</button>
                     </div>
                   )}
+                  {isHtmlFile(mdSelectedFile) && <span className="mdPreviewBadge">Rendered HTML</span>}
                   <button className="mdEditorBtn" onClick={() => void saveMdFile()} disabled={mdSaving || !mdDirty}>
                     {mdSaving ? 'Saving…' : '💾 Save'}
                   </button>
@@ -2330,7 +2501,7 @@ export default function Page() {
                   </button>
                 </div>
               </div>
-              {isMarkdownFile(mdSelectedFile) ? (
+              {!mdConflict && (isMarkdownFile(mdSelectedFile) ? (
                 mdEditorMode === 'split' ? (
                   <div className="mdEditorSplit">
                     <div className="mdEditorPane mdEditorEditPane">
@@ -2365,6 +2536,15 @@ export default function Page() {
                     />
                   </div>
                 )
+              ) : isHtmlFile(mdSelectedFile) ? (
+                <div className="mdHtmlPreviewWrap">
+                  <iframe
+                    className="mdHtmlPreviewFrame"
+                    title={`Rendered preview of ${mdSelectedFile}`}
+                    sandbox=""
+                    srcDoc={mdFileContent}
+                  />
+                </div>
               ) : (
                 <div className="mdEditorSimple">
                   <textarea
@@ -2374,22 +2554,13 @@ export default function Page() {
                     spellCheck={false}
                   />
                 </div>
-              )}
+              ))}
             </div>
           ) : (
           <>
           <section className="chatContainer" ref={chatContainerRef}>
             {visibleMessages.map((message) => (
               <div key={message.id} className={`message ${message.type} ${message.summary ? 'summaryCard' : ''}`}>
-                <button
-                  type="button"
-                  className="messageCopyButton"
-                  aria-label="Copy message"
-                  title="Copy message"
-                  onClick={() => void copyMessageToClipboard(message)}
-                >
-                  {copiedMessageId === message.id ? 'Copied' : 'Copy'}
-                </button>
                 {message.type !== 'user' && (
                   <div className="messageHeader">
                     <span className="agentName">{message.type === 'system' ? 'System' : (agents.find((a) => a.id === message.agentId)?.name || message.agentId || 'agent')}</span>
@@ -2451,11 +2622,24 @@ export default function Page() {
                             </div>
                           )}
                         </div>
-                        {partsLong && !message.pending && (
-                          <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
-                            {isCollapsed ? 'Expand' : 'Collapse'}
-                          </button>
-                        )}
+                        <div className="messageActions">
+                          {partsLong && !message.pending && (
+                            <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
+                              {isCollapsed ? 'Expand' : 'Collapse'}
+                            </button>
+                          )}
+                          {message.type !== 'user' && (
+                            <button
+                              type="button"
+                              className="messageCopyButton"
+                              aria-label="Copy answer"
+                              title="Copy answer"
+                              onClick={() => void copyMessageToClipboard(message)}
+                            >
+                              {copiedMessageId === message.id ? 'Copied' : 'Copy'}
+                            </button>
+                          )}
+                        </div>
                         </>);
                       })() : (
                         <>
@@ -2468,11 +2652,24 @@ export default function Page() {
                               <span>{message.statusText || 'Generating'}</span>
                             </div>
                           )}
-                          {isLong && (
-                            <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
-                              {isCollapsed ? 'Expand' : 'Collapse'}
-                            </button>
-                          )}
+                          <div className="messageActions">
+                            {isLong && (
+                              <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
+                                {isCollapsed ? 'Expand' : 'Collapse'}
+                              </button>
+                            )}
+                            {message.type !== 'user' && (
+                              <button
+                                type="button"
+                                className="messageCopyButton"
+                                aria-label="Copy answer"
+                                title="Copy answer"
+                                onClick={() => void copyMessageToClipboard(message)}
+                              >
+                                {copiedMessageId === message.id ? 'Copied' : 'Copy'}
+                              </button>
+                            )}
+                          </div>
                         </>
                       )}
                     </>
@@ -3793,31 +3990,27 @@ export default function Page() {
           box-shadow: 0 14px 30px rgba(0,0,0,0.08);
           position: relative;
         }
+        .messageActions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 10px;
+        }
         .messageCopyButton {
-          position: absolute;
-          top: 8px;
-          right: 8px;
           border: 1px solid var(--border);
-          background: rgba(15, 23, 42, 0.72);
+          background: var(--panel-soft);
           color: var(--text-soft);
           border-radius: 999px;
-          padding: 3px 8px;
-          font-size: 10px;
+          padding: 4px 10px;
+          font-size: 11px;
           font-weight: 700;
           cursor: pointer;
-          opacity: 0;
-          transform: translateY(-2px);
-          transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-          z-index: 1;
-        }
-        .message:hover .messageCopyButton,
-        .message:focus-within .messageCopyButton {
-          opacity: 1;
-          transform: translateY(0);
+          transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
         }
         .messageCopyButton:hover {
           color: var(--accent);
           border-color: var(--border-strong);
+          background: var(--panel);
         }
         .message.user {
           align-self: flex-end;
@@ -4283,6 +4476,7 @@ export default function Page() {
           flex-direction: column;
           height: 100%;
           overflow: hidden;
+          position: relative;
         }
         .mdEditorToolbar {
           display: flex;
@@ -4331,6 +4525,153 @@ export default function Page() {
           border-color: var(--border);
         }
         .mdEditorBtn.secondary:hover:not(:disabled) { background: var(--hover-bg); }
+        .mdEditorBtn.danger {
+          background: var(--danger);
+          border-color: color-mix(in srgb, var(--danger) 70%, transparent);
+        }
+        .mdConflictBackdrop {
+          position: fixed;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          padding: 18px;
+          background: rgba(0, 0, 0, 0.52);
+          backdrop-filter: blur(6px);
+          z-index: 8;
+        }
+        .mdConflictDialog {
+          width: min(560px, 100%);
+          padding: 22px;
+          border: 1px solid var(--border);
+          border-radius: 18px;
+          background: var(--panel-strong);
+          box-shadow: var(--shadow);
+        }
+        .mdConflictDialog h2,
+        .mdConflictDiffHeader h2 {
+          margin: 0 0 10px;
+          color: var(--accent);
+        }
+        .mdConflictDialog p,
+        .mdConflictDiffHeader p {
+          margin: 0 0 14px;
+          color: var(--text-soft);
+          line-height: 1.5;
+        }
+        .mdConflictActions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .mdConflictNote {
+          margin-top: 12px !important;
+          font-size: 12px;
+          color: var(--muted) !important;
+        }
+        .mdConflictDiffPage {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          overflow: auto;
+          padding: 16px;
+          gap: 12px;
+          background: var(--input-bg);
+        }
+        .mdConflictDiffHeader {
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: flex-start;
+          padding: 14px;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--panel-bg);
+        }
+        .mdConflictDiffGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        .mdConflictDiffColumn {
+          min-width: 0;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          overflow: hidden;
+          background: var(--panel-bg);
+        }
+        .mdConflictColumnTitle {
+          padding: 8px 10px;
+          border-bottom: 1px solid var(--border);
+          color: var(--text-soft);
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+        .mdConflictDiffColumn pre {
+          margin: 0;
+          padding: 10px;
+          min-height: 120px;
+          max-height: 220px;
+          overflow: auto;
+          color: var(--text);
+          white-space: pre-wrap;
+          font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .mdConflictDiffRows {
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          overflow: hidden;
+          background: var(--panel-bg);
+        }
+        .mdConflictDiffRow {
+          display: grid;
+          grid-template-columns: 48px minmax(0, 1fr) minmax(0, 1fr);
+          border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+          font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+          font-size: 12px;
+        }
+        .mdConflictDiffRow:last-child { border-bottom: none; }
+        .mdConflictDiffRow.changed { background: rgba(245, 158, 11, 0.10); }
+        .mdConflictDiffRow.added { background: rgba(34, 197, 94, 0.10); }
+        .mdConflictDiffRow.removed { background: rgba(239, 68, 68, 0.10); }
+        .mdConflictDiffRow code,
+        .mdConflictLineNo {
+          padding: 6px 8px;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+        }
+        .mdConflictLineNo {
+          color: var(--muted);
+          border-right: 1px solid var(--border);
+          text-align: right;
+        }
+        .mdConflictDiffRow code:first-of-type { border-right: 1px solid var(--border); }
+        .mdConflictResolvedLabel {
+          color: var(--text-soft);
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+        .mdConflictResolvedTextarea {
+          min-height: 220px;
+          padding: 12px;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          resize: vertical;
+          background: var(--panel-bg);
+          color: var(--text);
+          font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+          font-size: 13px;
+          line-height: 1.6;
+          outline: none;
+        }
         .mdEditorSplit {
           flex: 1;
           display: flex;
@@ -4387,6 +4728,18 @@ export default function Page() {
           color: #fff;
         }
         .mdModeBtn:hover:not(.active) { background: var(--hover-bg); }
+        .mdPreviewBadge {
+          display: inline-flex;
+          align-items: center;
+          padding: 4px 9px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--accent-soft);
+          color: var(--accent);
+          font-size: 12px;
+          font-weight: 700;
+          white-space: nowrap;
+        }
         .mdEditorLive {
           flex: 1;
           min-height: 0;
@@ -4401,6 +4754,19 @@ export default function Page() {
           flex: 1;
           border: none;
           border-radius: 0;
+        }
+        .mdHtmlPreviewWrap {
+          flex: 1;
+          min-height: 0;
+          padding: 16px;
+          background: var(--input-bg);
+        }
+        .mdHtmlPreviewFrame {
+          width: 100%;
+          height: 100%;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: #fff;
         }
         .mdLiveEditable {
           min-height: 100%;

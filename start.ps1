@@ -5,9 +5,50 @@ param([switch]$Cloudflare)
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = $PSScriptRoot
-$AppId = "144243eb-8775-41e5-a57d-9bae004dbc7b"
-$DevTunnelName = "acp-chat"
-$DevTunnelUrl = "https://pghzvjm6-3000.asse.devtunnels.ms"
+$EnvFile = Join-Path $ProjectDir ".env.local"
+
+function Read-DotEnvFile {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $values = @{}
+    if (-not (Test-Path $Path)) {
+        throw "Environment file not found: $Path"
+    }
+
+    Get-Content $Path | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith("#")) { return }
+        $parts = $line -split "=", 2
+        if ($parts.Count -ne 2) { return }
+
+        $key = $parts[0].Trim()
+        $value = $parts[1].Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $values[$key] = $value
+    }
+
+    return $values
+}
+
+function Get-RequiredEnvValue {
+    param(
+        [Parameter(Mandatory=$true)][hashtable]$Values,
+        [Parameter(Mandatory=$true)][string]$Name
+    )
+
+    if (-not $Values.ContainsKey($Name) -or [string]::IsNullOrWhiteSpace($Values[$Name])) {
+        throw "Missing required value '$Name' in $EnvFile"
+    }
+
+    return $Values[$Name]
+}
+
+$DotEnv = Read-DotEnvFile -Path $EnvFile
+$AppId = Get-RequiredEnvValue -Values $DotEnv -Name "AZURE_AD_CLIENT_ID"
+$DevTunnelName = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_NAME"
+$DevTunnelUrl = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_URL"
 
 Write-Host "[$ProjectDir] Cleaning .next cache..." -ForegroundColor Cyan
 Set-Location $ProjectDir

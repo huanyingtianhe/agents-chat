@@ -191,9 +191,12 @@ export async function GET(req: NextRequest) {
   try {
     const content = await fs.readFile(target, 'utf-8');
     const stat = statSync(target);
+    const ext = path.extname(target).toLowerCase();
+    const kind = ext === '.html' || ext === '.htm' ? 'html' : ext === '.md' ? 'markdown' : 'text';
     return NextResponse.json({
       path: filePath,
       content,
+      kind,
       mtime: stat.mtime.toISOString(),
     });
   } catch {
@@ -248,9 +251,11 @@ export async function POST(req: NextRequest) {
     try {
       const stat = statSync(target);
       if (stat.mtime.toISOString() !== body.mtime) {
+        const serverContent = await fs.readFile(target, 'utf-8');
         return NextResponse.json({
           error: 'conflict',
-          message: 'File was modified externally. Reload and try again.',
+          message: 'File was modified externally. Choose how to resolve the conflict.',
+          serverContent,
           serverMtime: stat.mtime.toISOString(),
         }, { status: 409 });
       }

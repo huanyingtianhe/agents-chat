@@ -1,0 +1,2 @@
+# Keep text files LF in both the index and working tree, even on Windows.
+* text=auto eol=lf

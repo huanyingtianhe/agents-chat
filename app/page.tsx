@@ -119,12 +119,111 @@ type MdConflictState = {
   mode: 'choice' | 'manual';
 };
 
+type LeftSidebarTab = 'chats' | 'files';
+type MdEditorMode = 'split' | 'live' | 'review';
+const FILE_REVIEW_LINE_HEIGHT = 20;
+const COMMENT_SIDEBAR_CARD_PADDING = 120;
+const COMMENT_SIDEBAR_CARD_GAP = 8;
+const COMMENT_SIDEBAR_COLLAPSED_CARD_HEIGHT = 54;
+const COMMENT_SIDEBAR_EXPANDED_CARD_HEIGHT = 118;
+
+type FileWorkspaceState = {
+  tab: LeftSidebarTab;
+  agentId: string | null;
+  filePath: string | null;
+  diffOnly: boolean;
+  editorMode: MdEditorMode;
+};
+
+type FileComment = {
+  id: string;
+  agentId: string;
+  filePath: string;
+  rangeStartLine: number | null;
+  rangeEndLine: number | null;
+  rangeStartChar: number | null;
+  rangeEndChar: number | null;
+  content: string;
+  authorType: 'agent' | 'user';
+  authorName: string | null;
+  status: 'active' | 'queued' | 'processing' | 'resolved';
+  linkedChatId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  replies: FileCommentReply[];
+};
+
+type FileCommentReply = {
+  id: string;
+  commentId: string;
+  content: string;
+  authorType: 'agent' | 'user';
+  authorName: string | null;
+  createdAt: string;
+};
+
+type LiveSelectionDraftAnchor = {
+  rects: { left: number; top: number; width: number; height: number }[];
+};
+
+type LiveCommentMarker = {
+  lineNum: number;
+  commentIds: string[];
+  top: number;
+  left: number;
+  color: string;
+  selected: boolean;
+  label: string;
+  title: string;
+  count: number;
+};
+
+type CommentAddRange = {
+  startLine: number;
+  endLine: number;
+  startChar?: number;
+  endChar?: number;
+};
+
 type DiffLine = {
   type: 'same' | 'removed' | 'added' | 'changed';
   serverLine?: string;
   mineLine?: string;
   key: string;
 };
+
+function isLeftSidebarTab(value: unknown): value is LeftSidebarTab {
+  return value === 'chats' || value === 'files';
+}
+
+function isMdEditorMode(value: unknown): value is MdEditorMode {
+  return value === 'split' || value === 'live' || value === 'review';
+}
+
+function normalizeFileEditorMode(mode: MdEditorMode, filePath?: string | null): MdEditorMode {
+  if (!filePath) return mode === 'review' ? 'live' : mode;
+  if (isMarkdownFile(filePath)) return mode === 'review' ? 'live' : mode;
+  if (isHtmlFile(filePath)) return 'live';
+  return mode;
+}
+
+function parseFileWorkspaceState(raw: string | null): FileWorkspaceState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<FileWorkspaceState>;
+    const filePath = typeof parsed.filePath === 'string' && parsed.filePath ? parsed.filePath : null;
+    const editorMode = isMdEditorMode(parsed.editorMode) ? parsed.editorMode : 'live';
+    return {
+      tab: isLeftSidebarTab(parsed.tab) ? parsed.tab : 'chats',
+      agentId: typeof parsed.agentId === 'string' && parsed.agentId ? parsed.agentId : null,
+      filePath,
+      diffOnly: parsed.diffOnly === true,
+      editorMode: normalizeFileEditorMode(editorMode, filePath),
+    };
+  } catch {
+    return null;
+  }
+}
 
 function buildSimpleLineDiff(serverContent: string, mineContent: string): DiffLine[] {
   const serverLines = serverContent.split('\n');
@@ -244,6 +343,7 @@ type SessionRunContext = {
   kind: 'worker' | 'summary';
   currentText: string;
   chatId: string;
+  commentId?: string;
   round?: number;
   relation?: string;
   ptyTurnId?: string;
@@ -268,6 +368,7 @@ const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
 const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
+const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
 
 const THEMES = {
   aurora: {
@@ -297,6 +398,8 @@ const THEMES = {
       '--success': '#86efac',
       '--danger': '#ef4444',
       '--shadow': '0 20px 60px rgba(2, 8, 23, 0.45)',
+      '--comment-agent-color': '#f0c040',
+      '--comment-user-color': '#58a6ff',
     },
   },
   sunset: {
@@ -326,6 +429,8 @@ const THEMES = {
       '--success': '#a7f3d0',
       '--danger': '#f87171',
       '--shadow': '0 22px 60px rgba(18, 5, 10, 0.45)',
+      '--comment-agent-color': '#f0c040',
+      '--comment-user-color': '#58a6ff',
     },
   },
   forest: {
@@ -355,6 +460,8 @@ const THEMES = {
       '--success': '#bbf7d0',
       '--danger': '#f87171',
       '--shadow': '0 20px 60px rgba(3, 10, 7, 0.48)',
+      '--comment-agent-color': '#f0c040',
+      '--comment-user-color': '#58a6ff',
     },
   },
   pearl: {
@@ -384,6 +491,8 @@ const THEMES = {
       '--success': '#16a34a',
       '--danger': '#dc2626',
       '--shadow': '0 20px 50px rgba(148, 163, 184, 0.18)',
+      '--comment-agent-color': '#f0c040',
+      '--comment-user-color': '#58a6ff',
     },
   },
   velvet: {
@@ -413,6 +522,8 @@ const THEMES = {
       '--success': '#86efac',
       '--danger': '#fb7185',
       '--shadow': '0 24px 64px rgba(10, 6, 18, 0.5)',
+      '--comment-agent-color': '#f0c040',
+      '--comment-user-color': '#58a6ff',
     },
   },
 } as const;
@@ -554,7 +665,7 @@ export default function Page() {
   const [newRelayAgentForm, setNewRelayAgentForm] = useState({ id: '', name: '', cwd: defaultCwd });
 
   // Markdown files panel
-  const [leftSidebarTab, setLeftSidebarTab] = useState<'chats' | 'files'>('chats');
+  const [leftSidebarTab, setLeftSidebarTab] = useState<LeftSidebarTab>('chats');
   const [mdFilesList, setMdFilesList] = useState<{ path: string; name: string; mtime: string }[]>([]);
   const [mdFilesLoading, setMdFilesLoading] = useState(false);
   const [mdSelectedAgentId, setMdSelectedAgentId] = useState<string | null>(null);
@@ -565,7 +676,7 @@ export default function Page() {
   const [mdSaving, setMdSaving] = useState(false);
   const [mdDirty, setMdDirty] = useState(false);
   const [mdEditorOpen, setMdEditorOpen] = useState(false);
-  const [mdEditorMode, setMdEditorMode] = useState<'split' | 'live'>('live');
+  const [mdEditorMode, setMdEditorMode] = useState<MdEditorMode>('live');
   const [mdLiveHtml, setMdLiveHtml] = useState('');
   const [mdConflict, setMdConflict] = useState<MdConflictState | null>(null);
   const [mdConflictResolvedContent, setMdConflictResolvedContent] = useState('');
@@ -578,6 +689,36 @@ export default function Page() {
     td.use(gfm);
     turndownRef.current = td;
   }
+
+  // Comment sidebar state
+  const [commentSidebarOpen, setCommentSidebarOpen] = useState(false);
+  const [fileComments, setFileComments] = useState<FileComment[]>([]);
+  const fileCommentsRef = useRef<FileComment[]>([]);
+  fileCommentsRef.current = fileComments;
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  const [commentFilter, setCommentFilter] = useState<'all' | 'active' | 'resolved'>('all');
+  const [commentInput, setCommentInput] = useState('');
+  const [commentAddRange, setCommentAddRange] = useState<CommentAddRange | null>(null);
+  const [liveSelectionDraftAnchor, setLiveSelectionDraftAnchor] = useState<LiveSelectionDraftAnchor | null>(null);
+  const [liveCommentMarkers, setLiveCommentMarkers] = useState<LiveCommentMarker[]>([]);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
+  const [replyInput, setReplyInput] = useState('');
+  const [expandedReplyIds, setExpandedReplyIds] = useState<Set<string>>(new Set());
+  const commentSidebarRef = useRef<HTMLDivElement>(null);
+  const commentAddFormRef = useRef<HTMLDivElement>(null);
+  const fileContentRef = useRef<HTMLDivElement>(null);
+  const mdLiveContainerRef = useRef<HTMLDivElement>(null);
+  const [commentSourceScrollTop, setCommentSourceScrollTop] = useState(0);
+  const liveEditCommentBtnRef = useRef<HTMLButtonElement>(null);
+  const pendingLiveEditCommentRangeRef = useRef<CommentAddRange | null>(null);
+  const pendingLiveEditCommentAnchorRef = useRef<LiveSelectionDraftAnchor | null>(null);
+  const pendingLiveEditDomRangeRef = useRef<Range | null>(null);
+  const pendingLiveEditSelectedTextRef = useRef<string | null>(null);
+  const liveSelectionDraftRangeRef = useRef<Range | null>(null);
+  const liveSelectionDraftTextRef = useRef<string | null>(null);
+  const fileWorkspaceRestoreRef = useRef<FileWorkspaceState | null>(null);
+  const fileWorkspaceRestoredRef = useRef(false);
 
   // Agent settings
   const [showAgentSettings, setShowAgentSettings] = useState(false);
@@ -670,6 +811,15 @@ export default function Page() {
 
     if (savedInput) setInput(savedInput);
     if (savedCollapsed != null) setSidebarCollapsed(savedCollapsed === '1');
+    const savedCommentSidebar = window.localStorage.getItem('commentSidebarOpen');
+    if (savedCommentSidebar != null) setCommentSidebarOpen(savedCommentSidebar === 'true');
+    const savedFileWorkspace = parseFileWorkspaceState(window.localStorage.getItem(STORAGE_FILE_WORKSPACE));
+    if (savedFileWorkspace) {
+      fileWorkspaceRestoreRef.current = savedFileWorkspace;
+      setLeftSidebarTab(savedFileWorkspace.tab);
+      setMdDiffOnly(savedFileWorkspace.diffOnly);
+      setMdEditorMode(savedFileWorkspace.editorMode);
+    }
 
     // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
@@ -706,6 +856,21 @@ export default function Page() {
     } catch { /* ignore */ }
     void loadAgents();
   }, []);
+
+  useEffect(() => {
+    if (mounted) window.localStorage.setItem('commentSidebarOpen', String(commentSidebarOpen));
+  }, [commentSidebarOpen, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    window.localStorage.setItem(STORAGE_FILE_WORKSPACE, JSON.stringify({
+      tab: leftSidebarTab,
+      agentId: mdSelectedAgentId,
+      filePath: mdSelectedFile,
+      diffOnly: mdDiffOnly,
+      editorMode: mdEditorMode,
+    } satisfies FileWorkspaceState));
+  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, mounted]);
 
   useEffect(() => {
     const el = chatContainerRef.current;
@@ -851,6 +1016,28 @@ export default function Page() {
     setMessagesForChat(chatId, base.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   }
 
+  async function loadChatIntoCache(chatId: string) {
+    try {
+      const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
+      const data = await res.json();
+      if (data.ok && data.chat) {
+        setMessagesForChat(chatId, data.chat.messages || []);
+        setChatHistory(prev => {
+          const entry = {
+            id: data.chat.id,
+            name: data.chat.name || chatId,
+            ts: data.chat.ts || Date.now(),
+            agentSessions: data.chat.agentSessions || {},
+          };
+          if (prev.some(c => c.id === chatId)) return prev.map(c => c.id === chatId ? entry : c);
+          return normalizeChatHistory([entry, ...prev]);
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load review chat', err);
+    }
+  }
+
   function notifyRunStateChanged() {
     setRunVersion((version) => version + 1);
   }
@@ -946,13 +1133,20 @@ export default function Page() {
     }
   }
 
-  async function openMdFile(filePath: string) {
-    if (!mdSelectedAgentId) return;
-    if (mdDirty) {
+  async function loadFileComments(agentId: string, filePath: string) {
+    try {
+      const res = await fetch(`/api/comments?agentId=${encodeURIComponent(agentId)}&filePath=${encodeURIComponent(filePath)}`);
+      const data = await res.json();
+      if (data.ok) setFileComments(data.comments);
+    } catch { /* ignore */ }
+  }
+
+  async function openMdFileForAgent(agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode }) {
+    if (!options?.skipDirtyConfirm && mdDirty) {
       if (!confirm('You have unsaved changes. Discard?')) return;
     }
     try {
-      const res = await fetch(`/api/markdown?agentId=${encodeURIComponent(mdSelectedAgentId)}&path=${encodeURIComponent(filePath)}`);
+      const res = await fetch(`/api/markdown?agentId=${encodeURIComponent(agentId)}&path=${encodeURIComponent(filePath)}`);
       const data = await res.json();
       if (data.content !== undefined) {
         setMdSelectedFile(filePath);
@@ -961,10 +1155,866 @@ export default function Page() {
         setMdFileMtime(data.mtime || null);
         setMdDirty(false);
         setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
+        setMdEditorMode(current => normalizeFileEditorMode(options?.editorMode ?? current, filePath));
+        setCommentSourceScrollTop(0);
+        window.requestAnimationFrame(() => {
+          mdLiveContainerRef.current?.scrollTo({ top: 0 });
+          fileContentRef.current?.scrollTo({ top: 0 });
+        });
         setMdEditorOpen(true);
+        setFileComments([]);
+        setSelectedCommentId(null);
+        setShowCommentInput(false);
+        setCommentAddRange(null);
+        clearLiveSelectionDraft();
+        void loadFileComments(agentId, filePath);
       }
     } catch (err) {
       console.error('Failed to read markdown file', err);
+    }
+  }
+
+  async function openMdFile(filePath: string) {
+    if (!mdSelectedAgentId) return;
+    await openMdFileForAgent(mdSelectedAgentId, filePath);
+  }
+
+  useEffect(() => {
+    if (!mounted || agentsLoading || fileWorkspaceRestoredRef.current) return;
+
+    const workspace = fileWorkspaceRestoreRef.current;
+    if (!workspace) {
+      fileWorkspaceRestoredRef.current = true;
+      return;
+    }
+
+    setLeftSidebarTab(workspace.tab);
+    setMdDiffOnly(workspace.diffOnly);
+    setMdEditorMode(normalizeFileEditorMode(workspace.editorMode, workspace.filePath));
+    fileWorkspaceRestoredRef.current = true;
+
+    if (workspace.tab !== 'files' || !workspace.agentId) return;
+
+    const agentCanShowFiles = agents.some(a => a.id === workspace.agentId && a.cwd && !a.relay && a.id !== SCHEDULER_AGENT_ID);
+    if (!agentCanShowFiles) return;
+
+    const agentId = workspace.agentId;
+    setMdSelectedAgentId(agentId);
+    void (async () => {
+      await loadMdFiles(agentId, workspace.diffOnly);
+      if (workspace.filePath) {
+        await openMdFileForAgent(agentId, workspace.filePath, {
+          skipDirtyConfirm: true,
+          editorMode: workspace.editorMode,
+        });
+      }
+    })();
+  }, [mounted, agentsLoading, agents]);
+
+  async function handleCreateComment() {
+    if (!mdSelectedAgentId || !mdSelectedFile || !commentInput.trim() || !commentAddRange) return;
+    try {
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          agentId: mdSelectedAgentId,
+          filePath: mdSelectedFile,
+          rangeStartLine: commentAddRange.startLine,
+          rangeEndLine: commentAddRange.endLine,
+          rangeStartChar: commentAddRange.startChar,
+          rangeEndChar: commentAddRange.endChar,
+          content: commentInput.trim(),
+          authorType: 'user',
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCommentInput('');
+        setShowCommentInput(false);
+        setCommentAddRange(null);
+        clearLiveSelectionDraft();
+        void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+        if (!commentSidebarOpen) setCommentSidebarOpen(true);
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function handleRejectComment(commentId: string) {
+    try {
+      await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reject', commentId }),
+      });
+      if (mdSelectedAgentId && mdSelectedFile) void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+    } catch { /* ignore */ }
+  }
+
+  async function handleDeleteComment(commentId: string) {
+    try {
+      await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', commentId }),
+      });
+      if (selectedCommentId === commentId) setSelectedCommentId(null);
+      if (mdSelectedAgentId && mdSelectedFile) void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+    } catch { /* ignore */ }
+  }
+
+  async function handleReplyComment(commentId: string) {
+    if (!replyInput.trim()) return;
+    try {
+      await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reply',
+          commentId,
+          content: replyInput.trim(),
+          authorType: 'user',
+        }),
+      });
+      setReplyInput('');
+      setReplyingToCommentId(null);
+      if (mdSelectedAgentId && mdSelectedFile) void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+    } catch { /* ignore */ }
+  }
+
+  function openCommentReviewChat(chatId: string) {
+    setLeftSidebarTab('chats');
+    void loadChat(chatId);
+  }
+
+  function getContextForComment(comment: FileComment) {
+    const lines = mdFileContent.split('\n');
+    const startLine = Math.max(0, (comment.rangeStartLine ?? 1) - 3);
+    const endLine = Math.min(lines.length, (comment.rangeEndLine ?? comment.rangeStartLine ?? 1) + 3);
+    return lines.slice(startLine, endLine).join('\n');
+  }
+
+  async function startNextQueuedComment(chatId: string) {
+    const queuedComment = fileCommentsRef.current.find(c => c.linkedChatId === chatId && c.status === 'queued');
+    const fileContent = queuedComment ? getContextForComment(queuedComment) : mdFileContent;
+    try {
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start-next-queued', chatId, fileContent }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.started) return;
+      setFileComments(prev => prev.map(c =>
+        c.id === data.commentId ? { ...c, status: 'processing' as const, linkedChatId: data.chatId } : c
+      ));
+      await loadChatIntoCache(data.chatId);
+      if (data.agentId && data.prompt) {
+        await dispatchReviewCommentToAgent(data.agentId, data.prompt, data.commentId, data.chatId);
+      }
+    } catch (err) {
+      console.error('Failed to start queued comment', err);
+    }
+  }
+
+  async function resolveProcessingCommentForChat(chatId: string, commentId: string) {
+    const commentToResolve = fileCommentsRef.current.find(c => c.id === commentId && c.linkedChatId === chatId && c.status === 'processing');
+    if (!commentToResolve) return;
+    setFileComments(prev => prev.map(c =>
+      c.id === commentToResolve.id ? { ...c, status: 'resolved' as const } : c
+    ));
+    try {
+      await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resolve', commentId: commentToResolve.id }),
+      });
+    } catch (err) {
+      console.error('Failed to resolve comment', err);
+    }
+    await startNextQueuedComment(chatId);
+  }
+
+  async function resetProcessingCommentForRetry(commentId: string) {
+    setFileComments(prev => prev.map(c =>
+      c.id === commentId ? { ...c, status: 'active' as const, linkedChatId: null } : c
+    ));
+    try {
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset-processing', commentId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error('Failed to reset processing comment', data.error || res.statusText);
+      }
+    } catch (err) {
+      console.error('Failed to reset processing comment', err);
+    }
+  }
+
+  async function handleStopProcessingComment(comment: FileComment) {
+    if (comment.status !== 'processing' || !comment.linkedChatId) return;
+
+    const reviewChatId = comment.linkedChatId;
+    const activeRun = Object.entries(sessionRunsRef.current).find(([, run]) =>
+      run.chatId === reviewChatId && run.commentId === comment.id
+    );
+    const agentId = activeRun?.[1].agentId || comment.agentId;
+
+    try {
+      await acp({ action: 'interrupt', agentId, chatId: reviewChatId });
+    } catch (err) {
+      console.error('Failed to stop processing comment', err);
+      return;
+    }
+
+    if (activeRun) {
+      const [runKey, run] = activeRun;
+      updateMessage(run.pendingId, {
+        content: run.currentText || '⏹ Stopped',
+        pending: false,
+        statusText: undefined,
+        ptyPhase: undefined,
+      }, run.chatId);
+      delete sessionRunsRef.current[runKey];
+      notifyRunStateChanged();
+    }
+
+    await resetProcessingCommentForRetry(comment.id);
+    setSelectedCommentId(comment.id);
+    await startNextQueuedComment(reviewChatId);
+  }
+
+  async function dispatchReviewCommentToAgent(agentId: string, prompt: string, commentId: string, chatId: string) {
+    try {
+      await dispatchToAgent(agentId, prompt, `comment-${commentId}`, 'worker', { chatId, commentId });
+      return true;
+    } catch (err) {
+      console.error('Failed to dispatch approved comment', err);
+      await resetProcessingCommentForRetry(commentId);
+      return false;
+    }
+  }
+
+  async function handleApproveComment(commentId: string) {
+    const comment = fileComments.find(c => c.id === commentId);
+    if (!comment) return;
+
+    const contextContent = getContextForComment(comment);
+
+    try {
+      const res = await fetch('/api/comments/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commentId, fileContent: contextContent }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        console.error('Failed to approve comment', data.error || 'unknown error');
+        return;
+      }
+
+      const nextStatus: FileComment['status'] = data.status === 'queued' ? 'queued' : 'processing';
+      setFileComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, status: nextStatus, linkedChatId: data.chatId } : c
+      ));
+      await loadChatIntoCache(data.chatId);
+
+      if (nextStatus === 'processing' && data.agentId && data.prompt) {
+        await dispatchReviewCommentToAgent(data.agentId, data.prompt, commentId, data.chatId);
+      }
+    } catch (err) {
+      console.error('Failed to approve comment', err);
+    }
+  }
+
+  function getCommentsByLine(): Map<number, FileComment[]> {
+    const map = new Map<number, FileComment[]>();
+    for (const c of fileComments) {
+      if (c.rangeStartLine == null) continue;
+      const end = c.rangeEndLine ?? c.rangeStartLine;
+      for (let i = c.rangeStartLine; i <= end; i++) {
+        const comments = map.get(i) || [];
+        comments.push(c);
+        map.set(i, comments);
+      }
+    }
+    return map;
+  }
+
+  function getCommentLineTop(comment: FileComment): number {
+    return Math.max(0, ((comment.rangeStartLine ?? 1) - 1) * FILE_REVIEW_LINE_HEIGHT);
+  }
+
+  function getCommentDisplayTop(comment: FileComment): number {
+    if (mdEditorMode === 'live' && mdSelectedFile && isMarkdownFile(mdSelectedFile)) {
+      const marker = liveCommentMarkers.find(m => m.commentIds.includes(comment.id));
+      if (marker) return marker.top;
+    }
+    return getCommentLineTop(comment);
+  }
+
+  function getVisibleSidebarComments(): FileComment[] {
+    return fileComments
+      .filter(c => commentFilter === 'all' || (commentFilter === 'active' ? c.status !== 'resolved' : c.status === 'resolved'))
+      .slice()
+      .sort((a, b) => {
+        const lineDiff = (a.rangeStartLine ?? Number.MAX_SAFE_INTEGER) - (b.rangeStartLine ?? Number.MAX_SAFE_INTEGER);
+        if (lineDiff !== 0) return lineDiff;
+        return a.createdAt.localeCompare(b.createdAt);
+      });
+  }
+
+  function getEstimatedCommentCardHeight(comment: FileComment): number {
+    const expanded = selectedCommentId === comment.id || comment.status === 'processing' || comment.status === 'queued';
+    const replyHeight = expanded ? Math.min(comment.replies.length, 2) * 24 : 0;
+    const replyInputHeight = replyingToCommentId === comment.id ? 40 : 0;
+    return (expanded ? COMMENT_SIDEBAR_EXPANDED_CARD_HEIGHT : COMMENT_SIDEBAR_COLLAPSED_CARD_HEIGHT) + replyHeight + replyInputHeight;
+  }
+
+  function getCommentStatusLabel(status: FileComment['status']): string {
+    if (status === 'processing') return 'Processing';
+    if (status === 'queued') return 'Queued';
+    if (status === 'resolved') return 'Resolved';
+    return 'Active';
+  }
+
+  function getCommentSidebarDesiredTop(comment: FileComment): number {
+    return getCommentDisplayTop(comment) - commentSourceScrollTop;
+  }
+
+  function compareCommentsBySidebarTop(a: FileComment, b: FileComment): number {
+    const topDiff = getCommentDisplayTop(a) - getCommentDisplayTop(b);
+    if (Math.abs(topDiff) > 0.5) return topDiff;
+
+    const lineDiff = (a.rangeStartLine ?? Number.MAX_SAFE_INTEGER) - (b.rangeStartLine ?? Number.MAX_SAFE_INTEGER);
+    if (lineDiff !== 0) return lineDiff;
+
+    return a.createdAt.localeCompare(b.createdAt);
+  }
+
+  function getCommentSidebarLayout(comments: FileComment[]): Map<string, number> {
+    const layout = new Map<string, number>();
+
+    const placeComments = (commentsToPlace: FileComment[], startTop: number): number => {
+      let nextAvailableTop = startTop;
+      for (const comment of commentsToPlace) {
+        const top = Math.max(getCommentSidebarDesiredTop(comment), nextAvailableTop);
+        layout.set(comment.id, top);
+        nextAvailableTop = top + getEstimatedCommentCardHeight(comment) + COMMENT_SIDEBAR_CARD_GAP;
+      }
+      return nextAvailableTop;
+    };
+
+    const sortedComments = comments.slice().sort(compareCommentsBySidebarTop);
+    const selectedComment = sortedComments.find(c => c.id === selectedCommentId);
+    if (selectedComment && mdEditorMode === 'live' && mdSelectedFile && isMarkdownFile(mdSelectedFile)) {
+      const selectedTop = getCommentSidebarDesiredTop(selectedComment);
+      const commentsBeforeSelected: FileComment[] = [];
+      const commentsAfterSelected: FileComment[] = [];
+
+      for (const comment of sortedComments) {
+        if (comment.id === selectedComment.id) continue;
+        const desiredTop = getCommentSidebarDesiredTop(comment);
+        const bottom = desiredTop + getEstimatedCommentCardHeight(comment) + COMMENT_SIDEBAR_CARD_GAP;
+        if (bottom <= selectedTop) {
+          commentsBeforeSelected.push(comment);
+        } else {
+          commentsAfterSelected.push(comment);
+        }
+      }
+
+      const beforeBottom = placeComments(commentsBeforeSelected, -commentSourceScrollTop);
+      layout.set(selectedComment.id, selectedTop);
+      placeComments(
+        commentsAfterSelected,
+        Math.max(beforeBottom, selectedTop + getEstimatedCommentCardHeight(selectedComment) + COMMENT_SIDEBAR_CARD_GAP)
+      );
+      return layout;
+    }
+
+    let nextAvailableTop = -commentSourceScrollTop;
+    for (const comment of sortedComments) {
+      const top = Math.max(getCommentSidebarDesiredTop(comment), nextAvailableTop);
+      layout.set(comment.id, top);
+      nextAvailableTop = top + getEstimatedCommentCardHeight(comment) + COMMENT_SIDEBAR_CARD_GAP;
+    }
+    return layout;
+  }
+
+  function getCommentSidebarHeight(comments: FileComment[], layout: Map<string, number>): number {
+    const commentBottom = comments.reduce((height, comment) => {
+      const top = layout.get(comment.id) ?? getCommentLineTop(comment);
+      return Math.max(height, top + getEstimatedCommentCardHeight(comment) + COMMENT_SIDEBAR_CARD_GAP);
+    }, 0);
+    const draftBottom = commentAddRange ? ((commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT) + COMMENT_SIDEBAR_CARD_PADDING : 0;
+    const fileBottom = Math.max(1, mdEditContent.split('\n').length) * FILE_REVIEW_LINE_HEIGHT + COMMENT_SIDEBAR_CARD_PADDING;
+    return Math.max(commentBottom, draftBottom, fileBottom);
+  }
+
+  function openLineComment(commentsForLine: FileComment[]) {
+    const nextComment = commentsForLine.find(c => c.id === selectedCommentId) || commentsForLine[0];
+    if (!nextComment) return;
+    setSelectedCommentId(nextComment.id);
+    if (!commentSidebarOpen) setCommentSidebarOpen(true);
+  }
+
+  function openCommentIds(commentIds: string[]) {
+    const comments = commentIds
+      .map(id => fileComments.find(c => c.id === id))
+      .filter((comment): comment is FileComment => Boolean(comment));
+    openLineComment(comments);
+  }
+
+  function renderLineCommentMarker(lineNum: number, commentsForLine: FileComment[]) {
+    if (commentsForLine.length === 0) return null;
+    const selectedOnLine = commentsForLine.some(c => c.id === selectedCommentId);
+    const markerComment = commentsForLine.find(c => c.authorType === 'agent') || commentsForLine[0];
+    const markerColor = markerComment.authorType === 'agent' ? 'var(--comment-agent-color)' : 'var(--comment-user-color)';
+    const label = `${commentsForLine.length} comment${commentsForLine.length === 1 ? '' : 's'} on line ${lineNum}`;
+    return (
+      <button
+        type="button"
+        className={`lineCommentMarker ${selectedOnLine ? 'selected' : ''}`}
+        style={{ borderColor: markerColor, color: markerColor }}
+        onClick={(e) => { e.stopPropagation(); openLineComment(commentsForLine); }}
+        title={commentsForLine.map(c => c.content).join('\n')}
+        aria-label={label}
+      >
+        💬{commentsForLine.length > 1 ? <span className="lineCommentCount">{commentsForLine.length}</span> : null}
+      </button>
+    );
+  }
+
+  function renderReviewFileLineText(line: string, lineNum: number, selectedComment: FileComment | undefined) {
+    if (!selectedComment || selectedComment.rangeStartLine == null) return line || ' ';
+
+    const startLine = selectedComment.rangeStartLine;
+    const endLine = selectedComment.rangeEndLine ?? startLine;
+    if (lineNum < startLine || lineNum > endLine) return line || ' ';
+
+    const startChar = lineNum === startLine ? (selectedComment.rangeStartChar ?? 0) : 0;
+    const endChar = lineNum === endLine ? (selectedComment.rangeEndChar ?? line.length) : line.length;
+    const boundedStart = Math.max(0, Math.min(startChar, line.length));
+    const boundedEnd = Math.max(boundedStart, Math.min(endChar, line.length));
+    const before = line.slice(0, boundedStart);
+    const selected = line.slice(boundedStart, boundedEnd) || ' ';
+    const after = line.slice(boundedEnd);
+
+    return (
+      <>
+        {before}
+        <span className="fileLineSelectedText">{selected}</span>
+        {after}
+      </>
+    );
+  }
+
+  function renderReviewFileLine(line: string, idx: number, commentsByLine: Map<number, FileComment[]>) {
+    const lineNum = idx + 1;
+    const commentsForLine = commentsByLine.get(lineNum) || [];
+    const isHighlighted = commentsForLine.some(c => c.id === selectedCommentId);
+    const selectedComment = commentsForLine.find(c => c.id === selectedCommentId);
+    return (
+      <div
+        key={idx}
+        className={`fileLine ${isHighlighted ? 'highlighted' : ''} ${commentsForLine.length > 0 && !isHighlighted ? 'has-comment' : ''}`}
+        data-line-num={lineNum}
+      >
+        <span className="fileLineGutter">
+          <span className="fileLineNum">{lineNum}</span>
+        </span>
+        <span className="fileLineText">{renderReviewFileLineText(line, lineNum, selectedComment)}</span>
+        <span className="fileLineCommentSlot">
+          {renderLineCommentMarker(lineNum, commentsForLine)}
+        </span>
+      </div>
+    );
+  }
+
+  function handleCommentSourceScroll(source: HTMLDivElement | null) {
+    if (!source) return;
+    setCommentSourceScrollTop(source.scrollTop);
+  }
+
+  function handleFileContentScroll() {
+    handleCommentSourceScroll(fileContentRef.current);
+  }
+
+  function handleLiveEditorScroll() {
+    handleCommentSourceScroll(mdLiveContainerRef.current);
+  }
+
+  function handleTextSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !fileContentRef.current) return;
+
+    const range = sel.getRangeAt(0);
+    const container = fileContentRef.current;
+    if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) return;
+
+    const startLineEl = range.startContainer.parentElement?.closest('[data-line-num]');
+    const endLineEl = range.endContainer.parentElement?.closest('[data-line-num]');
+    if (!startLineEl || !endLineEl) return;
+
+    const startLine = parseInt(startLineEl.getAttribute('data-line-num') || '0', 10);
+    const endLine = parseInt(endLineEl.getAttribute('data-line-num') || '0', 10);
+    if (startLine > 0 && endLine > 0) {
+      setCommentAddRange({ startLine: Math.min(startLine, endLine), endLine: Math.max(startLine, endLine) });
+    }
+  }
+
+  function clearLiveSelectionDraft() {
+    liveSelectionDraftRangeRef.current = null;
+    liveSelectionDraftTextRef.current = null;
+    setLiveSelectionDraftAnchor(null);
+  }
+
+  function hideLiveEditCommentButton() {
+    pendingLiveEditCommentRangeRef.current = null;
+    pendingLiveEditCommentAnchorRef.current = null;
+    pendingLiveEditDomRangeRef.current = null;
+    pendingLiveEditSelectedTextRef.current = null;
+    const button = liveEditCommentBtnRef.current;
+    if (!button) return;
+    button.style.display = 'none';
+  }
+
+  function findLiveEditTextRange(selectedText: string): Range | null {
+    if (!mdLiveRef.current) return null;
+    const searchText = selectedText.trim();
+    if (!searchText) return null;
+
+    const walker = document.createTreeWalker(mdLiveRef.current, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const text = node.textContent || '';
+      const index = text.indexOf(searchText);
+      if (index >= 0) {
+        const range = document.createRange();
+        range.setStart(node, index);
+        range.setEnd(node, index + searchText.length);
+        return range;
+      }
+    }
+    return null;
+  }
+
+  function getCommentSourceText(comment: FileComment): string | null {
+    if (comment.rangeStartLine == null) return null;
+
+    const lines = mdEditContent.split('\n');
+    const startIdx = comment.rangeStartLine - 1;
+    const endIdx = (comment.rangeEndLine ?? comment.rangeStartLine) - 1;
+    if (startIdx < 0 || endIdx < startIdx || startIdx >= lines.length) return null;
+
+    if (comment.rangeStartChar != null && comment.rangeEndChar != null) {
+      if (startIdx === endIdx) {
+        return (lines[startIdx] || '').slice(comment.rangeStartChar, comment.rangeEndChar);
+      }
+
+      const selectedLines = lines.slice(startIdx, Math.min(endIdx + 1, lines.length));
+      if (selectedLines.length === 0) return null;
+      selectedLines[0] = selectedLines[0].slice(comment.rangeStartChar);
+      selectedLines[selectedLines.length - 1] = selectedLines[selectedLines.length - 1].slice(0, comment.rangeEndChar);
+      return selectedLines.join('\n');
+    }
+
+    return lines.slice(startIdx, Math.min(endIdx + 1, lines.length)).join('\n');
+  }
+
+  function getLiveEditRangeForComment(comment: FileComment): Range | null {
+    const selectedText = getCommentSourceText(comment);
+    if (!selectedText) return null;
+    const renderedText = selectedText
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+      .replace(/^\s{0,3}>\s?/gm, '')
+      .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/_([^_]+)_/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .trim();
+    const candidates = Array.from(new Set([selectedText.trim(), renderedText].filter(Boolean)));
+    for (const candidate of candidates) {
+      const range = findLiveEditTextRange(candidate);
+      if (range) return range;
+    }
+    return null;
+  }
+
+  function getLiveSelectionDraftAnchor(range: Range): LiveSelectionDraftAnchor | null {
+    const editor = mdLiveRef.current?.closest('.mdEditorLive');
+    if (!(editor instanceof HTMLElement)) return null;
+
+    const editorRect = editor.getBoundingClientRect();
+    const rects = Array.from(range.getClientRects())
+      .filter(rect => rect.width > 0 && rect.height > 0)
+      .map(rect => ({
+        left: rect.left - editorRect.left + editor.scrollLeft,
+        top: rect.top - editorRect.top + editor.scrollTop,
+        width: rect.width,
+        height: rect.height,
+      }));
+
+    return rects.length > 0 ? { rects } : null;
+  }
+
+  function getLiveCommentMarkersForEditor(): LiveCommentMarker[] {
+    const editor = mdLiveRef.current?.closest('.mdEditorLive');
+    if (!(editor instanceof HTMLElement)) return [];
+
+    const editorRect = editor.getBoundingClientRect();
+    const commentsByLine = getCommentsByLine();
+    const markers: LiveCommentMarker[] = [];
+
+    for (const [lineNum, commentsForLine] of commentsByLine) {
+      const markerComment = commentsForLine.find(c => c.id === selectedCommentId) || commentsForLine[0];
+      if (!markerComment) continue;
+
+      const range = getLiveEditRangeForComment(markerComment);
+      let top = getCommentLineTop(markerComment) + 1;
+      if (range) {
+        const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+        const rect = rects[0] || range.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          top = Math.max(8, rect.top - editorRect.top + editor.scrollTop + rect.height / 2 - 9);
+        }
+      }
+
+      const markerColor = (commentsForLine.find(c => c.authorType === 'agent') || markerComment).authorType === 'agent'
+        ? 'var(--comment-agent-color)'
+        : 'var(--comment-user-color)';
+      markers.push({
+        lineNum,
+        commentIds: commentsForLine.map(c => c.id),
+        top,
+        left: Math.max(8, editor.scrollLeft + editor.clientWidth - 44),
+        color: markerColor,
+        selected: commentsForLine.some(c => c.id === selectedCommentId),
+        label: `${commentsForLine.length} comment${commentsForLine.length === 1 ? '' : 's'} on line ${lineNum}`,
+        title: commentsForLine.map(c => c.content).join('\n'),
+        count: commentsForLine.length,
+      });
+    }
+
+    return markers;
+  }
+
+  function positionLiveEditCommentButton(range: Range) {
+    const button = liveEditCommentBtnRef.current;
+    const editor = mdLiveRef.current?.closest('.mdEditorLive');
+    if (!button || !(editor instanceof HTMLElement)) return;
+
+    const rectList = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+    const rect = rectList[rectList.length - 1] || range.getBoundingClientRect();
+    const editorRect = editor.getBoundingClientRect();
+    const top = Math.max(8, rect.bottom - editorRect.top + editor.scrollTop + 6);
+    const left = Math.max(
+      8,
+      Math.min(rect.right - editorRect.left + editor.scrollLeft + 8, editor.clientWidth - button.offsetWidth - 8)
+    );
+
+    button.style.display = 'inline-flex';
+    button.style.top = `${top}px`;
+    button.style.left = `${left}px`;
+    button.style.right = 'auto';
+  }
+
+  function handleLiveEditSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !mdLiveRef.current) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    const range = sel.getRangeAt(0);
+    if (!mdLiveRef.current.contains(range.startContainer) || !mdLiveRef.current.contains(range.endContainer)) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    const selectedText = sel.toString().trim();
+    if (!selectedText) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    // Find the selected text in source markdown to determine line range
+    const lines = mdEditContent.split('\n');
+    const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').toLowerCase();
+    const searchNorm = normalizeSelectionText(selectedText);
+    let startLine = -1;
+    let endLine = -1;
+    let startChar: number | undefined;
+    let endChar: number | undefined;
+    let bestSpan = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < lines.length; i++) {
+      for (let j = i; j < lines.length; j++) {
+        const chunk = normalizeSelectionText(lines.slice(i, j + 1).join(' '));
+        if (chunk.includes(searchNorm)) {
+          const span = j - i;
+          const rawIndex = i === j ? lines[i].toLowerCase().indexOf(selectedText.toLowerCase()) : -1;
+          if (span < bestSpan) {
+            startLine = i + 1;
+            endLine = j + 1;
+            startChar = rawIndex >= 0 ? rawIndex : undefined;
+            endChar = rawIndex >= 0 ? rawIndex + selectedText.length : undefined;
+            bestSpan = span;
+          }
+          break;
+        }
+      }
+    }
+
+    if (startLine > 0 && endLine > 0) {
+      pendingLiveEditCommentRangeRef.current = { startLine, endLine, startChar, endChar };
+      pendingLiveEditCommentAnchorRef.current = getLiveSelectionDraftAnchor(range);
+      pendingLiveEditDomRangeRef.current = range.cloneRange();
+      pendingLiveEditSelectedTextRef.current = selectedText;
+      positionLiveEditCommentButton(range);
+    } else {
+      hideLiveEditCommentButton();
+    }
+  }
+
+  const liveEditSelectionRef = useRef(handleLiveEditSelection);
+  liveEditSelectionRef.current = handleLiveEditSelection;
+
+  // Debounced selectionchange listener — avoids re-renders during double/triple-click
+  useEffect(() => {
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    const handler = () => {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(() => liveEditSelectionRef.current(), 150);
+    };
+    document.addEventListener('selectionchange', handler);
+    return () => {
+      document.removeEventListener('selectionchange', handler);
+      if (timerId) clearTimeout(timerId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mdEditorMode !== 'live' || !mdSelectedFile || !isMarkdownFile(mdSelectedFile)) {
+      setLiveCommentMarkers([]);
+      return;
+    }
+
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      setLiveCommentMarkers(getLiveCommentMarkersForEditor());
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [fileComments, mdEditorMode, mdSelectedFile, mdEditContent, mdLiveHtml, selectedCommentId, commentSidebarOpen]);
+
+  useEffect(() => {
+    if (!showCommentInput || !liveSelectionDraftRangeRef.current) return;
+
+    let outerFrameId = 0;
+    let innerFrameId = 0;
+    outerFrameId = window.requestAnimationFrame(() => {
+      innerFrameId = window.requestAnimationFrame(() => {
+        const range = liveSelectionDraftRangeRef.current;
+        const rebuiltRange = liveSelectionDraftTextRef.current ? findLiveEditTextRange(liveSelectionDraftTextRef.current) : null;
+        const activeRange = rebuiltRange || range;
+        if (!activeRange || !mdLiveRef.current) return;
+        if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
+
+        liveSelectionDraftRangeRef.current = activeRange.cloneRange();
+        const anchor = getLiveSelectionDraftAnchor(activeRange);
+        if (anchor) setLiveSelectionDraftAnchor(anchor);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(outerFrameId);
+      window.cancelAnimationFrame(innerFrameId);
+    };
+  }, [showCommentInput, commentSidebarOpen]);
+
+  useEffect(() => {
+    if (showCommentInput) return;
+
+    if (!selectedCommentId || mdEditorMode !== 'live' || !mdSelectedFile || !isMarkdownFile(mdSelectedFile)) {
+      clearLiveSelectionDraft();
+      return;
+    }
+
+    const comment = fileComments.find(c => c.id === selectedCommentId);
+    if (!comment) {
+      clearLiveSelectionDraft();
+      return;
+    }
+
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      const range = getLiveEditRangeForComment(comment);
+      if (!range) {
+        clearLiveSelectionDraft();
+        return;
+      }
+
+      liveSelectionDraftRangeRef.current = range.cloneRange();
+      liveSelectionDraftTextRef.current = range.toString();
+      const anchor = getLiveSelectionDraftAnchor(range);
+      if (anchor) setLiveSelectionDraftAnchor(anchor);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [selectedCommentId, fileComments, mdEditorMode, mdSelectedFile, mdEditContent, showCommentInput]);
+
+  function extractFileComments(text: string, agentId: string): { cleanText: string; comments: { filePath: string; rangeStartLine?: number; rangeEndLine?: number; content: string }[] } {
+    const commentBlockRegex = /```json:file-comments\s*\n([\s\S]*?)```/g;
+    const comments: { filePath: string; rangeStartLine?: number; rangeEndLine?: number; content: string }[] = [];
+    let cleanText = text;
+
+    let match;
+    while ((match = commentBlockRegex.exec(text)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item.filePath && item.content) {
+              comments.push({
+                filePath: item.filePath,
+                rangeStartLine: item.rangeStartLine,
+                rangeEndLine: item.rangeEndLine,
+                content: item.content,
+              });
+            }
+          }
+        }
+      } catch { /* invalid JSON, skip */ }
+      cleanText = cleanText.replace(match[0], '').trim();
+    }
+
+    return { cleanText, comments };
+  }
+
+  async function saveAgentComments(agentId: string, comments: { filePath: string; rangeStartLine?: number; rangeEndLine?: number; content: string }[], agentName?: string) {
+    for (const c of comments) {
+      await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          agentId,
+          filePath: c.filePath,
+          rangeStartLine: c.rangeStartLine,
+          rangeEndLine: c.rangeEndLine,
+          content: c.content,
+          authorType: 'agent',
+          authorName: agentName,
+        }),
+      }).catch(() => { /* ignore */ });
     }
   }
 
@@ -973,11 +2023,17 @@ export default function Page() {
     if (mdEditorMode === 'live' && mdLiveRef.current) {
       const html = mdLiveRef.current.innerHTML;
       const md = turndownRef.current!.turndown(html);
+      setMdLiveHtml(html);
       setMdEditContent(md);
       setMdDirty(md !== mdFileContent);
       return md;
     }
     return mdEditContent;
+  }
+
+  function switchLeftSidebarTab(tab: LeftSidebarTab) {
+    if (tab !== 'files') syncLiveToMarkdown();
+    setLeftSidebarTab(tab);
   }
 
   async function saveMdFile(contentOverride?: string, mtimeOverride?: string | null) {
@@ -1081,6 +2137,7 @@ export default function Page() {
     setMdLiveHtml('');
     setMdConflict(null);
     setMdConflictResolvedContent('');
+    clearLiveSelectionDraft();
   }
 
   async function handleAddNode() {
@@ -1192,7 +2249,7 @@ export default function Page() {
     content: string,
     orchestrationId: string,
     kind: 'worker' | 'summary' = 'worker',
-    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string },
+    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string },
   ) {
     const dispatchChatId = options?.chatId || currentChatIdRef.current;
     const pendingId = `pending-${makeId()}`;
@@ -1212,13 +2269,24 @@ export default function Page() {
       agentId, pendingId, orchestrationId, kind,
       currentText: '',
       chatId: dispatchChatId,
+      commentId: options?.commentId,
       round: options?.round,
       relation: options?.relation,
     };
     notifyRunStateChanged();
 
-    await sendAcpPrompt(runKey, agentId, pendingId, content);
-    return runKey;
+    try {
+      const sent = await sendAcpPrompt(runKey, agentId, pendingId, content);
+      if (!sent) throw new Error('Failed to send prompt to agent');
+      return runKey;
+    } catch (err) {
+      updateMessage(pendingId, {
+        content: `⚠️ ${err instanceof Error ? err.message : 'Send failed'}`,
+        pending: false,
+      }, dispatchChatId);
+      finalizeRun(runKey);
+      throw err;
+    }
   }
 
   function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string }) {
@@ -1360,13 +2428,26 @@ export default function Page() {
 
         if (turn.done) {
           current.currentText = serverText;
+          // Extract and save agent comments
+          const { cleanText: textWithoutComments, comments: agentComments } = extractFileComments(serverText, agentId);
+          if (agentComments.length > 0) {
+            const agentName = agents.find(a => a.id === agentId)?.name;
+            void saveAgentComments(agentId, agentComments, agentName);
+            current.currentText = textWithoutComments;
+          }
           updateMessage(current.pendingId, {
-            content: serverText || (turn.error ? `⚠️ ${turn.error}` : ''),
+            content: current.currentText || (turn.error ? `⚠️ ${turn.error}` : ''),
             pending: false,
             parts: parts.length ? parts : undefined,
           }, effectiveChatId);
           await acp({ action: 'turn-clear', agentId, chatId: effectiveChatId }).catch(() => null);
+          const completedCommentId = current.commentId;
           finalizeRun(runKey);
+          if (effectiveChatId) {
+            const fallbackCommentId = fileCommentsRef.current.find(c => c.linkedChatId === effectiveChatId && c.status === 'processing')?.id;
+            const commentIdToResolve = completedCommentId || fallbackCommentId;
+            if (commentIdToResolve) void resolveProcessingCommentForChat(effectiveChatId, commentIdToResolve);
+          }
           return;
         } else {
           const patch: Partial<ChatMessage> = {
@@ -2159,7 +3240,7 @@ export default function Page() {
           <h1>🤖 Agents Chat</h1>
         </div>
         <div className="headerRight">
-          <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
+          <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
           <div className="themeMenuWrap" ref={themeMenuRef}>
             <button
               type="button"
@@ -2224,7 +3305,7 @@ export default function Page() {
             ) : (
               <>
                 <div className="leftSidebarTabs">
-                  <button className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => setLeftSidebarTab('chats')}>💬 Chats</button>
+                  <button className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => switchLeftSidebarTab('chats')}>💬 Chats</button>
                   <button className={`leftSidebarTab ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('files'); }}>📄 Files</button>
                 </div>
                 <span className="participantsHeaderLabel" onClick={() => setSidebarCollapsed(true)} style={{ cursor: 'pointer', fontSize: '14px', opacity: 0.6 }} title="Collapse sidebar">
@@ -2395,9 +3476,10 @@ export default function Page() {
 
         {/* ── Main chat area ── */}
         <div className="chatMain">
-          {mdEditorOpen && mdSelectedFile ? (
+          {leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile ? (
             /* ── Inline File Editor ── */
             <div className="mdEditorInline">
+              <div className="mdEditorContent">
               {mdConflict && mdConflict.mode === 'choice' && (
                 <div className="mdConflictBackdrop" role="dialog" aria-modal="true" aria-labelledby="md-conflict-title">
                   <div className="mdConflictDialog">
@@ -2486,8 +3568,19 @@ export default function Page() {
                       }}>Live Edit</button>
                     </div>
                   )}
-                  {isHtmlFile(mdSelectedFile) && <span className="mdPreviewBadge">Rendered HTML</span>}
-                  <button className="mdEditorBtn" onClick={() => void saveMdFile()} disabled={mdSaving || !mdDirty}>
+                  {isHtmlFile(mdSelectedFile) && (
+                    <div className="mdModeToggle">
+                      <button className="mdModeBtn active" onClick={() => setMdEditorMode('live')}>Preview</button>
+                    </div>
+                  )}
+                  <button
+                    className={`mdEditorBtn commentToggle ${commentSidebarOpen ? 'active' : ''}`}
+                    onClick={() => setCommentSidebarOpen(p => !p)}
+                    title="Toggle comments"
+                  >
+                    💬 {fileComments.filter(c => c.status === 'active').length || ''}
+                  </button>
+                  <button className="mdEditorBtn save" onClick={() => void saveMdFile()} disabled={mdSaving || !mdDirty}>
                     {mdSaving ? 'Saving…' : '💾 Save'}
                   </button>
                   <button className="mdEditorBtn secondary" onClick={() => {
@@ -2518,22 +3611,107 @@ export default function Page() {
                       </div>
                     </div>
                   </div>
+                ) : mdEditorMode === 'review' ? (
+                  <div className="mdEditorSimple">
+                    <div className="fileContentWithLines" ref={fileContentRef} onMouseUp={handleTextSelection} onScroll={handleFileContentScroll}>
+                      {(() => {
+                        const commentsByLine = getCommentsByLine();
+                        return mdEditContent.split('\n').map((line, idx) => renderReviewFileLine(line, idx, commentsByLine));
+                      })()}
+                    </div>
+                    {commentAddRange && !showCommentInput && (
+                      <button
+                        className="addCommentFloatingBtn"
+                        style={{ position: 'absolute', right: commentSidebarOpen ? '280px' : '40px', top: `${(commentAddRange.startLine - 1) * 20 + 40}px` }}
+                        onClick={() => { setShowCommentInput(true); if (!commentSidebarOpen) setCommentSidebarOpen(true); }}
+                      >
+                        💬 Add Comment
+                      </button>
+                    )}
+                  </div>
                 ) : (
-                  <div className="mdEditorLive">
+                  <div className="mdEditorLive" ref={mdLiveContainerRef} onScroll={handleLiveEditorScroll}>
                     <div
                       ref={mdLiveRef}
                       className="mdLiveEditable markdownBody"
                       contentEditable
                       suppressContentEditableWarning
                       dangerouslySetInnerHTML={{ __html: mdLiveHtml }}
+                      onMouseDown={() => {
+                        hideLiveEditCommentButton();
+                        clearLiveSelectionDraft();
+                      }}
                       onInput={() => {
                         if (mdLiveRef.current) {
                           const html = mdLiveRef.current.innerHTML;
                           const md = turndownRef.current!.turndown(html);
+                          setMdLiveHtml(html);
+                          setMdEditContent(md);
                           setMdDirty(md !== mdFileContent);
                         }
                       }}
                     />
+                    {liveSelectionDraftAnchor && (
+                      <div className="liveSelectionDraftLayer" aria-hidden="true">
+                        {liveSelectionDraftAnchor.rects.map((rect, idx) => (
+                          <span
+                            key={`${idx}-${rect.left}-${rect.top}`}
+                            className="liveSelectionDraftHighlight"
+                            style={{
+                              left: `${rect.left}px`,
+                              top: `${rect.top}px`,
+                              width: `${rect.width}px`,
+                              height: `${rect.height}px`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {liveCommentMarkers.length > 0 && (
+                      <div className="liveCommentMarkerLayer">
+                        {liveCommentMarkers.map(marker => (
+                          <button
+                            key={marker.lineNum}
+                            type="button"
+                            className={`lineCommentMarker liveCommentMarker ${marker.selected ? 'selected' : ''}`}
+                            style={{
+                              left: `${marker.left}px`,
+                              top: `${marker.top}px`,
+                              borderColor: marker.color,
+                              color: marker.color,
+                            }}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => { e.stopPropagation(); openCommentIds(marker.commentIds); }}
+                            title={marker.title}
+                            aria-label={marker.label}
+                          >
+                            💬{marker.count > 1 ? <span className="lineCommentCount">{marker.count}</span> : null}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      ref={liveEditCommentBtnRef}
+                      className="addCommentFloatingBtn"
+                      style={{ position: 'absolute', display: 'none' }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const range = pendingLiveEditCommentRangeRef.current;
+                        const anchor = pendingLiveEditCommentAnchorRef.current;
+                        const domRange = pendingLiveEditDomRangeRef.current;
+                        const selectedText = pendingLiveEditSelectedTextRef.current;
+                        if (!range) return;
+                        setCommentAddRange(range);
+                        liveSelectionDraftRangeRef.current = domRange ? domRange.cloneRange() : null;
+                        liveSelectionDraftTextRef.current = selectedText;
+                        setLiveSelectionDraftAnchor(anchor);
+                        setShowCommentInput(true);
+                        if (!commentSidebarOpen) setCommentSidebarOpen(true);
+                        hideLiveEditCommentButton();
+                      }}
+                    >
+                      💬 Add Comment
+                    </button>
                   </div>
                 )
               ) : isHtmlFile(mdSelectedFile) ? (
@@ -2547,14 +3725,201 @@ export default function Page() {
                 </div>
               ) : (
                 <div className="mdEditorSimple">
-                  <textarea
-                    className="mdEditorTextarea"
-                    value={mdEditContent}
-                    onChange={(e) => { setMdEditContent(e.target.value); setMdDirty(e.target.value !== mdFileContent); }}
-                    spellCheck={false}
-                  />
+                  <div className="fileContentWithLines" ref={fileContentRef} onMouseUp={handleTextSelection} onScroll={handleFileContentScroll}>
+                    {(() => {
+                      const commentsByLine = getCommentsByLine();
+                      return mdEditContent.split('\n').map((line, idx) => renderReviewFileLine(line, idx, commentsByLine));
+                    })()}
+                  </div>
+                  {commentAddRange && !showCommentInput && (
+                    <button
+                      className="addCommentFloatingBtn"
+                      style={{ position: 'absolute', right: commentSidebarOpen ? '280px' : '40px', top: `${(commentAddRange.startLine - 1) * 20 + 40}px` }}
+                      onClick={() => { setShowCommentInput(true); if (!commentSidebarOpen) setCommentSidebarOpen(true); }}
+                    >
+                      💬 Add Comment
+                    </button>
+                  )}
                 </div>
               ))}
+              </div>
+              {/* ── Comment sidebar ── */}
+              {commentSidebarOpen ? (
+                <div className="commentSidebar" ref={commentSidebarRef}>
+                  <div className="commentSidebarHeader">
+                    <span>Comments</span>
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      <select
+                        className="commentFilterSelect"
+                        value={commentFilter}
+                        onChange={(e) => setCommentFilter(e.target.value as 'all' | 'active' | 'resolved')}
+                      >
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="resolved">Resolved</option>
+                      </select>
+                      <button className="sidebarToggle" onClick={() => setCommentSidebarOpen(false)} title="Collapse comments">◀</button>
+                    </div>
+                  </div>
+                  <div className="commentSidebarList">
+                    {(() => {
+                      const visibleComments = getVisibleSidebarComments();
+                      const commentLayout = getCommentSidebarLayout(visibleComments);
+                      return (
+                        <>
+                          <div className="commentSidebarCanvas" style={{ minHeight: `${getCommentSidebarHeight(visibleComments, commentLayout)}px` }}>
+                            {visibleComments.map(c => {
+                              const isSelected = selectedCommentId === c.id;
+                              const isReplying = replyingToCommentId === c.id;
+                              const repliesExpanded = expandedReplyIds.has(c.id);
+                              return (
+                                <div
+                                 key={c.id}
+                                 data-comment-id={c.id}
+                                 className={`commentCard aligned ${isSelected ? 'selected' : ''} ${c.status === 'resolved' ? 'resolved' : ''} ${c.status === 'processing' ? 'processing' : ''} ${c.status === 'queued' ? 'queued' : ''}`}
+                                 style={{ top: `${commentLayout.get(c.id) ?? getCommentLineTop(c)}px` }}
+                                 onClick={() => setSelectedCommentId(isSelected ? null : c.id)}
+                                >
+                                 <div className="commentCardHeader">
+                                   <span className="commentAuthor">
+                                     {c.authorType === 'agent' ? '🤖' : '👤'} {c.authorName || c.authorType}
+                                   </span>
+                                   <span className="commentHeaderMeta">
+                                     <span className={`commentStatusBadge ${c.status}`}>{getCommentStatusLabel(c.status)}</span>
+                                     <span className="commentLineRange">
+                                       {c.rangeStartLine != null ? (c.rangeEndLine != null && c.rangeEndLine !== c.rangeStartLine ? `L${c.rangeStartLine}-${c.rangeEndLine}` : `L${c.rangeStartLine}`) : ''}
+                                     </span>
+                                   </span>
+                                 </div>
+                                 {isSelected || c.status === 'processing' || c.status === 'queued' ? (
+                                   <>
+                                     <div className="commentContent">{c.content}</div>
+                                     {c.status === 'active' && (
+                                       <div className="commentActions">
+                                         <button className="commentActionBtn approve" onClick={(e) => { e.stopPropagation(); void handleApproveComment(c.id); }}>✓ Approve</button>
+                                         <button className="commentActionBtn reject" onClick={(e) => { e.stopPropagation(); void handleRejectComment(c.id); }}>✗ Reject</button>
+                                         <button className="commentActionBtn reply" onClick={(e) => { e.stopPropagation(); setReplyingToCommentId(isReplying ? null : c.id); setReplyInput(''); }}>💬 Reply</button>
+                                       </div>
+                                     )}
+                                     {c.status === 'processing' && (
+                                       <>
+                                         <div className="commentProcessing" onClick={(e) => {
+                                           e.stopPropagation();
+                                           if (c.linkedChatId) {
+                                             openCommentReviewChat(c.linkedChatId);
+                                           }
+                                         }}>
+                                           <span className="commentSpinner" />
+                                           <span>Processing… (click to view)</span>
+                                         </div>
+                                         <div className="commentActions">
+                                           <button className="commentActionBtn stop" onClick={(e) => { e.stopPropagation(); void handleStopProcessingComment(c); }}>⏹ Stop</button>
+                                         </div>
+                                       </>
+                                     )}
+                                     {c.status === 'queued' && (
+                                       <div className="commentProcessing queued" onClick={(e) => {
+                                         e.stopPropagation();
+                                         if (c.linkedChatId) {
+                                           openCommentReviewChat(c.linkedChatId);
+                                         }
+                                       }}>
+                                         <span>⏳ Queued… (click to view)</span>
+                                       </div>
+                                     )}
+                                     {c.status === 'resolved' && (
+                                       <div className="commentResolved">
+                                         <span>✓ Resolved</span>
+                                         {c.linkedChatId && (
+                                           <button
+                                             type="button"
+                                             className="commentReviewChatLink"
+                                             onClick={(e) => {
+                                               e.stopPropagation();
+                                               openCommentReviewChat(c.linkedChatId!);
+                                             }}
+                                           >
+                                             View chat
+                                           </button>
+                                         )}
+                                       </div>
+                                     )}
+                                     {c.replies.length > 0 && (
+                                       <div className="commentReplies">
+                                         {!repliesExpanded && c.replies.length > 1 ? (
+                                           <button className="commentShowReplies" onClick={(e) => { e.stopPropagation(); setExpandedReplyIds(prev => new Set(prev).add(c.id)); }}>
+                                             {c.replies.length} replies
+                                           </button>
+                                         ) : (
+                                           c.replies.map(rp => (
+                                             <div key={rp.id} className="commentReply">
+                                               <span className="commentReplyAuthor">{rp.authorType === 'agent' ? '🤖' : '👤'} {rp.authorName || rp.authorType}</span>
+                                               <span className="commentReplyText">{rp.content}</span>
+                                             </div>
+                                           ))
+                                         )}
+                                       </div>
+                                     )}
+                                     {isReplying && (
+                                       <div className="commentReplyInput" onClick={(e) => e.stopPropagation()}>
+                                         <input
+                                           type="text"
+                                           value={replyInput}
+                                           onChange={(e) => setReplyInput(e.target.value)}
+                                           placeholder="Reply…"
+                                           onKeyDown={(e) => { if (e.key === 'Enter') void handleReplyComment(c.id); }}
+                                           autoFocus
+                                         />
+                                         <button onClick={() => void handleReplyComment(c.id)}>Send</button>
+                                       </div>
+                                     )}
+                                   </>
+                                 ) : (
+                                   <div className="commentContentCompact">{c.content}</div>
+                                 )}
+                                </div>
+                              );
+                            })}
+                            {showCommentInput && commentAddRange && (
+                              <div
+                                className="commentAddForm aligned"
+                                ref={commentAddFormRef}
+                                style={{ top: `${(commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT - commentSourceScrollTop}px` }}
+                              >
+                                <div className="commentAddLabel">New comment on L{commentAddRange.startLine}{commentAddRange.endLine !== commentAddRange.startLine ? `-${commentAddRange.endLine}` : ''}</div>
+                                <textarea
+                                 className="commentAddTextarea"
+                                 value={commentInput}
+                                 onChange={(e) => setCommentInput(e.target.value)}
+                                 placeholder="Write a comment…"
+                                 autoFocus={!liveSelectionDraftAnchor}
+                                />
+                                <div className="commentAddActions">
+                                 <button className="commentActionBtn" onClick={() => { setShowCommentInput(false); setCommentAddRange(null); setCommentInput(''); clearLiveSelectionDraft(); }}>Cancel</button>
+                                 <button className="commentActionBtn approve" onClick={() => void handleCreateComment()} disabled={!commentInput.trim()}>Submit</button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          {visibleComments.length === 0 && !showCommentInput && (
+                            <div className="muted" style={{ padding: 20, textAlign: 'center', fontSize: 13 }}>
+                              No comments
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              ) : (
+                fileComments.length > 0 && (
+                  <div className="commentSidebarCollapsed" onClick={() => setCommentSidebarOpen(true)} title="Open comments">
+                    <span className="commentSidebarCollapsedLabel">COMMENTS</span>
+                    <span className="commentBadge">{fileComments.filter(c => c.status === 'active').length}</span>
+                    <span className="commentExpandBtn">▶</span>
+                  </div>
+                )
+              )}
             </div>
           ) : (
           <>
@@ -4473,10 +5838,17 @@ export default function Page() {
         /* ── Inline Markdown Editor ── */
         .mdEditorInline {
           display: flex;
-          flex-direction: column;
+          flex-direction: row;
           height: 100%;
           overflow: hidden;
           position: relative;
+        }
+        .mdEditorContent {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
         }
         .mdEditorToolbar {
           display: flex;
@@ -4528,6 +5900,18 @@ export default function Page() {
         .mdEditorBtn.danger {
           background: var(--danger);
           border-color: color-mix(in srgb, var(--danger) 70%, transparent);
+        }
+        .mdEditorBtn.save:not(:disabled) {
+          background: var(--accent-soft);
+          color: var(--accent);
+        }
+        .mdEditorBtn.commentToggle {
+          background: transparent;
+          color: var(--text-soft);
+        }
+        .mdEditorBtn.commentToggle.active {
+          background: var(--accent-soft);
+          color: var(--accent);
         }
         .mdConflictBackdrop {
           position: fixed;
@@ -4718,14 +6102,15 @@ export default function Page() {
           padding: 3px 10px;
           font-size: 12px;
           border: none;
+          border-radius: 6px;
           background: transparent;
           color: var(--text-soft);
           cursor: pointer;
           white-space: nowrap;
         }
         .mdModeBtn.active {
-          background: var(--accent);
-          color: #fff;
+          background: var(--accent-soft);
+          color: var(--accent);
         }
         .mdModeBtn:hover:not(.active) { background: var(--hover-bg); }
         .mdPreviewBadge {
@@ -4744,6 +6129,7 @@ export default function Page() {
           flex: 1;
           min-height: 0;
           overflow-y: auto;
+          position: relative;
         }
         .mdEditorSimple {
           flex: 1;
@@ -4770,13 +6156,36 @@ export default function Page() {
         }
         .mdLiveEditable {
           min-height: 100%;
-          padding: 20px 32px;
+          padding: 20px 72px 20px 32px;
           outline: none;
           cursor: text;
         }
         .mdLiveEditable:focus {
           box-shadow: inset 0 0 0 2px var(--accent);
           border-radius: 4px;
+        }
+        .liveSelectionDraftLayer {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 2;
+        }
+        .liveSelectionDraftHighlight {
+          position: absolute;
+          background: rgba(88, 166, 255, 0.28);
+          border: 1px solid rgba(88, 166, 255, 0.5);
+          border-radius: 3px;
+          box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.16);
+        }
+        .liveCommentMarkerLayer {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 3;
+        }
+        .liveCommentMarker {
+          position: absolute;
+          pointer-events: auto;
         }
         .mdFileItem {
           cursor: pointer;
@@ -5001,6 +6410,444 @@ export default function Page() {
             padding: 10px;
           }
         }
+
+        /* ── Comment sidebar ── */
+        .commentSidebar {
+          width: 260px;
+          min-width: 260px;
+          border-left: 1px solid var(--border);
+          background: var(--panel-bg);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .commentSidebarHeader {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 12px;
+          border-bottom: 1px solid var(--border);
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--text-soft);
+        }
+        .commentFilterSelect {
+          background: var(--panel-strong);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          color: var(--text-soft);
+          font-size: 11px;
+          padding: 2px 4px;
+          cursor: pointer;
+        }
+        .commentSidebarList {
+          flex: 1;
+          overflow: visible;
+          min-height: 0;
+          position: relative;
+          padding: 8px;
+        }
+        .commentSidebarCanvas {
+          position: relative;
+        }
+        .commentCard {
+          background: var(--panel-strong);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 8px;
+          margin-bottom: 6px;
+          font-size: 12px;
+          cursor: pointer;
+          transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+        }
+        .commentCard.aligned {
+          position: absolute;
+          left: 0;
+          right: 0;
+          margin-bottom: 0;
+        }
+        .commentCard.selected {
+          border-color: var(--accent);
+          box-shadow: 0 0 8px rgba(88, 166, 255, 0.2);
+          z-index: 2;
+        }
+        .commentCard.resolved {
+          border-color: rgba(45, 212, 191, 0.45);
+          box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.08);
+        }
+        .commentCard.processing {
+          border-color: #d29922;
+        }
+        .commentCard.queued {
+          border-color: rgba(245, 158, 11, 0.45);
+          background: rgba(245, 158, 11, 0.08);
+        }
+        .commentCardHeader {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
+        }
+        .commentAuthor {
+          font-size: 11px;
+          color: var(--text-soft);
+        }
+        .commentHeaderMeta {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .commentStatusBadge {
+          padding: 1px 6px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--accent-soft);
+          color: var(--accent);
+          font-size: 10px;
+          font-weight: 600;
+          line-height: 1.4;
+        }
+        .commentStatusBadge.resolved {
+          background: rgba(45, 212, 191, 0.12);
+          border-color: rgba(45, 212, 191, 0.35);
+          color: #5eead4;
+        }
+        .commentStatusBadge.processing {
+          background: rgba(210, 153, 34, 0.14);
+          border-color: rgba(210, 153, 34, 0.4);
+          color: #d29922;
+        }
+        .commentStatusBadge.queued {
+          background: rgba(245, 158, 11, 0.12);
+          border-color: rgba(245, 158, 11, 0.35);
+          color: #f59e0b;
+        }
+        .commentLineRange {
+          font-size: 10px;
+          color: var(--text-soft);
+          opacity: 0.6;
+        }
+        .commentContent {
+          color: var(--text);
+          margin: 4px 0;
+          line-height: 1.4;
+        }
+        .commentContentCompact {
+          color: var(--text-soft);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .commentActions {
+          display: flex;
+          gap: 4px;
+          margin-top: 6px;
+        }
+        .commentActionBtn {
+          padding: 2px 8px;
+          border-radius: 4px;
+          border: none;
+          font-size: 11px;
+          cursor: pointer;
+          background: var(--panel-strong);
+          color: var(--text-soft);
+        }
+        .commentActionBtn.approve {
+          border: 1px solid rgba(94, 234, 212, 0.45);
+          background: linear-gradient(135deg, rgba(20, 184, 166, 0.92), rgba(52, 211, 153, 0.9));
+          color: #042f2e;
+          box-shadow: 0 0 14px rgba(45, 212, 191, 0.18);
+          font-weight: 700;
+        }
+        .commentActionBtn.reject {
+          background: #da3633;
+          color: white;
+        }
+        .commentActionBtn.stop {
+          background: #d29922;
+          color: #0d1117;
+        }
+        .commentActionBtn.reply {
+          background: var(--panel-strong);
+          color: var(--text-soft);
+        }
+        .commentActionBtn:hover { opacity: 0.85; }
+        .commentActionBtn:disabled { opacity: 0.4; cursor: default; }
+        .commentProcessing {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 6px;
+          color: #d29922;
+          font-size: 11px;
+          cursor: pointer;
+        }
+        .commentProcessing.queued {
+          color: var(--text-soft);
+        }
+        .commentSpinner {
+          width: 12px;
+          height: 12px;
+          border: 2px solid #d29922;
+          border-top-color: transparent;
+          border-radius: 50%;
+          display: inline-block;
+          animation: commentSpin 1s linear infinite;
+        }
+        @keyframes commentSpin { to { transform: rotate(360deg); } }
+        .commentResolved {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: var(--text-soft);
+          font-size: 11px;
+          margin-top: 4px;
+        }
+        .commentReviewChatLink {
+          background: none;
+          border: none;
+          color: var(--accent);
+          cursor: pointer;
+          font-size: 11px;
+          padding: 0;
+        }
+        .commentReviewChatLink:hover {
+          text-decoration: underline;
+        }
+        .commentReplies {
+          border-top: 1px solid var(--border);
+          margin-top: 6px;
+          padding-top: 6px;
+        }
+        .commentShowReplies {
+          background: none;
+          border: none;
+          color: var(--accent);
+          font-size: 11px;
+          cursor: pointer;
+          padding: 0;
+        }
+        .commentReply {
+          border-left: 2px solid var(--border);
+          padding-left: 8px;
+          margin-bottom: 4px;
+          font-size: 11px;
+        }
+        .commentReplyAuthor {
+          color: var(--text-soft);
+          font-size: 10px;
+          display: block;
+        }
+        .commentReplyText {
+          color: var(--text-soft);
+        }
+        .commentReplyInput {
+          display: flex;
+          gap: 4px;
+          margin-top: 6px;
+        }
+        .commentReplyInput input {
+          flex: 1;
+          background: var(--bg-accent);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          padding: 4px 8px;
+          color: var(--text);
+          font-size: 11px;
+        }
+        .commentReplyInput button {
+          background: var(--accent);
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 4px 10px;
+          font-size: 11px;
+          cursor: pointer;
+        }
+        .commentAddForm {
+          background: var(--panel-strong);
+          border: 1px solid var(--accent);
+          border-radius: 6px;
+          padding: 8px;
+          margin-top: 8px;
+        }
+        .commentAddForm.aligned {
+          position: absolute;
+          left: 0;
+          right: 0;
+          margin-top: 0;
+          z-index: 3;
+        }
+        .commentAddLabel {
+          font-size: 11px;
+          color: var(--text-soft);
+          margin-bottom: 4px;
+        }
+        .commentAddTextarea {
+          width: 100%;
+          min-height: 50px;
+          background: var(--bg-accent);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          padding: 6px;
+          color: var(--text);
+          font-size: 12px;
+          resize: vertical;
+          box-sizing: border-box;
+        }
+        .commentAddActions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 4px;
+          margin-top: 6px;
+        }
+
+        /* ── Collapsed sidebar ── */
+        .commentSidebarCollapsed {
+          width: 28px;
+          min-width: 28px;
+          background: var(--panel-bg);
+          border-left: 1px solid var(--border);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          padding-top: 12px;
+          gap: 8px;
+          cursor: pointer;
+        }
+        .commentSidebarCollapsedLabel {
+          writing-mode: vertical-rl;
+          font-size: 10px;
+          color: var(--text-soft);
+          letter-spacing: 0.05em;
+        }
+        .commentBadge {
+          background: var(--accent);
+          color: #fff;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          text-align: center;
+          line-height: 18px;
+          font-size: 10px;
+          font-weight: 600;
+        }
+        .commentExpandBtn {
+          color: var(--text-soft);
+          font-size: 12px;
+        }
+
+        /* ── File line viewer ── */
+        .fileContentWithLines {
+          flex: 1;
+          overflow: auto;
+          font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+          font-size: 13px;
+          line-height: 20px;
+          padding: 8px 0;
+          position: relative;
+        }
+        .fileLine {
+          display: flex;
+          min-height: 20px;
+          padding: 0 12px 0 0;
+        }
+        .fileLine.highlighted {
+          background: rgba(88, 166, 255, 0.12);
+          border-left: 3px solid var(--accent);
+        }
+        .fileLine.has-comment {
+          /* subtle marker only, no line highlight */
+        }
+        .fileLineGutter {
+          width: 60px;
+          min-width: 60px;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 4px;
+          padding-right: 12px;
+          user-select: none;
+        }
+        .fileLineNum {
+          color: var(--text-soft);
+          opacity: 0.4;
+          font-size: 12px;
+        }
+        .lineCommentMarker {
+          width: 22px;
+          height: 18px;
+          border: 1px solid currentColor;
+          border-radius: 5px;
+          background: color-mix(in srgb, currentColor 10%, transparent);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          color: var(--accent);
+          font-size: 10px;
+          line-height: 1;
+          cursor: pointer;
+          position: relative;
+          flex-shrink: 0;
+        }
+        .lineCommentMarker:hover,
+        .lineCommentMarker.selected {
+          background: color-mix(in srgb, currentColor 22%, transparent);
+          box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent);
+        }
+        .lineCommentMarker.liveCommentMarker {
+          position: absolute;
+          pointer-events: auto;
+        }
+        .lineCommentCount {
+          position: absolute;
+          top: -7px;
+          right: -7px;
+          min-width: 13px;
+          height: 13px;
+          padding: 0 3px;
+          border-radius: 999px;
+          background: var(--accent);
+          color: #fff;
+          font-size: 9px;
+          line-height: 13px;
+          font-family: system-ui, sans-serif;
+          font-weight: 700;
+          box-sizing: border-box;
+        }
+        .fileLineText {
+          white-space: pre;
+          color: var(--text);
+          flex: 1;
+        }
+        .fileLineSelectedText {
+          background: rgba(88, 166, 255, 0.28);
+          border: 1px solid rgba(88, 166, 255, 0.5);
+          border-radius: 3px;
+          box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.16);
+        }
+        .fileLineCommentSlot {
+          width: 34px;
+          min-width: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          user-select: none;
+        }
+        .addCommentFloatingBtn {
+          background: var(--accent);
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 4px 12px;
+          font-size: 12px;
+          cursor: pointer;
+          z-index: 10;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        .addCommentFloatingBtn:hover { opacity: 0.85; }
       `}</style>
     </main>
   );

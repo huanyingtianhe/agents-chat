@@ -33,12 +33,32 @@ type TurnEvent = {
   text?: string;
 };
 
+type PendingUserRequestOption = {
+  optionId: string;
+  kind?: string;
+  label: string;
+  description?: string;
+};
+
+type PendingUserRequest = {
+  id: string;
+  method: string;
+  agentId: string;
+  chatId?: string;
+  title: string;
+  prompt: string;
+  inputKind: 'options' | 'text';
+  options: PendingUserRequestOption[];
+  createdAt: number;
+};
+
 type TurnState = {
   id: string;
   messageId: string;
   agentId: string;
   userId: string;
   chatId?: string;
+  sessionId?: string;
   prompt: string;
   startedAt: number;
   fullText: string;
@@ -47,8 +67,20 @@ type TurnState = {
   statusText: string;
   error?: string;
   events: TurnEvent[];
+  userRequest?: PendingUserRequest;
   lastPersistedAt: number;
   persistTimer?: ReturnType<typeof setTimeout>;
+};
+
+type PendingUserRequestResponder = {
+  rpc: NdjsonRpc;
+  rpcRequestId: number | string;
+  agentId: string;
+  turn: TurnState;
+  request: PendingUserRequest;
+  method: string;
+  createdAt: number;
+  timeout?: ReturnType<typeof setTimeout>;
 };
 
 type StoredContentPart =
@@ -67,6 +99,19 @@ type AgentConfig = {
   relay?: boolean;
   relayConnectionName?: string;
 };
+
+const pendingUserRequestGlobal = globalThis as typeof globalThis & {
+  __acpPendingUserRequestResponders?: Map<string, PendingUserRequestResponder>;
+};
+
+function getPendingUserRequestResponders(): Map<string, PendingUserRequestResponder> {
+  if (!pendingUserRequestGlobal.__acpPendingUserRequestResponders) {
+    pendingUserRequestGlobal.__acpPendingUserRequestResponders = new Map();
+  }
+  return pendingUserRequestGlobal.__acpPendingUserRequestResponders;
+}
+
+const pendingUserRequestResponders = getPendingUserRequestResponders();
 
 /* ─────────── Minimal NDJSON-RPC over raw Node streams ─────────── */
 
@@ -509,6 +554,7 @@ function getUserSessions(): Map<string, UserSession> {
 
 // Periodically clean up stale user sessions (inactive > 30 min)
 const STALE_SESSION_MS = 30 * 60_000;
+const PENDING_USER_REQUEST_TIMEOUT_MS = 10 * 60_000;
 function cleanupStaleSessions() {
   const now = Date.now();
   for (const [key, sess] of getUserSessions()) {
@@ -583,37 +629,31 @@ function getUserSession(agentId: string, userId: string): UserSession {
   return sess;
 }
 
-// Find user session by sessionId (for routing notifications)
-function findUserSessionBySessionId(sessionId: string): UserSession | undefined {
-  for (const sess of getUserSessions().values()) {
-    if (sess.sessionId === sessionId) return sess;
-    // Also check chatSessions — different chats may use different sessionIds
-    for (const [, sessionList] of sess.chatSessions) {
-      if (sessionList.includes(sessionId)) return sess;
+/** Find the active turn for a notification's sessionId. */
+function findTurnBySessionId(agentId: string, sessionId: string): TurnState | undefined {
+  for (const [key, sess] of getUserSessions().entries()) {
+    if (!key.startsWith(`${agentId}:`)) continue;
+    for (const turn of sess.activeTurns.values()) {
+      if (!turn.done && turn.agentId === agentId && turn.sessionId === sessionId) return turn;
     }
   }
+
   return undefined;
 }
 
-/** Find the chatId whose current session matches the given sessionId. */
-function findChatIdBySessionId(sess: UserSession, sessionId: string): string | undefined {
-  for (const [chatId, sessionList] of sess.chatSessions) {
-    if (sessionList.length > 0 && sessionList[sessionList.length - 1] === sessionId) return chatId;
+function findActiveTurnKeyForSession(sess: UserSession, sessionId: string, exceptKey?: string): string | null {
+  for (const [key, turn] of sess.activeTurns) {
+    if (key !== exceptKey && !turn.done && turn.sessionId === sessionId) return key;
   }
-  return undefined;
+
+  return null;
 }
 
-/** Find the active turn for a notification's sessionId. */
-function findTurnBySessionId(sessionId: string): TurnState | undefined {
-  const sess = findUserSessionBySessionId(sessionId);
-  if (!sess) return undefined;
-  const chatId = findChatIdBySessionId(sess, sessionId);
-  if (chatId) return sess.activeTurns.get(chatId);
-  // Fallback: check all active turns for one matching this sessionId's chat
-  for (const turn of sess.activeTurns.values()) {
-    if (turn.chatId && getChatSession(sess, turn.chatId) === sessionId) return turn;
-  }
-  return undefined;
+function getActiveTurnForResume(chatTurn: TurnState | undefined, savedSessionId: string): TurnState | null {
+  if (!chatTurn || chatTurn.done) return null;
+  if (chatTurn.sessionId && chatTurn.sessionId !== savedSessionId) return null;
+  if (!chatTurn.sessionId) chatTurn.sessionId = savedSessionId;
+  return chatTurn;
 }
 
 /* ─────────────── ACP Lifecycle ─────────────── */
@@ -658,6 +698,7 @@ async function doBootAgent(agentId: string): Promise<void> {
         proc.knownSessions.clear();
         for (const [key, sess] of getUserSessions()) {
           if (key.startsWith(`${agentId}:`)) {
+            clearPendingUserRequestsForSession(agentId, sess, 'relay disconnected');
             sess.phase = 'idle';
             sess.sessionId = null;
             for (const [chatId, turn] of sess.activeTurns) {
@@ -705,6 +746,7 @@ async function doBootAgent(agentId: string): Promise<void> {
         proc.knownSessions.clear();
         for (const [key, sess] of getUserSessions()) {
           if (key.startsWith(`${agentId}:`)) {
+            clearPendingUserRequestsForSession(agentId, sess, 'process exited');
             sess.phase = 'idle';
             sess.sessionId = null;
             for (const [chatId, turn] of sess.activeTurns) {
@@ -727,6 +769,12 @@ async function doBootAgent(agentId: string): Promise<void> {
     rpc.onRequest = (method, params, id) => {
       console.log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
 
+      if (method === 'session/request_input' || method === 'session/request_user_input') {
+        const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
+        if (!queued) rpc.respond(id, { answer: '' });
+        return;
+      }
+
       // noTools agents: deny all tool/permission requests so the agent responds quickly
       if (config.noTools) {
         if (method === 'session/request_permission') {
@@ -741,10 +789,11 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
 
       if (method === 'session/request_permission') {
-        // Respond with outcome format: { outcome: { outcome: 'selected', optionId: '...' } }
-        const allowOption = params?.options?.find((o: any) => o.kind === 'allow_always') || params?.options?.find((o: any) => o.kind === 'allow_once');
-        const optionId = allowOption?.optionId || 'allow_always';
-        rpc.respond(id, { outcome: { outcome: 'selected', optionId } });
+        const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
+        if (!queued) {
+          const denyOption = params?.options?.find((o: any) => o.kind === 'reject_once');
+          rpc.respond(id, { outcome: { outcome: 'selected', optionId: denyOption?.optionId || 'reject_once' } });
+        }
       } else if (method === 'terminal/create') {
         const result = handleTerminalCreate(params ?? {}, proc.cachedCwd);
         rpc.respond(id, result);
@@ -811,7 +860,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
 
       const turn = notifSessionId
-        ? findTurnBySessionId(notifSessionId)
+        ? findTurnBySessionId(agentId, notifSessionId)
         : undefined;
       if (!turn || turn.done) return;
 
@@ -1033,6 +1082,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     agentId,
     userId,
     chatId,
+    sessionId: sess.sessionId ?? undefined,
     prompt,
     startedAt: Date.now(),
     fullText: '',
@@ -1103,6 +1153,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         }
 
         // Retry the prompt on the new session
+        turn.sessionId = sess.sessionId ?? undefined;
         turn.phase = 'thinking';
         turn.statusText = 'Reconnected — retrying';
         turn.events.push({ type: 'thinking', ts: Date.now(), text: '(Session recovered, retrying...)' });
@@ -1153,8 +1204,159 @@ function serializeTurn(turn: TurnState | null, sinceEvent?: number) {
     statusText: turn.statusText,
     error: turn.error,
     events,
+    userRequest: turn.userRequest,
     totalEvents: turn.events.length,
   };
+}
+
+function createUserRequestId(agentId: string, rpcRequestId: number | string): string {
+  return `${agentId}:${Date.now()}:${String(rpcRequestId)}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function findTurnForSession(agentId: string, sessionId: string | undefined): TurnState | null {
+  if (!sessionId) return null;
+  return findTurnBySessionId(agentId, sessionId) ?? null;
+}
+
+function normalizePermissionOptions(params: any): PendingUserRequestOption[] { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const rawOptions = Array.isArray(params?.options) ? params.options : [];
+  return rawOptions
+    .filter((option: any) => typeof option?.optionId === 'string') // eslint-disable-line @typescript-eslint/no-explicit-any
+    .map((option: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+      optionId: option.optionId,
+      kind: typeof option.kind === 'string' ? option.kind : undefined,
+      label: typeof option.name === 'string' ? option.name : (typeof option.label === 'string' ? option.label : option.optionId),
+      description: typeof option.description === 'string' ? option.description : undefined,
+    }));
+}
+
+function buildAbandonedUserRequestResponse(request: PendingUserRequest): Record<string, unknown> {
+  if (request.method === 'session/request_permission') {
+    const rejectOption = request.options.find(option =>
+      option.kind === 'reject_once'
+      || option.kind === 'reject_always'
+      || option.kind === 'reject',
+    );
+    return { outcome: { outcome: 'selected', optionId: rejectOption?.optionId || 'reject_once' } };
+  }
+  return { answer: '' };
+}
+
+async function cancelTurnPrompt(proc: AgentProcess, turn: TurnState): Promise<void> {
+  if (turn.done || !turn.sessionId || !proc.rpc) return;
+  try {
+    await proc.rpc.send('session/cancel', { sessionId: turn.sessionId }, 5000);
+  } catch {
+    try {
+      proc.rpc.writeRaw(JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: turn.sessionId } }));
+    } catch { /* ignore */ }
+  }
+}
+
+function clearPendingUserRequestForTurn(turn: TurnState, reason: string, requestOverride?: PendingUserRequest): void {
+  const request = requestOverride ?? turn.userRequest;
+  if (!request) return;
+
+  const pending = pendingUserRequestResponders.get(request.id);
+  if (turn.userRequest?.id === request.id) {
+    turn.userRequest = undefined;
+  }
+
+  if (!pending) return;
+
+  if (pending.timeout) clearTimeout(pending.timeout);
+  pending.timeout = undefined;
+
+  try {
+    pending.rpc.respond(pending.rpcRequestId, buildAbandonedUserRequestResponse(request));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[ACP:${pending.agentId}] Failed to clean up pending user request (${reason}): ${message}`);
+  } finally {
+    pendingUserRequestResponders.delete(request.id);
+  }
+}
+
+function clearPendingUserRequestsForSession(agentId: string, sess: UserSession, reason: string): void {
+  for (const turn of sess.activeTurns.values()) {
+    if (turn.agentId === agentId) {
+      clearPendingUserRequestForTurn(turn, reason);
+    }
+  }
+}
+
+function queueUserRequestForTurn(
+  rpc: NdjsonRpc,
+  rpcRequestId: number | string,
+  agentId: string,
+  method: string,
+  params: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+): boolean {
+  const turn = findTurnForSession(agentId, typeof params?.sessionId === 'string' ? params.sessionId : undefined);
+  if (!turn) return false;
+
+  if (turn.userRequest) {
+    clearPendingUserRequestForTurn(turn, 'replaced');
+  }
+
+  const requestId = createUserRequestId(agentId, rpcRequestId);
+  const options = normalizePermissionOptions(params);
+  const prompt = typeof params?.prompt === 'string'
+    ? params.prompt
+    : typeof params?.message === 'string'
+      ? params.message
+      : typeof params?.question === 'string'
+        ? params.question
+      : 'The agent is asking for your approval.';
+
+  const request: PendingUserRequest = {
+    id: requestId,
+    method,
+    agentId,
+    chatId: turn.chatId,
+    title: method === 'session/request_permission' ? 'Permission request' : 'Agent question',
+    prompt,
+    inputKind: options.length > 0 ? 'options' : 'text',
+    options,
+    createdAt: Date.now(),
+  };
+  turn.userRequest = request;
+  turn.statusText = 'Waiting for your response';
+
+  const responder: PendingUserRequestResponder = {
+    rpc,
+    rpcRequestId,
+    agentId,
+    turn,
+    request,
+    method,
+    createdAt: Date.now(),
+    timeout: setTimeout(() => {
+      if (pendingUserRequestResponders.get(requestId) !== responder) return;
+      if (!turn.done && turn.userRequest?.id === requestId) {
+        turn.statusText = 'User request timed out';
+      }
+      clearPendingUserRequestForTurn(turn, 'timed out', responder.request);
+    }, PENDING_USER_REQUEST_TIMEOUT_MS),
+  };
+
+  pendingUserRequestResponders.set(requestId, responder);
+
+  return true;
+}
+
+function buildUserRequestResponse(request: PendingUserRequest, body: any): Record<string, unknown> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (request.method === 'session/request_permission') {
+    const optionId = typeof body?.optionId === 'string' ? body.optionId : '';
+    return { outcome: { outcome: 'selected', optionId } };
+  }
+  const selectedOption = typeof body?.optionId === 'string'
+    ? request.options.find(option => option.optionId === body?.optionId)
+    : undefined;
+  if (selectedOption) {
+    return { answer: selectedOption.label || selectedOption.optionId, optionId: selectedOption.optionId };
+  }
+  return { answer: String(body?.answer ?? '') };
 }
 
 /* ─────────── Chat Recovery: compare ACP replay with SQLite ─────────── */
@@ -1324,8 +1526,11 @@ export async function POST(req: NextRequest) {
       if (existing?.ready) {
         if (existing.rpc) existing.rpc.destroy();
         procs.delete(agentId);
-        for (const key of [...getUserSessions().keys()]) {
-          if (key.startsWith(`${agentId}:`)) getUserSessions().delete(key);
+        for (const [key, staleSess] of [...getUserSessions().entries()]) {
+          if (key.startsWith(`${agentId}:`)) {
+            clearPendingUserRequestsForSession(agentId, staleSess, 'agent restarted');
+            getUserSessions().delete(key);
+          }
         }
         bootAgent(agentId).catch(err => console.error(`[ACP:${agentId}] Restart failed:`, err));
         restarted = true;
@@ -1379,8 +1584,11 @@ export async function POST(req: NextRequest) {
       const existing2 = procs2.get(agentId);
       if (existing2?.rpc) existing2.rpc.destroy();
       procs2.delete(agentId);
-      for (const key of [...getUserSessions().keys()]) {
-        if (key.startsWith(`${agentId}:`)) getUserSessions().delete(key);
+      for (const [key, staleSess] of [...getUserSessions().entries()]) {
+        if (key.startsWith(`${agentId}:`)) {
+          clearPendingUserRequestsForSession(agentId, staleSess, 'agent deleted');
+          getUserSessions().delete(key);
+        }
       }
 
       configStore.deleteAgent(agentId);
@@ -1532,6 +1740,9 @@ export async function POST(req: NextRequest) {
       if (existingTurn && !existingTurn.done) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
+      if (sess.sessionId && findActiveTurnKeyForSession(sess, sess.sessionId, turnChatKey)) {
+        return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
+      }
 
       const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId, messageId);
       return NextResponse.json({ ok: true, phase: sess.phase, sessionId: sess.sessionId, turn: serializeTurn(turn) });
@@ -1550,11 +1761,63 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (action === 'respond-user-request') {
+      const requestId = typeof body?.requestId === 'string' ? body.requestId : '';
+      const pending = pendingUserRequestResponders.get(requestId);
+      if (!pending) return NextResponse.json({ ok: false, error: 'request_not_found' }, { status: 404 });
+
+      if (pending.turn.userId !== userId) {
+        return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
+      }
+
+      const request = pending.turn.userRequest;
+      const requestAgentId = request?.agentId ?? pending.request.agentId;
+
+      if (pending.agentId !== agentId || pending.turn.agentId !== agentId || requestAgentId !== agentId) {
+        return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
+      }
+
+      const requestAgent = configStore.getAgentById(requestAgentId);
+      if (!requestAgent || !canTalkTo(token, requestAgent.owner, requestAgentId, requestAgent.public, configStore.hasAgentAccess)) {
+        return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
+      }
+
+      if (!request || request.id !== requestId) {
+        clearPendingUserRequestForTurn(pending.turn, 'stale', pending.request);
+        return NextResponse.json({ ok: false, error: 'request_not_active' }, { status: 409 });
+      }
+
+      const turnChatKey = request.chatId || '__default';
+      if (sess.activeTurns.get(turnChatKey) !== pending.turn) {
+        clearPendingUserRequestForTurn(pending.turn, 'inactive');
+        return NextResponse.json({ ok: false, error: 'request_not_active' }, { status: 409 });
+      }
+
+      if (request.method === 'session/request_permission' || request.options.length > 0) {
+        if (typeof body?.optionId !== 'string' || !request.options.some(option => option.optionId === body.optionId)) {
+          return NextResponse.json({ ok: false, error: 'invalid_option' }, { status: 400 });
+        }
+      }
+
+      const result = buildUserRequestResponse(request, body);
+      try {
+        pending.rpc.respond(pending.rpcRequestId, result);
+      } finally {
+        pending.turn.userRequest = undefined;
+        pending.turn.statusText = 'Thinking';
+        if (pending.timeout) clearTimeout(pending.timeout);
+        pending.timeout = undefined;
+        pendingUserRequestResponders.delete(requestId);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === 'turn-clear') {
       const chatId = body?.chatId as string | undefined;
       const turnChatKey = chatId || '__default';
       const turn = sess.activeTurns.get(turnChatKey);
       if (turn) {
+        clearPendingUserRequestForTurn(turn, 'cleared');
         turn.events = [];
         sess.activeTurns.delete(turnChatKey);
         if (sess.activeTurns.size === 0) sess.phase = 'idle';
@@ -1567,19 +1830,8 @@ export async function POST(req: NextRequest) {
       const turnChatKey = chatId || '__default';
       const turn = sess.activeTurns.get(turnChatKey);
       if (turn && !turn.done && proc.rpc) {
-        // Find the correct sessionId for this chat's turn
-        const interruptSessionId = chatId ? getChatSession(sess, chatId) : sess.sessionId;
-        if (interruptSessionId) {
-          try {
-            await proc.rpc.send('session/cancel', { sessionId: interruptSessionId }, 5000);
-          } catch {
-            try {
-              proc.rpc.writeRaw(
-                JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: interruptSessionId } })
-              );
-            } catch { /* ignore */ }
-          }
-        }
+        clearPendingUserRequestForTurn(turn, 'interrupted');
+        await cancelTurnPrompt(proc, turn);
         turn.done = true;
         turn.phase = 'done';
         turn.statusText = 'Interrupted';
@@ -1593,12 +1845,28 @@ export async function POST(req: NextRequest) {
     if (action === 'reset') {
       // Reset only this user's session, not the shared process
       // Note: ACP has no session/close method — sessions persist on the agent side
+      clearPendingUserRequestsForSession(agentId, sess, 'reset');
+      for (const turn of sess.activeTurns.values()) {
+        if (turn.agentId !== agentId || turn.done) continue;
+        await cancelTurnPrompt(proc, turn);
+      }
       getUserSessions().delete(userSessionKey(agentId, userId));
       return NextResponse.json({ ok: true });
     }
 
     if (action === 'new-session') {
       const chatId = body?.chatId as string | undefined;
+      const turnChatKey = chatId || '__default';
+      const turn = sess.activeTurns.get(turnChatKey);
+      if (turn) {
+        clearPendingUserRequestForTurn(turn, 'new session');
+        await cancelTurnPrompt(proc, turn);
+      }
+      sess.activeTurns.delete(turnChatKey);
+      if (sess.activeTurns.size === 0) sess.phase = 'idle';
+      const previousSessionId = chatId ? getChatSession(sess, chatId) : sess.sessionId;
+      if (chatId) sess.chatSessions.delete(chatId);
+      if (!chatId || (previousSessionId && sess.sessionId === previousSessionId)) sess.sessionId = null;
       if (!proc.ready || !proc.rpc) {
         return NextResponse.json({ ok: true, skipped: true });
       }
@@ -1609,11 +1877,6 @@ export async function POST(req: NextRequest) {
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
-        // Clear only this chat's active turn
-        if (chatId) {
-          sess.activeTurns.delete(chatId);
-        }
-        if (sess.activeTurns.size === 0) sess.phase = 'idle';
         // Persist session ID to SQLite
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
@@ -1635,6 +1898,14 @@ export async function POST(req: NextRequest) {
       if (!savedSessionId) {
         return NextResponse.json({ ok: false, error: 'missing_sessionId' }, { status: 400 });
       }
+      const turnChatKey = chatId || '__default';
+      const chatTurn = sess.activeTurns.get(turnChatKey);
+      if (chatTurn && !chatTurn.done && chatTurn.sessionId && chatTurn.sessionId !== savedSessionId) {
+        return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
+      }
+      if (findActiveTurnKeyForSession(sess, savedSessionId, turnChatKey)) {
+        return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
+      }
       if (!proc.ready || !proc.rpc) {
         // Agent not running — boot it first
         if (!proc.booting) {
@@ -1655,11 +1926,7 @@ export async function POST(req: NextRequest) {
       // Detach current session (ACP has no session/close — sessions persist for future session/load)
       // If this session is known to be active in the agent, just switch to it
       if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
-        const turnChatKey = chatId || '__default';
-        const chatTurn = sess.activeTurns.get(turnChatKey);
-        const activeTurn = sess.sessionId === savedSessionId && chatTurn && !chatTurn.done
-          ? chatTurn
-          : null;
+        const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
         sess.sessionId = savedSessionId;
         if (chatId) pushChatSession(sess, chatId, savedSessionId);
         if (!activeTurn && chatTurn) {
@@ -1687,10 +1954,10 @@ export async function POST(req: NextRequest) {
           const replayMessages = replayBuffers.get(savedSessionId) || [];
           replayBuffers.delete(savedSessionId);
           console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
-
           // Compare with stored chat to find recovered messages
           const recovery = await compareAndRecover(userId, chatId, agentId, replayMessages);
-          return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, ...recovery });
+          const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
+          return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn), ...recovery });
         } catch (loadErr: any) {
           replayBuffers.delete(savedSessionId);
           // If session is already loaded, just reuse it
@@ -1699,11 +1966,7 @@ export async function POST(req: NextRequest) {
           if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
           const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
           if (alreadyLoaded) {
-            const turnChatKey = chatId || '__default';
-            const chatTurn = sess.activeTurns.get(turnChatKey);
-            const activeTurn = sess.sessionId === savedSessionId && chatTurn && !chatTurn.done
-              ? chatTurn
-              : null;
+            const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
             sess.sessionId = savedSessionId;
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
             sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';

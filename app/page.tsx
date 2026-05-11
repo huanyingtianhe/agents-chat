@@ -293,6 +293,29 @@ type ContentPart =
   | { kind: 'tool'; toolName: string; args?: string; result?: string; done: boolean }
   | { kind: 'text'; text: string };
 
+type AgentUserRequestOption = {
+  optionId: string;
+  kind?: string;
+  label: string;
+  description?: string;
+};
+
+type AgentUserRequest = {
+  id: string;
+  method: string;
+  agentId: string;
+  title: string;
+  prompt: string;
+  inputKind: 'options' | 'text';
+  options: AgentUserRequestOption[];
+  createdAt: number;
+};
+
+type AgentUserRequestSubmission = {
+  pending: boolean;
+  error?: string;
+};
+
 type ChatMessage = {
   id: string;
   type: 'user' | 'agent' | 'system';
@@ -306,6 +329,7 @@ type ChatMessage = {
   statusText?: string;
   ptyPhase?: PtyPhase;
   parts?: ContentPart[];
+  userRequest?: AgentUserRequest;
 };
 
 type ChatHistoryEntry = {
@@ -639,6 +663,7 @@ export default function Page() {
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
   const [shareDialog, setShareDialog] = useState<ShareDialog | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [agentUserRequestSubmissions, setAgentUserRequestSubmissions] = useState<Record<string, AgentUserRequestSubmission>>({});
 
   // Add agent form
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -730,6 +755,8 @@ export default function Page() {
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const agentUserRequestSubmissionsRef = useRef(agentUserRequestSubmissions);
+  agentUserRequestSubmissionsRef.current = agentUserRequestSubmissions;
   const chatMessagesRef = useRef<Record<string, ChatMessage[]>>({});
   const currentChatIdRef = useRef(currentChatId);
   currentChatIdRef.current = currentChatId;
@@ -803,6 +830,24 @@ export default function Page() {
   /* ── Effects ── */
 
   useEffect(() => { setMentionSelectedIndex(0); }, [input, agents]);
+
+  useEffect(() => {
+    const activeRequestIds = new Set<string>();
+    for (const chatMessages of Object.values(chatMessagesRef.current)) {
+      for (const message of chatMessages) {
+        if (message.userRequest?.id) activeRequestIds.add(message.userRequest.id);
+      }
+    }
+
+    const currentSubmissions = agentUserRequestSubmissionsRef.current;
+    const staleRequestIds = Object.keys(currentSubmissions).filter((requestId) => !activeRequestIds.has(requestId));
+    if (staleRequestIds.length === 0) return;
+
+    const next = { ...currentSubmissions };
+    for (const requestId of staleRequestIds) delete next[requestId];
+    agentUserRequestSubmissionsRef.current = next;
+    setAgentUserRequestSubmissions(next);
+  }, [messages, currentChatId, runVersion]);
 
   useEffect(() => {
     setMounted(true);
@@ -1073,6 +1118,59 @@ export default function Page() {
     } catch (err) {
       console.error('Failed to copy message', err);
     }
+  }
+
+  function renderAgentUserRequest(message: ChatMessage) {
+    const request = message.userRequest;
+    if (!request || !message.agentId) return null;
+    const submission = agentUserRequestSubmissions[request.id];
+    const isSubmitting = submission?.pending === true;
+    const submissionError = submission?.error;
+
+    return (
+      <div className="agentUserRequestCard">
+        <div className="agentUserRequestHeader">{request.title}</div>
+        <div className="agentUserRequestPrompt">{request.prompt}</div>
+        {request.inputKind === 'options' ? (
+          <div className="agentUserRequestActions">
+            {request.options.map((option) => (
+              <button
+                key={option.optionId}
+                type="button"
+                className={`agentUserRequestButton ${option.kind || ''}`.trim()}
+                disabled={isSubmitting}
+                onClick={() => void submitAgentUserRequest(message, { optionId: option.optionId })}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <form
+            key={request.id}
+            className="agentUserRequestForm"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (isSubmitting) return;
+              const form = e.currentTarget;
+              const input = form.elements.namedItem('answer') as HTMLInputElement | null;
+              const answer = input?.value.trim() || '';
+              if (answer) void submitAgentUserRequest(message, { answer });
+            }}
+          >
+            <input
+              name="answer"
+              className="agentUserRequestInput"
+              placeholder="Type your answer"
+              aria-label={`Response to ${request.title}`}
+              disabled={isSubmitting}
+            />
+            <button type="submit" className="agentUserRequestButton allow_once" disabled={isSubmitting}>Send</button>
+          </form>
+        )}
+        {submissionError ? <div className="agentUserRequestError" role="alert">{submissionError}</div> : null}
+      </div>
+    );
   }
 
   async function loadAgents() {
@@ -1373,11 +1471,13 @@ export default function Page() {
 
     if (activeRun) {
       const [runKey, run] = activeRun;
+      clearAgentUserRequestSubmissionForMessage(run.pendingId, run.chatId);
       updateMessage(run.pendingId, {
         content: run.currentText || '⏹ Stopped',
         pending: false,
         statusText: undefined,
         ptyPhase: undefined,
+        userRequest: undefined,
       }, run.chatId);
       delete sessionRunsRef.current[runKey];
       notifyRunStateChanged();
@@ -2197,6 +2297,51 @@ export default function Page() {
 
   /* ── ACP Send & Poll ── */
 
+  async function respondToAgentUserRequest(agentId: string, request: AgentUserRequest, response: { optionId?: string; answer?: string }) {
+    const res = await acp({
+      action: 'respond-user-request',
+      agentId,
+      chatId: currentChatIdRef.current,
+      requestId: request.id,
+      ...response,
+    });
+    if (!res?.ok) {
+      throw new Error(res?.error || 'Failed to answer agent request');
+    }
+  }
+
+  function setAgentUserRequestSubmission(requestId: string, submission: AgentUserRequestSubmission | null) {
+    const next = { ...agentUserRequestSubmissionsRef.current };
+    if (submission) {
+      next[requestId] = submission;
+    } else {
+      delete next[requestId];
+    }
+    agentUserRequestSubmissionsRef.current = next;
+    setAgentUserRequestSubmissions(next);
+  }
+
+  function clearAgentUserRequestSubmissionForMessage(messageId: string, chatId = currentChatIdRef.current) {
+    const chatMessages = chatMessagesRef.current[chatId] || (chatId === currentChatIdRef.current ? messagesRef.current : []);
+    const requestId = chatMessages.find((message) => message.id === messageId)?.userRequest?.id;
+    if (requestId) setAgentUserRequestSubmission(requestId, null);
+  }
+
+  async function submitAgentUserRequest(message: ChatMessage, response: { optionId?: string; answer?: string }) {
+    const request = message.userRequest;
+    const agentId = message.agentId;
+    if (!request || !agentId) return;
+    if (agentUserRequestSubmissionsRef.current[request.id]?.pending) return;
+
+    setAgentUserRequestSubmission(request.id, { pending: true });
+    try {
+      await respondToAgentUserRequest(agentId, request, response);
+    } catch (err) {
+      console.error('Failed to answer agent request', err);
+      setAgentUserRequestSubmission(request.id, { pending: false, error: err instanceof Error ? err.message : 'Failed to answer agent request' });
+    }
+  }
+
   async function sendAcpPrompt(runKey: string, agentId: string, pendingId: string, content: string) {
     const run = sessionRunsRef.current[runKey];
     if (!run || run.ptySendStarted) return false;
@@ -2342,9 +2487,11 @@ export default function Page() {
 
       // Safety timeout — don't poll forever (resets on each successful poll)
       if (Date.now() - lastActivity > POLL_TIMEOUT) {
+        clearAgentUserRequestSubmissionForMessage(current.pendingId, effectiveChatId);
         updateMessage(current.pendingId, {
           content: current.currentText || '⚠️ Response timed out',
           pending: false,
+          userRequest: undefined,
         }, effectiveChatId);
         finalizeRun(runKey);
         return;
@@ -2356,9 +2503,11 @@ export default function Page() {
       } catch (err) {
         consecutiveErrors++;
         if (consecutiveErrors >= MAX_ERRORS) {
+          clearAgentUserRequestSubmissionForMessage(current.pendingId, effectiveChatId);
           updateMessage(current.pendingId, {
             content: current.currentText || `⚠️ Lost connection to agent (${err instanceof Error ? err.message : 'network error'})`,
             pending: false,
+            userRequest: undefined,
           }, effectiveChatId);
           finalizeRun(runKey);
           return;
@@ -2375,6 +2524,7 @@ export default function Page() {
         phase?: string;
         statusText?: string;
         error?: string;
+        userRequest?: AgentUserRequest;
         events?: { type: string; ts: number; toolName?: string; toolCallId?: string; toolArgs?: string; toolResult?: string; text?: string }[];
       } | null;
 
@@ -2439,6 +2589,7 @@ export default function Page() {
             content: current.currentText || (turn.error ? `⚠️ ${turn.error}` : ''),
             pending: false,
             parts: parts.length ? parts : undefined,
+            userRequest: undefined,
           }, effectiveChatId);
           await acp({ action: 'turn-clear', agentId, chatId: effectiveChatId }).catch(() => null);
           const completedCommentId = current.commentId;
@@ -2455,6 +2606,7 @@ export default function Page() {
             ptyPhase: mapTurnPhase(turn.phase || ''),
             statusText: effectiveStatus,
             parts: parts.length ? parts : undefined,
+            userRequest: turn.userRequest,
           };
           if (serverText) {
             patch.content = serverText;
@@ -2771,11 +2923,13 @@ export default function Page() {
 
     // Finalize pending runs for the current chat only
     for (const [runKey, run] of Object.entries(activeRuns)) {
+      clearAgentUserRequestSubmissionForMessage(run.pendingId, run.chatId);
       updateMessage(run.pendingId, {
         content: run.currentText || '⏹ Stopped',
         pending: false,
         statusText: undefined,
         ptyPhase: undefined,
+        userRequest: undefined,
       }, run.chatId);
       delete sessionRunsRef.current[runKey];
     }
@@ -3934,7 +4088,7 @@ export default function Page() {
                     <span suppressHydrationWarning>{mounted ? formatMessageTime(message.ts) : ''}</span>
                   </div>
                 )}
-                {message.pending && !message.content && !(message.parts && message.parts.length > 0) ? (
+                {message.pending && !message.content && !(message.parts && message.parts.length > 0) && !message.userRequest ? (
                   <div className="thinkingWrap">
                     <span className="thinkingText">{message.statusText || 'Thinking'}</span>
                     <span className="thinkingDots"><span /><span /><span /></span>
@@ -3987,6 +4141,7 @@ export default function Page() {
                             </div>
                           )}
                         </div>
+                        {renderAgentUserRequest(message)}
                         <div className="messageActions">
                           {partsLong && !message.pending && (
                             <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
@@ -4017,6 +4172,7 @@ export default function Page() {
                               <span>{message.statusText || 'Generating'}</span>
                             </div>
                           )}
+                          {renderAgentUserRequest(message)}
                           <div className="messageActions">
                             {isLong && (
                               <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
@@ -5362,20 +5518,23 @@ export default function Page() {
           margin-top: 10px;
         }
         .messageCopyButton {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 30px;
           border: 1px solid var(--border);
           background: var(--panel-soft);
-          color: var(--text-soft);
-          border-radius: 999px;
-          padding: 4px 10px;
-          font-size: 11px;
-          font-weight: 700;
+          color: var(--accent);
+          border-radius: 10px;
+          padding: 0 10px;
+          font-size: 12px;
+          line-height: 1;
           cursor: pointer;
-          transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+          transition: all 160ms ease;
         }
         .messageCopyButton:hover {
-          color: var(--accent);
           border-color: var(--border-strong);
-          background: var(--panel);
+          background: var(--accent-soft);
         }
         .message.user {
           align-self: flex-end;
@@ -5466,14 +5625,19 @@ export default function Page() {
           pointer-events: none;
         }
         .collapseToggle {
-          margin-top: 10px;
-          padding: 6px 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 30px;
+          margin-top: 0;
+          padding: 0 10px;
           border-radius: 10px;
           border: 1px solid var(--border);
           background: var(--panel-soft);
           color: var(--accent);
           cursor: pointer;
           font-size: 12px;
+          line-height: 1;
           transition: all 160ms ease;
         }
         .collapseToggle:hover { border-color: var(--border-strong); background: var(--accent-soft); }
@@ -5481,6 +5645,68 @@ export default function Page() {
         .partsStream { display: flex; flex-direction: column; gap: 6px; }
         .partsStream.collapsed { max-height: 300px; overflow: hidden; position: relative; }
         .partsStream.collapsed::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, var(--message-agent)); pointer-events: none; }
+        .agentUserRequestCard {
+          margin-top: 10px;
+          padding: 12px;
+          border: 1px solid rgba(88, 166, 255, 0.35);
+          border-radius: 10px;
+          background: rgba(88, 166, 255, 0.08);
+        }
+        .agentUserRequestHeader {
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--accent);
+          margin-bottom: 6px;
+        }
+        .agentUserRequestPrompt {
+          color: var(--text);
+          line-height: 1.4;
+        }
+        .agentUserRequestActions,
+        .agentUserRequestForm {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 10px;
+        }
+        .agentUserRequestButton {
+          padding: 5px 10px;
+          border: 1px solid var(--border);
+          border-radius: 7px;
+          background: var(--panel-strong);
+          color: var(--text);
+          cursor: pointer;
+        }
+        .agentUserRequestButton:disabled,
+        .agentUserRequestInput:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        .agentUserRequestButton.allow_once,
+        .agentUserRequestButton.allow_always {
+          border-color: rgba(94, 234, 212, 0.45);
+          background: linear-gradient(135deg, rgba(20, 184, 166, 0.92), rgba(52, 211, 153, 0.9));
+          color: #042f2e;
+        }
+        .agentUserRequestButton.reject_once {
+          border-color: rgba(248, 113, 113, 0.45);
+          background: rgba(248, 113, 113, 0.12);
+          color: #fca5a5;
+        }
+        .agentUserRequestInput {
+          flex: 1;
+          min-width: 180px;
+          padding: 6px 8px;
+          border: 1px solid var(--border);
+          border-radius: 7px;
+          background: var(--input-bg);
+          color: var(--text);
+        }
+        .agentUserRequestError {
+          margin-top: 10px;
+          color: #fca5a5;
+          font-size: 12px;
+        }
         .thinkingPart { background: rgba(127, 127, 127, 0.08); border-left: 3px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
         .thinkingPartText { padding: 6px 10px; font-size: 0.82rem; color: var(--text-soft); white-space: pre-wrap; font-style: italic; }
         .htmlFileLink { color: var(--accent); text-decoration: underline; cursor: pointer; word-break: break-all; }

@@ -1,0 +1,359 @@
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+
+const routeSource = readFileSync(new URL('../app/api/acp/route.ts', import.meta.url), 'utf8');
+const findTurnBySessionIdSource = routeSource.slice(
+  routeSource.indexOf('function findTurnBySessionId'),
+  routeSource.indexOf('/* ─────────────── ACP Lifecycle ─────────────── */'),
+);
+const findTurnForSessionSource = routeSource.slice(
+  routeSource.indexOf('function findTurnForSession'),
+  routeSource.indexOf('function normalizePermissionOptions'),
+);
+const noToolsBranchStart = routeSource.indexOf('if (config.noTools) {');
+const noToolsBranchEnd = noToolsBranchStart >= 0 ? routeSource.indexOf('return;', noToolsBranchStart) : -1;
+const noToolsBranchSource = noToolsBranchStart >= 0 && noToolsBranchEnd >= 0
+  ? routeSource.slice(noToolsBranchStart, noToolsBranchEnd)
+  : '';
+const freeformRequestHandlerIndex = routeSource.indexOf(
+  "if (method === 'session/request_input' || method === 'session/request_user_input')",
+);
+const freeformQueuedInNoToolsBranch = /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn[\s\S]*?rpc\.respond\(id,\s*\{\s*answer:\s*''\s*\}\s*\)/.test(noToolsBranchSource);
+
+assert.match(
+  routeSource,
+  /type\s+PendingUserRequest\s*=/,
+  'route.ts should define a serializable PendingUserRequest type',
+);
+
+assert.match(
+  routeSource,
+  /userRequest\??:\s*PendingUserRequest/,
+  'TurnState should expose the pending user request through active turn state',
+);
+
+assert.match(
+  routeSource,
+  /sessionId\??:\s*string/,
+  'TurnState should persist immutable session identity for active turns',
+);
+
+assert.match(
+  routeSource,
+  /userRequest:\s*turn\.userRequest/,
+  'serializeTurn should include pending userRequest data for polling clients',
+);
+
+assert.match(
+  routeSource,
+  /type\s+PendingUserRequestResponder\s*=\s*\{[\s\S]*?createdAt:\s*number;[\s\S]*?\};[\s\S]*?const\s+pendingUserRequestGlobal\s*=\s*globalThis\s+as\s+typeof\s+globalThis\s*&\s*\{[\s\S]*?__acpPendingUserRequestResponders\?:\s*Map<string,\s*PendingUserRequestResponder>;[\s\S]*?\};[\s\S]*?function\s+getPendingUserRequestResponders\(\):\s*Map<string,\s*PendingUserRequestResponder>\s*\{[\s\S]*?pendingUserRequestGlobal\.__acpPendingUserRequestResponders\s*=\s*new\s+Map\(\);[\s\S]*?return\s+pendingUserRequestGlobal\.__acpPendingUserRequestResponders;[\s\S]*?\}[\s\S]*?const\s+pendingUserRequestResponders\s*=\s*getPendingUserRequestResponders\(\);/s,
+  'route.ts should persist pending user request responders on globalThis across route reloads',
+);
+
+assert.match(
+  routeSource,
+  /const\s+PENDING_USER_REQUEST_TIMEOUT_MS\s*=\s*10\s*\*\s*60_000;/,
+  'route.ts should bound pending user requests with a timeout constant',
+);
+
+assert.match(
+  routeSource,
+  /type\s+PendingUserRequestResponder\s*=\s*\{[\s\S]*?timeout\?:\s*ReturnType<typeof\s+setTimeout>;[\s\S]*?\}/s,
+  'PendingUserRequestResponder should track the timeout handle for cleanup',
+);
+
+assert.match(
+  routeSource,
+  /method\s*===\s*['"]session\/request_permission['"][\s\S]*?queueUserRequestForTurn/,
+  'session/request_permission should queue a user request instead of immediately approving',
+);
+
+assert.ok(
+  (freeformRequestHandlerIndex >= 0 && noToolsBranchStart >= 0 && freeformRequestHandlerIndex < noToolsBranchStart)
+  || freeformQueuedInNoToolsBranch,
+  'session/request_input and session/request_user_input should bypass the noTools early return or be explicitly queued there',
+);
+
+assert.doesNotMatch(
+  routeSource,
+  /if\s*\(method\s*===\s*['"]session\/request_permission['"]\)\s*\{[\s\S]{0,400}?allow_always[\s\S]{0,400}?rpc\.respond/,
+  'non-noTools session/request_permission should not auto-select allow_always/allow_once',
+);
+
+assert.match(
+  routeSource,
+  /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn[\s\S]*?rpc\.respond\(id,\s*\{\s*answer:\s*''\s*\}\s*\)/,
+  'session/request_input and session/request_user_input should fall back to { answer: \'\' } when queueing fails',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?pendingUserRequestResponders\.get/,
+  'route.ts should expose a respond-user-request action that resolves the stored JSON-RPC request',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?pending\.turn\.userId\s*!==\s*userId/,
+  'respond-user-request should reject responses from a different user',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?(request\.agentId|pending\.agentId)\s*!==\s*agentId/,
+  'respond-user-request should reject responses posted to the wrong agent',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?canTalkTo\(token,\s*requestAgent\.owner,\s*(requestAgentId|request\.agentId),\s*requestAgent\.public,\s*configStore\.hasAgentAccess\)/,
+  'respond-user-request should reuse agent access checks before resolving the RPC request',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?!request\s*\|\|\s*request\.id\s*!==\s*requestId[\s\S]*?clearPendingUserRequestForTurn\(pending\.turn,\s*['"][^'"]+['"](?:,\s*pending\.request)?\)/,
+  'stale respond-user-request should safely clear the pending responder through the helper',
+);
+
+assert.match(
+  routeSource,
+  /function\s+clearPendingUserRequestForTurn\s*\(/,
+  'route.ts should define a helper that safely clears pending user requests for a turn',
+);
+
+assert.match(
+  routeSource,
+  /function\s+clearPendingUserRequestsForSession\s*\(/,
+  'route.ts should define a helper that safely clears pending user requests for a session',
+);
+
+assert.match(
+  routeSource,
+  /queueUserRequestForTurn[\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]replaced['"]/,
+  'replacing a pending user request should safely resolve and clear the previous responder',
+);
+
+assert.match(
+  routeSource,
+  /function\s+queueUserRequestForTurn[\s\S]*?const\s+responder:\s*PendingUserRequestResponder\s*=\s*\{[\s\S]*?timeout:\s*setTimeout\(\(\)\s*=>\s*\{[\s\S]*?pendingUserRequestResponders\.get\(requestId\)\s*!==\s*responder[\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]timed out['"]\s*,\s*responder\.request\)[\s\S]*?\},\s*PENDING_USER_REQUEST_TIMEOUT_MS\)[\s\S]*?\};[\s\S]*?pendingUserRequestResponders\.set\(requestId,\s*responder\);/s,
+  'queueUserRequestForTurn should schedule timeout cleanup through clearPendingUserRequestForTurn',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]turn-clear['"][\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]cleared['"]/,
+  'turn-clear should safely clear any pending user request responder',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]interrupt['"][\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]interrupted['"]/,
+  'interrupt should safely clear any pending user request responder',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]reset['"][\s\S]*?clearPendingUserRequestsForSession\(agentId,\s*sess,\s*['"]reset['"]/,
+  'reset should safely clear any pending user request responders for the session',
+);
+
+assert.match(
+  routeSource,
+  /rpc\.onClose\s*=\s*\(reason\)\s*=>[\s\S]*?clearPendingUserRequestsForSession\(agentId,\s*sess,\s*['"]relay disconnected['"]/,
+  'relay disconnect cleanup should safely resolve pending user request responders',
+);
+
+assert.match(
+  routeSource,
+  /cp\.on\('exit',\s*\(code\)\s*=>[\s\S]*?clearPendingUserRequestsForSession\(agentId,\s*sess,\s*['"]process exited['"]/,
+  'process exit cleanup should safely resolve pending user request responders',
+);
+
+assert.match(
+  findTurnForSessionSource,
+  /function\s+findTurnForSession\s*\(\s*agentId:\s*string,\s*sessionId:\s*string\s*\|\s*undefined\s*\):\s*TurnState\s*\|\s*null\s*\{[\s\S]*?if\s*\(!sessionId\)\s*return\s+null;[\s\S]*?return\s+findTurnBySessionId\(agentId,\s*sessionId\)\s*\?\?\s*null;/,
+  'findTurnForSession should delegate to agent-scoped findTurnBySessionId for immutable session routing',
+);
+
+assert.match(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId\s*\(\s*agentId:\s*string,\s*sessionId:\s*string\s*\):\s*TurnState\s*\|\s*undefined\s*\{[\s\S]*?for\s*\(const\s+\[key,\s*sess\]\s+of\s+getUserSessions\(\)\.entries\(\)\)\s*\{[\s\S]*?if\s*\(!key\.startsWith\(`\$\{agentId\}:`\)\)\s*continue;[\s\S]*?for\s*\(const\s+turn\s+of\s+sess\.activeTurns\.values\(\)\)\s*\{[\s\S]*?turn\.agentId\s*===\s*agentId[\s\S]*?turn\.sessionId\s*===\s*sessionId[\s\S]*?return\s+turn;/,
+  'findTurnBySessionId should scope active-turn lookup to the matching agent and immutable session id',
+);
+
+assert.match(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId[\s\S]*?sess\.activeTurns\.values\(\)/,
+  'findTurnBySessionId should iterate sess.activeTurns.values()',
+);
+
+assert.match(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId[\s\S]*?(key\.startsWith\(`\$\{agentId\}:`\)|turn\.agentId\s*===\s*agentId)/,
+  'findTurnBySessionId should skip non-matching agent sessions or explicitly check turn.agentId',
+);
+
+assert.match(
+  routeSource,
+  /rpc\.onNotification\s*=\s*\(method,\s*params\)\s*=>[\s\S]*?findTurnBySessionId\(agentId,\s*notifSessionId\)/,
+  'session/update notifications should route through agent-scoped session lookup',
+);
+
+assert.match(
+  routeSource,
+  /function\s+queueUserRequestForTurn[\s\S]*?findTurnForSession\(agentId,\s*typeof\s+params\?\.sessionId\s*===\s*['"]string['"]\s*\?\s*params\.sessionId\s*:\s*undefined\)/,
+  'queueUserRequestForTurn should resolve turns through agent-scoped session lookup',
+);
+
+assert.match(
+  routeSource,
+  /const\s+prompt\s*=\s*typeof\s+params\?\.prompt\s*===\s*['"]string['"][\s\S]*?typeof\s+params\?\.message\s*===\s*['"]string['"][\s\S]*?typeof\s+params\?\.question\s*===\s*['"]string['"]/,
+  'queueUserRequestForTurn should derive prompt text from params.prompt, params.message, or params.question',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+cancelTurnPrompt\s*\(\s*proc:\s*AgentProcess,\s*turn:\s*TurnState\s*\):\s*Promise<void>\s*\{[\s\S]*?if\s*\(turn\.done\s*\|\|\s*!turn\.sessionId\s*\|\|\s*!proc\.rpc\)\s*return;[\s\S]*?await\s+proc\.rpc\.send\('session\/cancel',\s*\{\s*sessionId:\s*turn\.sessionId\s*\},\s*5000\)[\s\S]*?proc\.rpc\.writeRaw\([\s\S]*?session\/cancel[\s\S]*?turn\.sessionId[\s\S]*?\)/,
+  'route.ts should define cancelTurnPrompt to cancel unfinished prompts before cleanup',
+);
+
+assert.match(
+  routeSource,
+  /function\s+findActiveTurnKeyForSession\s*\(\s*sess:\s*UserSession,\s*sessionId:\s*string,\s*exceptKey\?:\s*string\s*\):\s*string\s*\|\s*null\s*\{[\s\S]*?for\s*\(const\s*\[key,\s*turn\]\s*of\s*sess\.activeTurns\)\s*\{[\s\S]*?key\s*!==\s*exceptKey[\s\S]*?!turn\.done[\s\S]*?turn\.sessionId\s*===\s*sessionId[\s\S]*?return\s+key;[\s\S]*?return\s+null;/,
+  'findActiveTurnKeyForSession should scan active turns by immutable session id while excluding the requested key',
+);
+
+assert.match(
+  routeSource,
+  /sessionId:\s*sess\.sessionId\s*\?\?\s*undefined/,
+  'sendPrompt should initialize each turn with the current session id',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]send['"][\s\S]*?const\s+turnChatKey\s*=\s*chatId\s*\|\|\s*['"]__default['"][\s\S]*?const\s+existingTurn\s*=\s*sess\.activeTurns\.get\(turnChatKey\);[\s\S]*?if\s*\(existingTurn\s*&&\s*!existingTurn\.done\)\s*\{[\s\S]*?error:\s*['"]turn_in_progress['"][\s\S]*?\}[\s\S]*?if\s*\(sess\.sessionId\s*&&\s*findActiveTurnKeyForSession\(sess,\s*sess\.sessionId,\s*turnChatKey\)\)\s*\{[\s\S]*?error:\s*['"]turn_in_progress['"][\s\S]*?\}[\s\S]*?sendPrompt\(/,
+  'send should reject when the current session id is already owned by another unfinished turn before sending the prompt',
+);
+
+assert.match(
+  routeSource,
+  /turn\.sessionId\s*=\s*sess\.sessionId\s*\?\?\s*undefined;/,
+  'session recovery should update the active turn session id before retrying',
+);
+
+assert.doesNotMatch(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId[\s\S]*?findUserSessionBySessionId\s*\(/,
+  'findTurnBySessionId should not call findUserSessionBySessionId',
+);
+
+assert.doesNotMatch(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId[\s\S]*?findChatIdBySessionId\s*\(/,
+  'findTurnBySessionId should not call findChatIdBySessionId',
+);
+
+assert.doesNotMatch(
+  findTurnBySessionIdSource,
+  /function\s+findTurnBySessionId[\s\S]*?getChatSession\s*\(/,
+  'findTurnBySessionId should not call getChatSession',
+);
+
+assert.doesNotMatch(
+  findTurnForSessionSource,
+  /function\s+findTurnForSession[\s\S]*?getChatSession\s*\(/,
+  'findTurnForSession should not call getChatSession',
+);
+
+assert.doesNotMatch(
+  findTurnForSessionSource,
+  /function\s+findTurnForSession[\s\S]*?for\s*\(const\s+sess\s+of\s+getUserSessions\(\)\.values\(\)\)\s*\{/,
+  'findTurnForSession should not iterate chat sessions directly',
+);
+
+assert.match(
+  routeSource,
+  /function\s+clearPendingUserRequestForTurn[\s\S]*?pending\.rpc\.respond\(pending\.rpcRequestId,\s*buildAbandonedUserRequestResponse\(request\)\);[\s\S]*?finally\s*\{[\s\S]*?pendingUserRequestResponders\.delete\(request\.id\);[\s\S]*?\}/,
+  'clearPendingUserRequestForTurn should respond before deleting the pending responder',
+);
+
+assert.match(
+  routeSource,
+  /function\s+clearPendingUserRequestForTurn[\s\S]*?if\s*\(pending\.timeout\)\s*clearTimeout\(pending\.timeout\);[\s\S]*?pending\.rpc\.respond/s,
+  'clearPendingUserRequestForTurn should clear the responder timeout before responding',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]new-session['"][\s\S]*?const\s+turnChatKey\s*=\s*chatId\s*\|\|\s*['"]__default['"][\s\S]*?const\s+turn\s*=\s*sess\.activeTurns\.get\(turnChatKey\);[\s\S]*?if\s*\(turn\)\s*\{[\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]new session['"]\);[\s\S]*?await\s+cancelTurnPrompt\(proc,\s*turn\);[\s\S]*?\}[\s\S]*?sess\.activeTurns\.delete\(turnChatKey\)/,
+  'new-session should clear pending requests before canceling the matching turn',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?try\s*\{[\s\S]*?pending\.rpc\.respond\(pending\.rpcRequestId,\s*result\);[\s\S]*?\}\s*finally\s*\{[\s\S]*?pending\.turn\.userRequest\s*=\s*undefined;[\s\S]*?if\s*\(pending\.timeout\)\s*clearTimeout\(pending\.timeout\);[\s\S]*?pendingUserRequestResponders\.delete\(requestId\);[\s\S]*?\}/s,
+  'respond-user-request should clean up the timeout and responder in finally if rpc respond throws',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?request\.options\.length\s*>\s*0[\s\S]*?typeof\s+body\?\.optionId\s*!==\s*['"]string['"][\s\S]*?request\.options\.some\(\s*option\s*=>\s*option\.optionId\s*===\s*body\.optionId\s*\)[\s\S]*?invalid_option/,
+  'respond-user-request should reject unknown option ids for any option-backed user request before responding',
+);
+
+assert.match(
+  routeSource,
+  /function\s+buildUserRequestResponse[\s\S]*?const\s+selectedOption\s*=[\s\S]*?request\.options\.find\(\s*option\s*=>\s*option\.optionId\s*===\s*body\?\.optionId\s*\)[\s\S]*?return\s+\{\s*answer:\s*selectedOption\.label[\s\S]*?optionId:\s*selectedOption\.optionId[\s\S]*?\}/,
+  'buildUserRequestResponse should convert option-backed non-permission choices into an answer and preserve optionId',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]interrupt['"][\s\S]*?clearPendingUserRequestForTurn\(turn,\s*['"]interrupted['"]\)[\s\S]*?await\s+cancelTurnPrompt\(proc,\s*turn\);/,
+  'interrupt should use cancelTurnPrompt for prompt cancellation',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]new-session['"][\s\S]*?const\s+previousSessionId\s*=\s*chatId\s*\?\s*getChatSession\(sess,\s*chatId\)\s*:\s*sess\.sessionId;[\s\S]*?if\s*\(chatId\)\s*sess\.chatSessions\.delete\(chatId\);[\s\S]*?if\s*\(!chatId\s*\|\|\s*\(previousSessionId\s*&&\s*sess\.sessionId\s*===\s*previousSessionId\)\)\s*sess\.sessionId\s*=\s*null;[\s\S]*?if\s*\(!proc\.ready\s*\|\|\s*!proc\.rpc\)\s*\{[\s\S]*?skipped:\s*true/,
+  'new-session should abandon the current session identity before returning skipped',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]reset['"][\s\S]*?clearPendingUserRequestsForSession\(agentId,\s*sess,\s*['"]reset['"][\s\S]*?for\s*\(const\s+turn\s+of\s+sess\.activeTurns\.values\(\)\)\s*\{[\s\S]*?if\s*\(turn\.agentId\s*!==\s*agentId\s*\|\|\s*turn\.done\)\s*continue;[\s\S]*?await\s+cancelTurnPrompt\(proc,\s*turn\);[\s\S]*?\}[\s\S]*?getUserSessions\(\)\.delete\(userSessionKey\(agentId,\s*userId\)\)/,
+  'reset should clear pending responders before canceling unfinished prompts and deleting the user session',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]resume-session['"][\s\S]*?const\s+turnChatKey\s*=\s*chatId\s*\|\|\s*['"]__default['"];[\s\S]*?const\s+chatTurn\s*=\s*sess\.activeTurns\.get\(turnChatKey\);[\s\S]*?if\s*\(chatTurn\s*&&\s*!chatTurn\.done\s*&&\s*chatTurn\.sessionId\s*&&\s*chatTurn\.sessionId\s*!==\s*savedSessionId\)\s*\{[\s\S]*?error:\s*['"]turn_in_progress['"][\s\S]*?status:\s*409[\s\S]*?\}[\s\S]*?if\s*\(findActiveTurnKeyForSession\(sess,\s*savedSessionId,\s*turnChatKey\)\)\s*\{[\s\S]*?error:\s*['"]turn_in_progress['"][\s\S]*?status:\s*409[\s\S]*?\}[\s\S]*?sess\.sessionId\s*=\s*savedSessionId/s,
+  'resume-session should reject resuming a session id already backing another unfinished turn before changing session state',
+);
+
+assert.match(
+  routeSource,
+  /function\s+getActiveTurnForResume\([\s\S]*?chatTurn[\s\S]*?savedSessionId[\s\S]*?\)[\s\S]*?if\s*\(!chatTurn\s*\|\|\s*chatTurn\.done\)\s*return\s+null;[\s\S]*?if\s*\(chatTurn\.sessionId\s*&&\s*chatTurn\.sessionId\s*!==\s*savedSessionId\)\s*return\s+null;[\s\S]*?if\s*\(!chatTurn\.sessionId\)\s*chatTurn\.sessionId\s*=\s*savedSessionId;[\s\S]*?return\s+chatTurn;/,
+  'resume-session should restore the matching active turn even before the mutable session id is reassigned',
+);
+
+assert.match(
+  routeSource,
+  /sess\.sessionId\s*===\s*savedSessionId\s*\|\|\s*proc\.knownSessions\.has\(savedSessionId\)[\s\S]*?const\s+activeTurn\s*=\s*getActiveTurnForResume\(chatTurn,\s*savedSessionId\)[\s\S]*?return\s+NextResponse\.json\(\{\s*ok:\s*true,\s*sessionId:\s*savedSessionId,\s*loaded:\s*true,\s*activeTurn:\s*serializeTurn\(activeTurn\)\s*\}\)/,
+  'known-session resume should return the matching active turn even when sess.sessionId was stale',
+);
+
+assert.match(
+  routeSource,
+  /if\s*\(proc\.supportsLoadSession\)\s*\{[\s\S]*?await\s+proc\.rpc!\.send\('session\/load'[\s\S]*?const\s+activeTurn\s*=\s*getActiveTurnForResume\(chatTurn,\s*savedSessionId\)[\s\S]*?return\s+NextResponse\.json\(\{\s*ok:\s*true,\s*sessionId:\s*savedSessionId,\s*loaded:\s*true,\s*activeTurn:\s*serializeTurn\(activeTurn\),\s*\.\.\.recovery\s*\}\)/,
+  'successful session/load resume should return the matching active turn so the frontend keeps polling pending requests',
+);
+
+assert.match(
+  routeSource,
+  /const\s+alreadyLoaded\s*=[\s\S]*?if\s*\(alreadyLoaded\)\s*\{[\s\S]*?const\s+activeTurn\s*=\s*getActiveTurnForResume\(chatTurn,\s*savedSessionId\)[\s\S]*?return\s+NextResponse\.json\(\{\s*ok:\s*true,\s*sessionId:\s*savedSessionId,\s*loaded:\s*true,\s*activeTurn:\s*serializeTurn\(activeTurn\)\s*\}\)/,
+  'already-loaded resume should return the matching active turn even when sess.sessionId was stale',
+);
+
+console.log('agent user request route shape checks passed');

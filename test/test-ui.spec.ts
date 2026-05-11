@@ -76,8 +76,8 @@ test.describe('Chat UI', () => {
   });
 
   test('should copy only answer text from the below-message copy button', async ({ page }) => {
-    await page.evaluate(async () => {
-      await fetch('/api/chats', {
+    const seedResult = await page.evaluate(async () => {
+      const response = await fetch('/api/chats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -104,7 +104,12 @@ test.describe('Chat UI', () => {
           },
         }),
       });
+      return { ok: response.ok, status: response.status };
     });
+    expect(seedResult.ok).toBe(true);
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await expect(page.locator('button:has-text("Copy message chat")')).toBeVisible();
     await page.click('button:has-text("Copy message chat")');
 
     let copiedText = '';
@@ -497,6 +502,643 @@ test.describe('Chat UI', () => {
     console.log('PASS: multiple resume results did not trigger UI auto-resend');
   });
 
+  test('forwards ACP permission questions to the user inline in chat', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let respondedBody: any = null;
+    let permissionAnswered = false;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: permissionAnswered
+              ? {
+                  id: 'turn-user-request',
+                  messageId: body.messageId,
+                  fullText: 'I used the approved permission.',
+                  done: true,
+                  phase: 'done',
+                  statusText: '',
+                  events: [{ type: 'text_chunk', ts: Date.now(), text: 'I used the approved permission.' }],
+                }
+              : {
+                  id: 'turn-user-request',
+                  messageId: body.messageId,
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Waiting for your response',
+                  events: [],
+                  userRequest: {
+                    id: 'request-allow-shell',
+                    method: 'session/request_permission',
+                    agentId: 'alpha',
+                    title: 'Permission request',
+                    prompt: 'Allow Alpha Agent to run a shell command?',
+                    inputKind: 'options',
+                    options: [
+                      { optionId: 'allow_once', kind: 'allow_once', label: 'Allow once' },
+                      { optionId: 'reject_once', kind: 'reject_once', label: 'Reject once' },
+                    ],
+                    createdAt: Date.now(),
+                  },
+                },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondedBody = body;
+        permissionAnswered = true;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'turn-clear') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a shell command?' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await expect(requestCard.getByRole('button', { name: 'Allow once' })).toBeVisible();
+    await requestCard.getByRole('button', { name: 'Allow once' }).click();
+
+    await expect.poll(() => respondedBody?.requestId ?? null).toBe('request-allow-shell');
+    expect(respondedBody?.optionId).toBe('allow_once');
+    await expect(chatArea.locator('.message.agent', { hasText: 'I used the approved permission.' })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('forwards freeform ACP questions to the user inline in chat', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let respondedBody: any = null;
+    let answered = false;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-freeform' } }) });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: answered
+              ? { id: 'turn-freeform', fullText: 'Thanks, I will use westus2.', done: true, phase: 'done', statusText: '', events: [{ type: 'text_chunk', ts: Date.now(), text: 'Thanks, I will use westus2.' }] }
+              : {
+                  id: 'turn-freeform',
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Waiting for your response',
+                  events: [],
+                  userRequest: {
+                    id: 'request-region',
+                    method: 'session/request_input',
+                    agentId: 'alpha',
+                    title: 'Agent question',
+                    prompt: 'Which Azure region should I use?',
+                    inputKind: 'text',
+                    options: [],
+                    createdAt: Date.now(),
+                  },
+                },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondedBody = body;
+        answered = true;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'turn-clear') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha deploy it');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Which Azure region should I use?' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await requestCard.locator('input[name="answer"]').fill('westus2');
+    await requestCard.getByRole('button', { name: 'Send' }).click();
+
+    await expect.poll(() => respondedBody?.requestId ?? null).toBe('request-region');
+    expect(respondedBody?.answer).toBe('westus2');
+    await expect(chatArea.locator('.message.agent', { hasText: 'Thanks, I will use westus2.' })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('prevents duplicate inline permission responses while submit is pending', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let respondCallCount = 0;
+    let permissionAnswered = false;
+    let releaseResponse: (() => void) | null = null;
+    const responseReleased = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request-pending' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: permissionAnswered
+              ? {
+                  id: 'turn-user-request-pending',
+                  messageId: body.messageId,
+                  fullText: 'Permission approved once.',
+                  done: true,
+                  phase: 'done',
+                  statusText: '',
+                  events: [{ type: 'text_chunk', ts: Date.now(), text: 'Permission approved once.' }],
+                }
+              : {
+                  id: 'turn-user-request-pending',
+                  messageId: body.messageId,
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Waiting for your response',
+                  events: [],
+                  userRequest: {
+                    id: 'request-allow-shell-pending',
+                    method: 'session/request_permission',
+                    agentId: 'alpha',
+                    title: 'Permission request',
+                    prompt: 'Allow Alpha Agent to run a shell command?',
+                    inputKind: 'options',
+                    options: [
+                      { optionId: 'allow_once', kind: 'allow_once', label: 'Allow once' },
+                      { optionId: 'reject_once', kind: 'reject_once', label: 'Reject once' },
+                    ],
+                    createdAt: Date.now(),
+                  },
+                },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondCallCount++;
+        await responseReleased;
+        permissionAnswered = true;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'turn-clear') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a shell command?' });
+    const allowButton = requestCard.getByRole('button', { name: 'Allow once' });
+    const rejectButton = requestCard.getByRole('button', { name: 'Reject once' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+
+    await requestCard.evaluate((card) => {
+      const buttons = Array.from(card.querySelectorAll('button')) as HTMLButtonElement[];
+      buttons[0]?.click();
+      buttons[1]?.click();
+    });
+
+    await expect(allowButton).toBeDisabled();
+    await expect(rejectButton).toBeDisabled();
+    await expect.poll(() => respondCallCount).toBe(1);
+
+    releaseResponse?.();
+
+    await expect(chatArea.locator('.message.agent', { hasText: 'Permission approved once.' })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('shows inline error and allows retry for failed freeform permission responses', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let respondAttempts = 0;
+    let permissionAnswered = false;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request-text' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: permissionAnswered
+              ? {
+                  id: 'turn-user-request-text',
+                  messageId: body.messageId,
+                  fullText: 'Thanks for the extra details.',
+                  done: true,
+                  phase: 'done',
+                  statusText: '',
+                  events: [{ type: 'text_chunk', ts: Date.now(), text: 'Thanks for the extra details.' }],
+                }
+              : {
+                  id: 'turn-user-request-text',
+                  messageId: body.messageId,
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Waiting for your response',
+                  events: [],
+                  userRequest: {
+                    id: 'request-extra-context',
+                    method: 'session/request_input',
+                    agentId: 'alpha',
+                    title: 'Need more detail',
+                    prompt: 'Describe what the agent should check.',
+                    inputKind: 'text',
+                    options: [],
+                    createdAt: Date.now(),
+                  },
+                },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondAttempts++;
+        if (respondAttempts === 1) {
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Request failed. Please try again.' }) });
+          return;
+        }
+        permissionAnswered = true;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'turn-clear') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Describe what the agent should check.' });
+    const answerInput = requestCard.getByRole('textbox', { name: 'Response to Need more detail' });
+    const sendButton = requestCard.getByRole('button', { name: 'Send' });
+
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await answerInput.fill('Check the frontend request flow.');
+    await sendButton.click();
+
+    await expect(requestCard.getByRole('alert')).toContainText('Request failed. Please try again.');
+    await expect(answerInput).toBeEnabled();
+    await expect(sendButton).toBeEnabled();
+
+    await answerInput.fill('Retry with the same request flow.');
+    await sendButton.click();
+
+    await expect.poll(() => respondAttempts).toBe(2);
+    await expect(chatArea.locator('.message.agent', { hasText: 'Thanks for the extra details.' })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('clears stale inline request submit state when polling replaces the request', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let requestVersion: 'first' | 'second' = 'first';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request-replaced' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        const requestId = requestVersion === 'first' ? 'request-extra-context-first' : 'request-extra-context-second';
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: {
+              id: 'turn-user-request-replaced',
+              messageId: body.messageId,
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Waiting for your response',
+              events: [],
+              userRequest: {
+                id: requestId,
+                method: 'session/request_input',
+                agentId: 'alpha',
+                title: 'Need more detail',
+                prompt: 'Describe what the agent should check.',
+                inputKind: 'text',
+                options: [],
+                createdAt: Date.now(),
+              },
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        requestVersion = 'second';
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Request failed. Please try again.' }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Describe what the agent should check.' });
+    const answerInput = requestCard.getByRole('textbox', { name: 'Response to Need more detail' });
+    const sendButton = requestCard.getByRole('button', { name: 'Send' });
+
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await answerInput.fill('Check the frontend request flow.');
+    await sendButton.click();
+    await expect(requestCard.getByRole('alert')).toContainText('Request failed. Please try again.');
+
+    await expect(requestCard.getByRole('alert')).toHaveCount(0);
+    await expect(answerInput).toHaveValue('');
+    await expect(answerInput).toBeEnabled();
+    await expect(sendButton).toBeEnabled();
+  });
+
+  test('removes stale inline request cards after polling bails out on repeated errors', async ({ page }) => {
+    await page.addInitScript(() => {
+      const realSetTimeout = window.setTimeout.bind(window);
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
+        realSetTimeout(handler, Math.min(Number(timeout) || 0, 20), ...args)) as typeof window.setTimeout;
+    });
+
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let pollCount = 0;
+    let respondCallCount = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request-timeout' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        if (pollCount === 1) {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: true,
+              activeTurn: {
+                id: 'turn-user-request-timeout',
+                messageId: body.messageId,
+                fullText: '',
+                done: false,
+                phase: 'thinking',
+                statusText: 'Waiting for your response',
+                events: [],
+                userRequest: {
+                  id: 'request-stale-after-errors',
+                  method: 'session/request_input',
+                  agentId: 'alpha',
+                  title: 'Need more detail',
+                  prompt: 'Describe what the agent should check before polling fails.',
+                  inputKind: 'text',
+                  options: [],
+                  createdAt: Date.now(),
+                },
+              },
+            }),
+          });
+          return;
+        }
+        await route.abort('failed');
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondCallCount++;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Describe what the agent should check before polling fails.' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+
+    await expect(chatArea.locator('.message.agent', { hasText: 'Lost connection to agent' })).toBeVisible({ timeout: 10000 });
+    await expect(requestCard).toHaveCount(0);
+    await expect.poll(() => respondCallCount).toBe(0);
+  });
+
+  test('clears inline agent request cards when stopping an active run', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let interruptCount = 0;
+    let respondCallCount = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-user-request-stop' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: {
+              id: 'turn-user-request-stop',
+              messageId: body.messageId,
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Waiting for your response',
+              events: [],
+              userRequest: {
+                id: 'request-stop-before-answer',
+                method: 'session/request_permission',
+                agentId: 'alpha',
+                title: 'Permission request',
+                prompt: 'Allow Alpha Agent to run a command before stop?',
+                inputKind: 'options',
+                options: [
+                  { optionId: 'allow_once', kind: 'allow_once', label: 'Allow once' },
+                  { optionId: 'reject_once', kind: 'reject_once', label: 'Reject once' },
+                ],
+                createdAt: Date.now(),
+              },
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'interrupt') {
+        interruptCount++;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondCallCount++;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha please inspect the repo');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a command before stop?' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole('button', { name: 'Stop generation' }).click();
+
+    await expect.poll(() => interruptCount).toBe(1);
+    await expect(requestCard).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent', { hasText: 'Stopped' })).toBeVisible();
+    expect(respondCallCount).toBe(0);
+  });
+
   test('should render streaming thinking parts without frontend stream saves', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
@@ -725,7 +1367,10 @@ test.describe('Chat UI', () => {
     const thinkingText = `working on ${firstText}`;
     const firstFinal = 'First chat finished after switching back.';
     const activeTurns = new Map<string, { id: string; messageId: string; text: string; pollCount: number }>();
+    let allowFirstTurnToFinish = false;
     let sendSeq = 0;
+    const firstChatId = `chat-switch-source-${Date.now()}`;
+    const switchTargetChatId = `chat-switch-target-${Date.now()}`;
 
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
@@ -753,7 +1398,7 @@ test.describe('Chat UI', () => {
         const chatId = body.chatId || '__default';
         const turn = activeTurns.get(chatId);
         if (turn) turn.pollCount += 1;
-        const shouldFinish = !!turn && turn.text === firstText && turn.pollCount >= 3;
+        const shouldFinish = !!turn && turn.text === firstText && allowFirstTurnToFinish && turn.pollCount >= 3;
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
@@ -787,36 +1432,48 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    const seedResult = await page.evaluate(async ({ firstChatId, switchTargetChatId }) => {
+      const makeChat = (id: string, name: string) => fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: { id, name, ts: Date.now(), messages: [], agentSessions: {} } }),
+      });
+      const first = await makeChat(firstChatId, 'Switch source');
+      const target = await makeChat(switchTargetChatId, 'Switch target');
+      const last = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: firstChatId }),
+      });
+      return { firstOk: first.ok, targetOk: target.ok, lastOk: last.ok };
+    }, { firstChatId, switchTargetChatId });
+    expect(seedResult).toEqual({ firstOk: true, targetOk: true, lastOk: true });
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    const sourceRowBeforeSend = page.locator('.chatHistoryRow', { hasText: 'Switch source' }).first();
+    const switchTargetRow = page.locator('.chatHistoryRow', { hasText: 'Switch target' }).first();
+    await expect(sourceRowBeforeSend).toBeVisible({ timeout: 5000 });
+    await expect(switchTargetRow).toBeVisible({ timeout: 5000 });
+
     await textarea.fill(firstText);
     await page.click('button[aria-label="Send message"]');
     await expect(chatArea.locator(`.message.user:has-text("${firstText}")`)).toBeVisible({ timeout: 15000 });
     await expect(chatArea.locator(`.thinkingPartText:has-text("${thinkingText}")`)).toBeVisible({ timeout: 15000 });
 
-    const firstChatState = await page.evaluate(async () => {
-      const data = await fetch('/api/chats').then((r) => r.json());
-      const firstChatId = data.lastChatId;
-      await fetch('/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat: { id: 'chat-switch-target', name: 'Switch target', ts: Date.now(), messages: [], agentSessions: {} } }),
-      });
-      return { firstChatId };
-    });
-
-    const firstChatRow = page.locator('.chatHistoryRow', { hasText: firstText }).first();
-    const switchTargetRow = page.locator('.chatHistoryRow', { hasText: 'Switch target' }).first();
-    await expect(firstChatRow.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
-    await expect(firstChatRow).toContainText('Thinking');
-    await expect(switchTargetRow).toBeVisible({ timeout: 5000 });
-    const firstRowBeforeSwitch = await firstChatRow.boundingBox();
+    await expect(sourceRowBeforeSend.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
+    await expect(sourceRowBeforeSend).toContainText('Thinking');
+    const pollCountBeforeSwitch = activeTurns.get(firstChatId)?.pollCount ?? 0;
+    const firstRowBeforeSwitch = await sourceRowBeforeSend.boundingBox();
     const targetRowBeforeSwitch = await switchTargetRow.boundingBox();
 
     await page.click('button:has-text("Switch target")');
-    await page.waitForTimeout(500);
-    await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
     await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 5000 });
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
+    const firstChatRow = page.locator('.chatHistoryRow', { hasText: firstText }).first();
     await expect(firstChatRow.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
+    await expect(firstChatRow).toContainText('Thinking');
+    await expect.poll(() => activeTurns.get(firstChatId)?.pollCount ?? 0, { timeout: 5000 }).toBeGreaterThan(pollCountBeforeSwitch);
     const firstRowAfterSwitch = await firstChatRow.boundingBox();
     const targetRowAfterSwitch = await switchTargetRow.boundingBox();
     expect(firstRowBeforeSwitch?.y).toBe(firstRowAfterSwitch?.y);
@@ -825,11 +1482,12 @@ test.describe('Chat UI', () => {
     const savedFirstChat = await page.evaluate(async (firstChatId) => {
       const data = await fetch(`/api/chats?id=${encodeURIComponent(firstChatId)}`).then((r) => r.json());
       return data.chat;
-    }, firstChatState.firstChatId);
+    }, firstChatId);
     const savedPending = savedFirstChat.messages.find((message: any) => message.agentId === agentId);
     expect(savedPending?.pending).toBe(true);
     expect(savedPending?.content || '').not.toContain('interrupted by chat switch');
 
+    allowFirstTurnToFinish = true;
     await page.click(`button:has-text("${firstText}")`);
     await expect(chatArea.locator(`.message.agent:has-text("${firstFinal}")`)).toBeVisible({ timeout: 15000 });
     await expect(firstChatRow.locator('.chatStatusBadge.done')).toBeVisible({ timeout: 5000 });

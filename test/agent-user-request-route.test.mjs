@@ -46,6 +46,18 @@ assert.match(
 
 assert.match(
   routeSource,
+  /function\s+persistTurnSnapshot[\s\S]*?userRequest:\s*turn\.done\s*\?\s*undefined\s*:\s*turn\.userRequest/,
+  'persistTurnSnapshot should preserve pending userRequest data so waiting chats can render answer cards after reload',
+);
+
+assert.match(
+  routeSource,
+  /function\s+queueUserRequestForTurn[\s\S]*?turn\.userRequest\s*=\s*request;[\s\S]*?turn\.statusText\s*=\s*['"]Waiting for your response['"];[\s\S]*?scheduleTurnPersist\(turn\);/,
+  'queueUserRequestForTurn should persist pending request state when the agent starts waiting for user input',
+);
+
+assert.match(
+  routeSource,
   /type\s+PendingUserRequestResponder\s*=\s*\{[\s\S]*?createdAt:\s*number;[\s\S]*?\};[\s\S]*?const\s+pendingUserRequestGlobal\s*=\s*globalThis\s+as\s+typeof\s+globalThis\s*&\s*\{[\s\S]*?__acpPendingUserRequestResponders\?:\s*Map<string,\s*PendingUserRequestResponder>;[\s\S]*?\};[\s\S]*?function\s+getPendingUserRequestResponders\(\):\s*Map<string,\s*PendingUserRequestResponder>\s*\{[\s\S]*?pendingUserRequestGlobal\.__acpPendingUserRequestResponders\s*=\s*new\s+Map\(\);[\s\S]*?return\s+pendingUserRequestGlobal\.__acpPendingUserRequestResponders;[\s\S]*?\}[\s\S]*?const\s+pendingUserRequestResponders\s*=\s*getPendingUserRequestResponders\(\);/s,
   'route.ts should persist pending user request responders on globalThis across route reloads',
 );
@@ -64,6 +76,12 @@ assert.match(
 
 assert.match(
   routeSource,
+  /type\s+UserSession\s*=\s*\{[\s\S]*?alwaysAllowedPermissionSessions:\s*Set<string>;/,
+  'UserSession should remember ACP sessions where the user selected Always allow',
+);
+
+assert.match(
+  routeSource,
   /method\s*===\s*['"]session\/request_permission['"][\s\S]*?queueUserRequestForTurn/,
   'session/request_permission should queue a user request instead of immediately approving',
 );
@@ -74,10 +92,10 @@ assert.ok(
   'session/request_input and session/request_user_input should bypass the noTools early return or be explicitly queued there',
 );
 
-assert.doesNotMatch(
+assert.match(
   routeSource,
-  /if\s*\(method\s*===\s*['"]session\/request_permission['"]\)\s*\{[\s\S]{0,400}?allow_always[\s\S]{0,400}?rpc\.respond/,
-  'non-noTools session/request_permission should not auto-select allow_always/allow_once',
+  /if\s*\(method\s*===\s*['"]session\/request_permission['"]\)\s*\{[\s\S]*?getAlwaysAllowedPermissionOption\(agentId,\s*params\s*\?\?\s*\{\}\)[\s\S]*?rpc\.respond\(id,\s*\{\s*outcome:\s*\{\s*outcome:\s*['"]selected['"],\s*optionId:\s*autoAllowOption\.optionId\s*\}\s*\}\)[\s\S]*?return;[\s\S]*?queueUserRequestForTurn/,
+  'session/request_permission should auto-approve only after an Always allow grant exists, otherwise it should queue the request',
 );
 
 assert.match(
@@ -126,6 +144,18 @@ assert.match(
   routeSource,
   /function\s+clearPendingUserRequestsForSession\s*\(/,
   'route.ts should define a helper that safely clears pending user requests for a session',
+);
+
+assert.match(
+  routeSource,
+  /function\s+getAlwaysAllowedPermissionOption\s*\(\s*agentId:\s*string,\s*params:\s*any\s*\)[\s\S]*?alwaysAllowedPermissionSessions\.has\(sessionId\)[\s\S]*?getAllowPermissionOption\(normalizePermissionOptions\(params\)\)/,
+  'getAlwaysAllowedPermissionOption should select an allow option for later permission requests in an Always-allowed session',
+);
+
+assert.match(
+  routeSource,
+  /function\s+rememberAlwaysAllowedPermission\s*\(\s*turn:\s*TurnState,\s*request:\s*PendingUserRequest,\s*body:\s*any\s*\)[\s\S]*?selectedOption[\s\S]*?allow_always[\s\S]*?alwaysAllowedPermissionSessions\.add\(sessionId\)/,
+  'respond-user-request should remember the session when the selected permission option is allow_always',
 );
 
 assert.match(

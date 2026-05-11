@@ -21,6 +21,7 @@ export type StoredMessage = {
   relation?: string;
   summary?: boolean;
   parts?: unknown[];
+  userRequest?: unknown;
 };
 
 export type StoredChat = {

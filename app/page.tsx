@@ -316,6 +316,13 @@ type AgentUserRequestSubmission = {
   error?: string;
 };
 
+function getAgentUserRequestOptionLabel(option: AgentUserRequestOption): string {
+  if (option.kind === 'allow_always' || option.optionId === 'allow_always') {
+    return 'Always allow in current session';
+  }
+  return option.label;
+}
+
 type ChatMessage = {
   id: string;
   type: 'user' | 'agent' | 'system';
@@ -1137,11 +1144,11 @@ export default function Page() {
               <button
                 key={option.optionId}
                 type="button"
-                className={`agentUserRequestButton ${option.kind || ''}`.trim()}
+                className="agentUserRequestButton"
                 disabled={isSubmitting}
                 onClick={() => void submitAgentUserRequest(message, { optionId: option.optionId })}
               >
-                {option.label}
+                {getAgentUserRequestOptionLabel(option)}
               </button>
             ))}
           </div>
@@ -1165,7 +1172,7 @@ export default function Page() {
               aria-label={`Response to ${request.title}`}
               disabled={isSubmitting}
             />
-            <button type="submit" className="agentUserRequestButton allow_once" disabled={isSubmitting}>Send</button>
+            <button type="submit" className="agentUserRequestButton" disabled={isSubmitting}>Send</button>
           </form>
         )}
         {submissionError ? <div className="agentUserRequestError" role="alert">{submissionError}</div> : null}
@@ -2434,14 +2441,17 @@ export default function Page() {
     }
   }
 
-  function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string }) {
+  function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string; phase?: string; statusText?: string; userRequest?: AgentUserRequest }) {
     const resumeChatId = currentChatIdRef.current;
     const pendingId = turn.messageId || `pending-${makeId()}`;
     const existing = (chatMessagesRef.current[resumeChatId] || messagesRef.current).find(m => m.id === pendingId);
+    const statusText = turn.statusText || existing?.statusText || 'Thinking';
+    const ptyPhase = mapTurnPhase(turn.phase || existing?.ptyPhase || 'thinking');
+    const userRequest = turn.userRequest || existing?.userRequest;
     if (existing) {
-      updateMessage(pendingId, { pending: true, agentId, content: turn.fullText || existing.content || '', statusText: 'Thinking', ptyPhase: 'thinking' }, resumeChatId);
+      updateMessage(pendingId, { pending: true, agentId, content: turn.fullText || existing.content || '', statusText, ptyPhase, userRequest }, resumeChatId);
     } else {
-      addMessage({ id: pendingId, type: 'agent', content: turn.fullText || '', agentId, pending: true, statusText: 'Thinking', ptyPhase: 'thinking' }, resumeChatId);
+      addMessage({ id: pendingId, type: 'agent', content: turn.fullText || '', agentId, pending: true, statusText, ptyPhase, userRequest }, resumeChatId);
     }
 
     const runKey = `acp:${agentId}:${resumeChatId}`;
@@ -5645,55 +5655,55 @@ export default function Page() {
         .partsStream { display: flex; flex-direction: column; gap: 6px; }
         .partsStream.collapsed { max-height: 300px; overflow: hidden; position: relative; }
         .partsStream.collapsed::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, var(--message-agent)); pointer-events: none; }
-        .agentUserRequestCard {
+        :global(.agentUserRequestCard) {
           margin-top: 10px;
           padding: 12px;
           border: 1px solid rgba(88, 166, 255, 0.35);
           border-radius: 10px;
           background: rgba(88, 166, 255, 0.08);
         }
-        .agentUserRequestHeader {
+        :global(.agentUserRequestHeader) {
           font-size: 12px;
           font-weight: 700;
           color: var(--accent);
           margin-bottom: 6px;
         }
-        .agentUserRequestPrompt {
+        :global(.agentUserRequestPrompt) {
           color: var(--text);
           line-height: 1.4;
         }
-        .agentUserRequestActions,
-        .agentUserRequestForm {
+        :global(.agentUserRequestActions),
+        :global(.agentUserRequestForm) {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
           margin-top: 10px;
         }
-        .agentUserRequestButton {
-          padding: 5px 10px;
+        :global(.agentUserRequestButton) {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 30px;
           border: 1px solid var(--border);
-          border-radius: 7px;
-          background: var(--panel-strong);
-          color: var(--text);
+          background: var(--panel-soft);
+          color: var(--accent);
+          border-radius: 10px;
+          padding: 0 10px;
+          font-size: 12px;
+          line-height: 1;
           cursor: pointer;
+          transition: all 160ms ease;
         }
-        .agentUserRequestButton:disabled,
-        .agentUserRequestInput:disabled {
+        :global(.agentUserRequestButton):hover:not(:disabled) {
+          border-color: var(--border-strong);
+          background: var(--accent-soft);
+        }
+        :global(.agentUserRequestButton):disabled,
+        :global(.agentUserRequestInput):disabled {
           opacity: 0.6;
           cursor: not-allowed;
         }
-        .agentUserRequestButton.allow_once,
-        .agentUserRequestButton.allow_always {
-          border-color: rgba(94, 234, 212, 0.45);
-          background: linear-gradient(135deg, rgba(20, 184, 166, 0.92), rgba(52, 211, 153, 0.9));
-          color: #042f2e;
-        }
-        .agentUserRequestButton.reject_once {
-          border-color: rgba(248, 113, 113, 0.45);
-          background: rgba(248, 113, 113, 0.12);
-          color: #fca5a5;
-        }
-        .agentUserRequestInput {
+        :global(.agentUserRequestInput) {
           flex: 1;
           min-width: 180px;
           padding: 6px 8px;
@@ -5702,7 +5712,7 @@ export default function Page() {
           background: var(--input-bg);
           color: var(--text);
         }
-        .agentUserRequestError {
+        :global(.agentUserRequestError) {
           margin-top: 10px;
           color: #fca5a5;
           font-size: 12px;

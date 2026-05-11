@@ -559,6 +559,7 @@ test.describe('Chat UI', () => {
                     inputKind: 'options',
                     options: [
                       { optionId: 'allow_once', kind: 'allow_once', label: 'Allow once' },
+                      { optionId: 'allow_always', kind: 'allow_always', label: 'Always allow' },
                       { optionId: 'reject_once', kind: 'reject_once', label: 'Reject once' },
                     ],
                     createdAt: Date.now(),
@@ -588,8 +589,37 @@ test.describe('Chat UI', () => {
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a shell command?' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
-    await expect(requestCard.getByRole('button', { name: 'Allow once' })).toBeVisible();
-    await requestCard.getByRole('button', { name: 'Allow once' }).click();
+    await expect(requestCard.getByRole('button', { name: 'Always allow in current session' })).toBeVisible();
+    const allowButton = requestCard.getByRole('button', { name: 'Allow once' });
+    await expect(allowButton).toBeVisible();
+    const buttonStyles = await allowButton.evaluate((button) => {
+      const copyButton = button.closest('.message')?.querySelector('.messageCopyButton') as HTMLElement | null;
+      if (!copyButton) throw new Error('Expected request card to render with a message copy button');
+      const requestStyle = getComputedStyle(button as HTMLElement);
+      const copyStyle = getComputedStyle(copyButton);
+      return {
+        request: {
+          minHeight: requestStyle.minHeight,
+          borderRadius: requestStyle.borderRadius,
+          backgroundColor: requestStyle.backgroundColor,
+          backgroundImage: requestStyle.backgroundImage,
+          color: requestStyle.color,
+          fontSize: requestStyle.fontSize,
+          lineHeight: requestStyle.lineHeight,
+        },
+        copy: {
+          minHeight: copyStyle.minHeight,
+          borderRadius: copyStyle.borderRadius,
+          backgroundColor: copyStyle.backgroundColor,
+          backgroundImage: copyStyle.backgroundImage,
+          color: copyStyle.color,
+          fontSize: copyStyle.fontSize,
+          lineHeight: copyStyle.lineHeight,
+        },
+      };
+    });
+    expect(buttonStyles.request).toEqual(buttonStyles.copy);
+    await allowButton.click();
 
     await expect.poll(() => respondedBody?.requestId ?? null).toBe('request-allow-shell');
     expect(respondedBody?.optionId).toBe('allow_once');
@@ -1606,6 +1636,113 @@ test.describe('Chat UI', () => {
     expect(pollCount).toBeGreaterThan(0);
 
     console.log('PASS: refreshed page reattached to active turn and finished polling');
+  });
+
+  test('should restore pending request card from resumed active turn', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const chatId = `ui-resume-request-${Date.now()}`;
+    const pendingId = `pending-resume-request-${Date.now()}`;
+    const userText = 'resume should restore pending request card';
+    const requestPrompt = 'Allow the agent to get the current branch name?';
+    let pollCount = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            sessionId: body.sessionId,
+            loaded: true,
+            activeTurn: {
+              id: 'turn-resume-request',
+              messageId: pendingId,
+              fullText: '',
+              done: false,
+              phase: 'tool_exec',
+              statusText: 'Waiting for your response',
+              events: [
+                { type: 'thinking', ts: Date.now(), text: 'I need permission before continuing.' },
+                { type: 'tool_start', ts: Date.now(), toolName: 'Get current branch name', toolCallId: 'tool-branch', toolArgs: '{}' },
+              ],
+              userRequest: {
+                id: 'request-resume-allow',
+                method: 'session/request_permission',
+                agentId: 'alpha',
+                title: 'Permission request',
+                prompt: requestPrompt,
+                inputKind: 'options',
+                options: [
+                  { optionId: 'allow_once', kind: 'allow_once', label: 'Allow once' },
+                  { optionId: 'reject_once', kind: 'reject_once', label: 'Reject once' },
+                ],
+                createdAt: Date.now(),
+              },
+              totalEvents: 2,
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingId, userText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: userText,
+        ts: now,
+        messages: [
+          { id: 'u-resume-request', type: 'user', content: userText, ts: now - 1000 },
+          {
+            id: pendingId,
+            type: 'agent',
+            content: '',
+            agentId: 'alpha',
+            ts: now,
+            pending: true,
+            statusText: 'Waiting for your response',
+            parts: [{ kind: 'tool', toolName: 'Get current branch name', args: '{}', done: false }],
+          },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingId, userText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${userText}")`)).toBeVisible({ timeout: 15000 });
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: requestPrompt });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await expect(requestCard.getByRole('button', { name: 'Allow once' })).toBeVisible();
+    expect(pollCount).toBeGreaterThan(0);
   });
 
   test('should switch lastChatId when creating new chat', async ({ page }) => {

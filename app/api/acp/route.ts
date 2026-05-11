@@ -45,6 +45,7 @@ type PendingUserRequest = {
   method: string;
   agentId: string;
   chatId?: string;
+  sessionId?: string;
   title: string;
   prompt: string;
   inputKind: 'options' | 'text';
@@ -513,6 +514,7 @@ type UserSession = {
   chatSessions: Map<string, string[]>;
   /** Map of chatId → active turn for that chat. Allows concurrent turns across different chats. */
   activeTurns: Map<string, TurnState>;
+  alwaysAllowedPermissionSessions: Set<string>;
   phase: 'idle' | 'busy' | 'booting';
   turnCount: number;
   lastActive: number;
@@ -609,6 +611,7 @@ function getUserSession(agentId: string, userId: string): UserSession {
       sessionId: null,
       chatSessions: new Map(),
       activeTurns: new Map(),
+      alwaysAllowedPermissionSessions: new Set(),
       phase: 'idle',
       turnCount: 0,
       lastActive: Date.now(),
@@ -619,6 +622,7 @@ function getUserSession(agentId: string, userId: string): UserSession {
   // Ensure chatSessions and activeTurns exist for sessions created before these fields were added
   if (!sess.chatSessions) sess.chatSessions = new Map();
   if (!sess.activeTurns) sess.activeTurns = new Map();
+  if (!sess.alwaysAllowedPermissionSessions) sess.alwaysAllowedPermissionSessions = new Set();
   // Migrate legacy activeTurn to activeTurns map
   if ((sess as any).activeTurn) {
     const legacyTurn = (sess as any).activeTurn as TurnState;
@@ -789,6 +793,11 @@ async function doBootAgent(agentId: string): Promise<void> {
       }
 
       if (method === 'session/request_permission') {
+        const autoAllowOption = getAlwaysAllowedPermissionOption(agentId, params ?? {});
+        if (autoAllowOption) {
+          rpc.respond(id, { outcome: { outcome: 'selected', optionId: autoAllowOption.optionId } });
+          return;
+        }
         const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
         if (!queued) {
           const denyOption = params?.options?.find((o: any) => o.kind === 'reject_once');
@@ -1028,7 +1037,8 @@ async function persistTurnSnapshot(turn: TurnState): Promise<void> {
     statusText: turn.done ? undefined : turn.statusText,
     ptyPhase: turn.done ? undefined : turn.phase,
     parts: parts.length ? parts : undefined,
-  } as StoredMessage & { pending?: boolean; statusText?: string; ptyPhase?: string; parts?: StoredContentPart[] };
+    userRequest: turn.done ? undefined : turn.userRequest,
+  } as StoredMessage & { pending?: boolean; statusText?: string; ptyPhase?: string; parts?: StoredContentPart[]; userRequest?: PendingUserRequest };
 
   if (existingIndex >= 0) {
     chat.messages[existingIndex] = message;
@@ -1218,6 +1228,21 @@ function findTurnForSession(agentId: string, sessionId: string | undefined): Tur
   return findTurnBySessionId(agentId, sessionId) ?? null;
 }
 
+function findUserSessionForTurn(agentId: string, turn: TurnState): UserSession | null {
+  for (const [key, sess] of getUserSessions().entries()) {
+    if (!key.startsWith(`${agentId}:`)) continue;
+    for (const activeTurn of sess.activeTurns.values()) {
+      if (activeTurn === turn) return sess;
+    }
+  }
+  return null;
+}
+
+function ensureAlwaysAllowedPermissionSessions(sess: UserSession): Set<string> {
+  if (!sess.alwaysAllowedPermissionSessions) sess.alwaysAllowedPermissionSessions = new Set();
+  return sess.alwaysAllowedPermissionSessions;
+}
+
 function normalizePermissionOptions(params: any): PendingUserRequestOption[] { // eslint-disable-line @typescript-eslint/no-explicit-any
   const rawOptions = Array.isArray(params?.options) ? params.options : [];
   return rawOptions
@@ -1228,6 +1253,37 @@ function normalizePermissionOptions(params: any): PendingUserRequestOption[] { /
       label: typeof option.name === 'string' ? option.name : (typeof option.label === 'string' ? option.label : option.optionId),
       description: typeof option.description === 'string' ? option.description : undefined,
     }));
+}
+
+function getAllowPermissionOption(options: PendingUserRequestOption[]): PendingUserRequestOption | undefined {
+  return options.find(option => option.kind === 'allow_always' || option.optionId === 'allow_always')
+    ?? options.find(option => option.kind === 'allow_once' || option.optionId === 'allow_once')
+    ?? options.find(option => option.kind === 'allow' || option.optionId === 'allow');
+}
+
+function getAlwaysAllowedPermissionOption(agentId: string, params: any): PendingUserRequestOption | null { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : '';
+  if (!sessionId) return null;
+  const turn = findTurnForSession(agentId, sessionId);
+  if (!turn) return null;
+  const sess = findUserSessionForTurn(agentId, turn);
+  if (!sess) return null;
+  const alwaysAllowedPermissionSessions = ensureAlwaysAllowedPermissionSessions(sess);
+  if (!alwaysAllowedPermissionSessions.has(sessionId)) return null;
+  return getAllowPermissionOption(normalizePermissionOptions(params)) ?? null;
+}
+
+function rememberAlwaysAllowedPermission(turn: TurnState, request: PendingUserRequest, body: any): void { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (request.method !== 'session/request_permission') return;
+  const optionId = typeof body?.optionId === 'string' ? body.optionId : '';
+  const selectedOption = request.options.find(option => option.optionId === optionId);
+  if (!selectedOption || (selectedOption.kind !== 'allow_always' && selectedOption.optionId !== 'allow_always')) return;
+  const sessionId = request.sessionId || turn.sessionId;
+  if (!sessionId) return;
+  const sess = findUserSessionForTurn(request.agentId, turn);
+  if (!sess) return;
+  const alwaysAllowedPermissionSessions = ensureAlwaysAllowedPermissionSessions(sess);
+  alwaysAllowedPermissionSessions.add(sessionId);
 }
 
 function buildAbandonedUserRequestResponse(request: PendingUserRequest): Record<string, unknown> {
@@ -1314,6 +1370,7 @@ function queueUserRequestForTurn(
     method,
     agentId,
     chatId: turn.chatId,
+    sessionId: typeof params?.sessionId === 'string' ? params.sessionId : turn.sessionId,
     title: method === 'session/request_permission' ? 'Permission request' : 'Agent question',
     prompt,
     inputKind: options.length > 0 ? 'options' : 'text',
@@ -1322,6 +1379,7 @@ function queueUserRequestForTurn(
   };
   turn.userRequest = request;
   turn.statusText = 'Waiting for your response';
+  scheduleTurnPersist(turn);
 
   const responder: PendingUserRequestResponder = {
     rpc,
@@ -1802,6 +1860,7 @@ export async function POST(req: NextRequest) {
       const result = buildUserRequestResponse(request, body);
       try {
         pending.rpc.respond(pending.rpcRequestId, result);
+        rememberAlwaysAllowedPermission(pending.turn, request, body);
       } finally {
         pending.turn.userRequest = undefined;
         pending.turn.statusText = 'Thinking';

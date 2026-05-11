@@ -1638,6 +1638,70 @@ test.describe('Chat UI', () => {
     console.log('PASS: refreshed page reattached to active turn and finished polling');
   });
 
+  test('should stop polling a stalled active turn with no progress', async ({ page }) => {
+    await page.addInitScript(() => {
+      const initialNow = Date.now();
+      let callCount = 0;
+      Date.now = () => initialNow + (callCount++ * 2 * 60 * 1000);
+    });
+
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const finalLookingText = 'Implemented in `app/page.tsx`.';
+    let pollCount = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'replying', turn: { id: 'turn-stalled' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: {
+              id: 'turn-stalled',
+              messageId: body.messageId,
+              fullText: finalLookingText,
+              done: false,
+              phase: 'replying',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: 123, text: finalLookingText }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha finish and do not report done');
+    await textarea.press('Enter');
+
+    const agentMessage = chatArea.locator('.message.agent', { hasText: 'Implemented in' }).last();
+    await expect(agentMessage).toBeVisible({ timeout: 10000 });
+    await expect(agentMessage.locator('.streamingIndicator')).toHaveCount(0, { timeout: 15000 });
+    expect(pollCount).toBeGreaterThan(2);
+  });
+
   test('should restore pending request card from resumed active turn', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const chatId = `ui-resume-request-${Date.now()}`;

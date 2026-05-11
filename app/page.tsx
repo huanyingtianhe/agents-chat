@@ -323,6 +323,39 @@ function getAgentUserRequestOptionLabel(option: AgentUserRequestOption): string 
   return option.label;
 }
 
+function getAcpTurnProgressSignature(turn: {
+  fullText?: string;
+  done?: boolean;
+  phase?: string;
+  statusText?: string;
+  error?: string;
+  userRequest?: AgentUserRequest;
+  events?: { type: string; toolName?: string; toolCallId?: string; toolArgs?: string; toolResult?: string; text?: string }[];
+}): string {
+  const events = Array.isArray(turn.events) ? turn.events : [];
+  const lastEvent = events[events.length - 1];
+  const lastEventSignature = lastEvent
+    ? [
+        lastEvent.type,
+        lastEvent.toolCallId || '',
+        lastEvent.toolName || '',
+        lastEvent.toolArgs?.length || 0,
+        lastEvent.toolResult?.length || 0,
+        lastEvent.text?.length || 0,
+      ].join(':')
+    : '';
+  return [
+    turn.done ? 'done' : 'active',
+    turn.phase || '',
+    turn.statusText || '',
+    turn.error || '',
+    turn.userRequest?.id || '',
+    turn.fullText?.length || 0,
+    events.length,
+    lastEventSignature,
+  ].join('|');
+}
+
 type ChatMessage = {
   id: string;
   type: 'user' | 'agent' | 'system';
@@ -2489,14 +2522,15 @@ export default function Page() {
     let consecutiveErrors = 0;
     const MAX_ERRORS = 10;
     const POLL_TIMEOUT = 10 * 60_000; // 10 min safety timeout
-    let lastActivity = Date.now();
+    let lastProgressAt = Date.now();
+    let lastProgressSignature = '';
 
     while (sessionRunsRef.current[runKey]) {
       const current = sessionRunsRef.current[runKey];
       if (!current) break;
 
-      // Safety timeout — don't poll forever (resets on each successful poll)
-      if (Date.now() - lastActivity > POLL_TIMEOUT) {
+      // Safety timeout — don't poll forever when successful polls make no progress.
+      if (Date.now() - lastProgressAt > POLL_TIMEOUT) {
         clearAgentUserRequestSubmissionForMessage(current.pendingId, effectiveChatId);
         updateMessage(current.pendingId, {
           content: current.currentText || '⚠️ Response timed out',
@@ -2526,7 +2560,6 @@ export default function Page() {
         continue;
       }
       consecutiveErrors = 0;
-      lastActivity = Date.now();
 
       const turn = result?.activeTurn as {
         fullText?: string;
@@ -2539,6 +2572,12 @@ export default function Page() {
       } | null;
 
       if (turn) {
+        const progressSignature = getAcpTurnProgressSignature(turn);
+        if (progressSignature !== lastProgressSignature) {
+          lastProgressSignature = progressSignature;
+          lastProgressAt = Date.now();
+        }
+
         const ptyPhase = mapTurnPhase(turn.phase || '');
         const phaseStatusMap: Record<string, string> = {
           thinking: 'Thinking',

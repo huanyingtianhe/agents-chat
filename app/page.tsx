@@ -291,6 +291,7 @@ function buildFileTree(files: { path: string; name: string }[]): FileTreeNode[] 
 type ContentPart =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; toolName: string; args?: string; result?: string; done: boolean }
+  | { kind: 'user_answer'; text: string }
   | { kind: 'text'; text: string };
 
 type AgentUserRequestOption = {
@@ -298,6 +299,24 @@ type AgentUserRequestOption = {
   kind?: string;
   label: string;
   description?: string;
+  recommended?: boolean;
+};
+
+type AgentUserRequestQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  message?: string;
+  inputKind: 'options' | 'text';
+  multiSelect?: boolean;
+  allowFreeformInput?: boolean;
+  options: AgentUserRequestOption[];
+};
+
+type AgentUserRequestAnswer = {
+  selected: string[];
+  freeText: string | null;
+  skipped: boolean;
 };
 
 type AgentUserRequest = {
@@ -308,7 +327,14 @@ type AgentUserRequest = {
   prompt: string;
   inputKind: 'options' | 'text';
   options: AgentUserRequestOption[];
+  questions?: AgentUserRequestQuestion[];
   createdAt: number;
+};
+
+type AgentUserRequestResponse = {
+  optionId?: string;
+  answer?: string;
+  answers?: Record<string, AgentUserRequestAnswer>;
 };
 
 type AgentUserRequestSubmission = {
@@ -1175,12 +1201,97 @@ export default function Page() {
     const submission = agentUserRequestSubmissions[request.id];
     const isSubmitting = submission?.pending === true;
     const submissionError = submission?.error;
+    const structuredQuestions = Array.isArray(request.questions) ? request.questions : [];
 
     return (
       <div className="agentUserRequestCard">
         <div className="agentUserRequestHeader">{request.title}</div>
         <div className="agentUserRequestPrompt">{request.prompt}</div>
-        {request.inputKind === 'options' ? (
+        {structuredQuestions.length > 0 ? (
+          <form
+            key={request.id}
+            className="agentUserRequestForm structured"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (isSubmitting) return;
+              const form = e.currentTarget;
+              const answers: Record<string, AgentUserRequestAnswer> = {};
+              let hasAnswer = false;
+              structuredQuestions.forEach((question, index) => {
+                const fieldName = `question-${index}`;
+                const questionOptions = Array.isArray(question.options) ? question.options : [];
+                if (questionOptions.length > 0) {
+                  const select = form.elements.namedItem(fieldName) as HTMLSelectElement | null;
+                  const selected = select ? Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean) : [];
+                  const freeformInput = form.elements.namedItem(`${fieldName}-freeform`) as HTMLInputElement | null;
+                  const freeText = freeformInput?.value.trim() || null;
+                  const skipped = selected.length === 0 && !freeText;
+                  if (!skipped) hasAnswer = true;
+                  answers[question.header] = { selected, freeText, skipped };
+                  return;
+                }
+                const input = form.elements.namedItem(fieldName) as HTMLInputElement | null;
+                const freeText = input?.value.trim() || null;
+                const skipped = !freeText;
+                if (!skipped) hasAnswer = true;
+                answers[question.header] = { selected: [], freeText, skipped };
+              });
+              if (hasAnswer) void submitAgentUserRequest(message, { answers });
+            }}
+          >
+            <div className="agentUserRequestQuestions">
+              {structuredQuestions.map((question, index) => {
+                const fieldName = `question-${index}`;
+                const fieldId = `${request.id}-question-${index}`;
+                const questionOptions = Array.isArray(question.options) ? question.options : [];
+                return (
+                  <div key={`${request.id}-${question.header}-${index}`} className="agentUserRequestQuestion">
+                    <label className="agentUserRequestQuestionLabel" htmlFor={fieldId}>{question.question || question.header}</label>
+                    {question.message ? <div className="agentUserRequestQuestionMessage">{question.message}</div> : null}
+                    {questionOptions.length > 0 ? (
+                      <>
+                        <select
+                          id={fieldId}
+                          name={fieldName}
+                          className="agentUserRequestSelect"
+                          aria-label={question.header}
+                          multiple={question.multiSelect === true}
+                          disabled={isSubmitting}
+                        >
+                          {question.multiSelect === true ? null : <option value="">Select an answer</option>}
+                          {questionOptions.map((option) => (
+                            <option key={option.optionId} value={option.label}>
+                              {option.recommended ? `${option.label} (Recommended)` : option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {question.allowFreeformInput !== false ? (
+                          <input
+                            name={`${fieldName}-freeform`}
+                            className="agentUserRequestInput"
+                            placeholder="Or type your answer"
+                            aria-label={`${question.header} freeform answer`}
+                            disabled={isSubmitting}
+                          />
+                        ) : null}
+                      </>
+                    ) : (
+                      <input
+                        id={fieldId}
+                        name={fieldName}
+                        className="agentUserRequestInput"
+                        placeholder="Type your answer"
+                        aria-label={question.header}
+                        disabled={isSubmitting}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <button type="submit" className="agentUserRequestButton" disabled={isSubmitting}>Send</button>
+          </form>
+        ) : request.inputKind === 'options' ? (
           <div className="agentUserRequestActions">
             {request.options.map((option) => (
               <button
@@ -2346,7 +2457,7 @@ export default function Page() {
 
   /* ── ACP Send & Poll ── */
 
-  async function respondToAgentUserRequest(agentId: string, request: AgentUserRequest, response: { optionId?: string; answer?: string }) {
+  async function respondToAgentUserRequest(agentId: string, request: AgentUserRequest, response: AgentUserRequestResponse) {
     const res = await acp({
       action: 'respond-user-request',
       agentId,
@@ -2376,7 +2487,7 @@ export default function Page() {
     if (requestId) setAgentUserRequestSubmission(requestId, null);
   }
 
-  async function submitAgentUserRequest(message: ChatMessage, response: { optionId?: string; answer?: string }) {
+  async function submitAgentUserRequest(message: ChatMessage, response: AgentUserRequestResponse) {
     const request = message.userRequest;
     const agentId = message.agentId;
     if (!request || !agentId) return;
@@ -2676,6 +2787,8 @@ export default function Page() {
               } else {
                 parts.push({ kind: 'tool', toolName: evt.toolName || 'tool', result: evt.toolResult, done: true });
               }
+            } else if (evt.type === 'user_response' && evt.text) {
+              parts.push({ kind: 'user_answer', text: evt.text });
             } else if (evt.type === 'text_chunk' && evt.text) {
               const last = parts[parts.length - 1];
               if (last && last.kind === 'text') {
@@ -4271,6 +4384,13 @@ export default function Page() {
                                 </details>
                               );
                             }
+                            if (part.kind === 'user_answer') {
+                              return (
+                                <div key={pi} className="userAnswerPart">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{part.text}</ReactMarkdown>
+                                </div>
+                              );
+                            }
                             if (part.kind === 'text') {
                               return (
                                 <div key={pi} className={`messageContent markdownBody ${message.pending ? 'pending' : ''}`}>
@@ -5815,6 +5935,30 @@ export default function Page() {
           gap: 8px;
           margin-top: 10px;
         }
+        :global(.agentUserRequestForm.structured) {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        :global(.agentUserRequestQuestions) {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        :global(.agentUserRequestQuestion) {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        :global(.agentUserRequestQuestionLabel) {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text);
+        }
+        :global(.agentUserRequestQuestionMessage) {
+          color: var(--text-soft);
+          font-size: 12px;
+          line-height: 1.35;
+        }
         :global(.agentUserRequestButton) {
           display: inline-flex;
           align-items: center;
@@ -5835,11 +5979,13 @@ export default function Page() {
           background: var(--accent-soft);
         }
         :global(.agentUserRequestButton):disabled,
-        :global(.agentUserRequestInput):disabled {
+        :global(.agentUserRequestInput):disabled,
+        :global(.agentUserRequestSelect):disabled {
           opacity: 0.6;
           cursor: not-allowed;
         }
-        :global(.agentUserRequestInput) {
+        :global(.agentUserRequestInput),
+        :global(.agentUserRequestSelect) {
           flex: 1;
           min-width: 180px;
           padding: 6px 8px;
@@ -5848,6 +5994,9 @@ export default function Page() {
           background: var(--input-bg);
           color: var(--text);
         }
+        :global(.agentUserRequestSelect) {
+          min-height: 32px;
+        }
         :global(.agentUserRequestError) {
           margin-top: 10px;
           color: #fca5a5;
@@ -5855,6 +6004,18 @@ export default function Page() {
         }
         .thinkingPart { background: rgba(127, 127, 127, 0.08); border-left: 3px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
         .thinkingPartText { padding: 6px 10px; font-size: 0.82rem; color: var(--text-soft); white-space: pre-wrap; font-style: italic; }
+        .userAnswerPart {
+          align-self: stretch;
+          padding: 8px 10px;
+          border: 1px solid rgba(134, 239, 172, 0.28);
+          border-left: 3px solid var(--success);
+          border-radius: 10px;
+          background: rgba(134, 239, 172, 0.08);
+          color: var(--text);
+          font-size: 0.9rem;
+        }
+        .userAnswerPart :global(p) { margin: 0 0 4px; }
+        .userAnswerPart :global(p:last-child) { margin-bottom: 0; }
         .htmlFileLink { color: var(--accent); text-decoration: underline; cursor: pointer; word-break: break-all; }
         .htmlFileLink:hover { opacity: 0.85; }
         .toolCallItem { background: rgba(127,127,127,0.06); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }

@@ -24,7 +24,7 @@ export const runtime = 'nodejs';
 type TurnPhase = 'booting' | 'thinking' | 'tool_exec' | 'replying' | 'done';
 
 type TurnEvent = {
-  type: 'thinking' | 'tool_start' | 'tool_complete' | 'text_chunk';
+  type: 'thinking' | 'tool_start' | 'tool_complete' | 'text_chunk' | 'user_response';
   ts: number;
   toolName?: string;
   toolCallId?: string;
@@ -38,6 +38,24 @@ type PendingUserRequestOption = {
   kind?: string;
   label: string;
   description?: string;
+  recommended?: boolean;
+};
+
+type PendingUserRequestQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  message?: string;
+  inputKind: 'options' | 'text';
+  multiSelect?: boolean;
+  allowFreeformInput?: boolean;
+  options: PendingUserRequestOption[];
+};
+
+type PendingUserRequestAnswer = {
+  selected: string[];
+  freeText: string | null;
+  skipped: boolean;
 };
 
 type PendingUserRequest = {
@@ -50,6 +68,7 @@ type PendingUserRequest = {
   prompt: string;
   inputKind: 'options' | 'text';
   options: PendingUserRequestOption[];
+  questions?: PendingUserRequestQuestion[];
   createdAt: number;
 };
 
@@ -69,6 +88,7 @@ type TurnState = {
   error?: string;
   events: TurnEvent[];
   userRequest?: PendingUserRequest;
+  syntheticQuestionParseOffset?: number;
   lastPersistedAt: number;
   persistTimer?: ReturnType<typeof setTimeout>;
 };
@@ -87,6 +107,7 @@ type PendingUserRequestResponder = {
 type StoredContentPart =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; toolName: string; args?: string; result?: string; done: boolean }
+  | { kind: 'user_answer'; text: string }
   | { kind: 'text'; text: string };
 
 type AgentConfig = {
@@ -113,6 +134,7 @@ function getPendingUserRequestResponders(): Map<string, PendingUserRequestRespon
 }
 
 const pendingUserRequestResponders = getPendingUserRequestResponders();
+const SYNTHETIC_USER_REQUEST_METHOD = 'client/text_question';
 
 /* ─────────── Minimal NDJSON-RPC over raw Node streams ─────────── */
 
@@ -775,7 +797,9 @@ async function doBootAgent(agentId: string): Promise<void> {
 
       if (method === 'session/request_input' || method === 'session/request_user_input') {
         const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
-        if (!queued) rpc.respond(id, { answer: '' });
+        if (!queued) {
+          console.warn(`[ACP:${agentId}] Unable to attach ${method} request to an active turn; leaving request pending for user input`);
+        }
         return;
       }
 
@@ -1010,6 +1034,8 @@ function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
       } else {
         parts.push({ kind: 'text', text: evt.text });
       }
+    } else if (evt.type === 'user_response' && evt.text) {
+      parts.push({ kind: 'user_answer', text: evt.text });
     }
   }
   return parts;
@@ -1074,6 +1100,9 @@ async function flushTurnPersist(turn: TurnState): Promise<void> {
 
 function finishTurnAfterPromptResult(turn: TurnState, promptResult: Record<string, unknown> | undefined): void {
   const stopReason = typeof promptResult?.stopReason === 'string' ? promptResult.stopReason : 'unknown';
+  if (stopReason === 'end_turn' && queueSyntheticUserRequestFromText(turn)) {
+    return;
+  }
   if (stopReason !== 'end_turn' && !turn.fullText.trim()) {
     turn.error = `Agent stopped without a response (stopReason=${stopReason})`;
     turn.statusText = turn.error;
@@ -1082,6 +1111,15 @@ function finishTurnAfterPromptResult(turn: TurnState, promptResult: Record<strin
   }
   turn.done = true;
   turn.phase = 'done';
+}
+
+function scheduleTurnRelease(sess: UserSession, turnChatKey: string, turn: TurnState): void {
+  setTimeout(() => {
+    if (sess.activeTurns.get(turnChatKey) === turn) {
+      sess.activeTurns.delete(turnChatKey);
+      if (sess.activeTurns.size === 0) sess.phase = 'idle';
+    }
+  }, 30_000);
 }
 
 function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string, messageId?: string): TurnState {
@@ -1122,16 +1160,13 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         if (sess.activeTurns.size === 0) sess.phase = 'idle';
       }
       await flushTurnPersist(turn);
-      // Don't clear events here — let frontend poll one last time with full events.
-      // Events are cleared in turn-clear or auto-release.
-      turn.prompt = '';
-      // Auto-release turn reference after 30s so GC can reclaim memory
-      setTimeout(() => {
-        if (sess.activeTurns.get(turnChatKey) === turn) {
-          sess.activeTurns.delete(turnChatKey);
-          if (sess.activeTurns.size === 0) sess.phase = 'idle';
-        }
-      }, 30_000);
+      if (turn.done) {
+        // Don't clear events here — let frontend poll one last time with full events.
+        // Events are cleared in turn-clear or auto-release.
+        turn.prompt = '';
+        // Auto-release turn reference after 30s so GC can reclaim memory.
+        scheduleTurnRelease(sess, turnChatKey, turn);
+      }
     })
     .catch(async (err: Error) => {
       // If session/prompt fails, the session may be truly invalid — try to recover
@@ -1180,8 +1215,10 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
           if (sess.activeTurns.size === 0) sess.phase = 'idle';
         }
         await flushTurnPersist(turn);
-        turn.prompt = '';
-        setTimeout(() => { if (sess.activeTurns.get(turnChatKey) === turn) { sess.activeTurns.delete(turnChatKey); if (sess.activeTurns.size === 0) sess.phase = 'idle'; } }, 30_000);
+        if (turn.done) {
+          turn.prompt = '';
+          scheduleTurnRelease(sess, turnChatKey, turn);
+        }
       } catch (retryErr) {
         // Recovery also failed — report original error
         if (!turn.done) {
@@ -1193,7 +1230,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         }
         await flushTurnPersist(turn);
         turn.prompt = '';
-        setTimeout(() => { if (sess.activeTurns.get(turnChatKey) === turn) { sess.activeTurns.delete(turnChatKey); if (sess.activeTurns.size === 0) sess.phase = 'idle'; } }, 30_000);
+        scheduleTurnRelease(sess, turnChatKey, turn);
       }
     });
 
@@ -1228,6 +1265,24 @@ function findTurnForSession(agentId: string, sessionId: string | undefined): Tur
   return findTurnBySessionId(agentId, sessionId) ?? null;
 }
 
+function findSingleActiveTurnForAgent(agentId: string): TurnState | null {
+  let candidate: TurnState | null = null;
+  for (const [key, sess] of getUserSessions().entries()) {
+    if (!key.startsWith(`${agentId}:`)) continue;
+    for (const turn of sess.activeTurns.values()) {
+      if (turn.agentId !== agentId || turn.done) continue;
+      if (candidate) return null;
+      candidate = turn;
+    }
+  }
+  return candidate;
+}
+
+function findTurnForUserRequest(agentId: string, sessionId: string | undefined): TurnState | null {
+  if (sessionId) return findTurnForSession(agentId, sessionId);
+  return findSingleActiveTurnForAgent(agentId);
+}
+
 function findUserSessionForTurn(agentId: string, turn: TurnState): UserSession | null {
   for (const [key, sess] of getUserSessions().entries()) {
     if (!key.startsWith(`${agentId}:`)) continue;
@@ -1245,14 +1300,69 @@ function ensureAlwaysAllowedPermissionSessions(sess: UserSession): Set<string> {
 
 function normalizePermissionOptions(params: any): PendingUserRequestOption[] { // eslint-disable-line @typescript-eslint/no-explicit-any
   const rawOptions = Array.isArray(params?.options) ? params.options : [];
-  return rawOptions
-    .filter((option: any) => typeof option?.optionId === 'string') // eslint-disable-line @typescript-eslint/no-explicit-any
-    .map((option: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
-      optionId: option.optionId,
-      kind: typeof option.kind === 'string' ? option.kind : undefined,
-      label: typeof option.name === 'string' ? option.name : (typeof option.label === 'string' ? option.label : option.optionId),
-      description: typeof option.description === 'string' ? option.description : undefined,
-    }));
+  const options = rawOptions.flatMap((option: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const optionId = firstString(option?.optionId, option?.id, option?.value, option?.label, option?.name);
+    if (!optionId) return [];
+    return [{
+      optionId,
+      kind: typeof option?.kind === 'string' ? option.kind : undefined,
+      label: firstString(option?.name, option?.label, option?.value, option?.optionId) ?? optionId,
+      description: typeof option?.description === 'string' ? option.description : undefined,
+    }];
+  });
+  if (options.length > 0) return options;
+
+  const rawChoices = Array.isArray(params?.choices) ? params.choices : [];
+  return rawChoices.flatMap((choice: unknown) => {
+    const label = firstString(choice);
+    if (!label) return [];
+    return [{ optionId: label, label }];
+  });
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function normalizeStructuredQuestionOptions(question: any): PendingUserRequestOption[] { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const rawOptions = Array.isArray(question?.options) ? question.options : [];
+  return rawOptions.flatMap((option: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const label = firstString(option?.label, option?.name, option?.value, option?.optionId, option);
+    if (!label) return [];
+    return [{
+      optionId: label,
+      kind: typeof option?.kind === 'string' ? option.kind : undefined,
+      label,
+      description: typeof option?.description === 'string' ? option.description : undefined,
+      recommended: option?.recommended === true,
+    }];
+  });
+}
+
+function normalizeUserRequestQuestions(params: any): PendingUserRequestQuestion[] { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const rawQuestions = Array.isArray(params?.questions)
+    ? params.questions
+    : Array.isArray(params?.input?.questions)
+      ? params.input.questions
+      : [];
+  return rawQuestions.flatMap((question: any, index: number) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const header = firstString(question?.header, question?.id, question?.name, question?.label, question?.question) ?? `Question ${index + 1}`;
+    const questionText = firstString(question?.question, question?.prompt, question?.label, question?.name, question?.header) ?? header;
+    const options = normalizeStructuredQuestionOptions(question);
+    return [{
+      id: header,
+      header,
+      question: questionText,
+      message: typeof question?.message === 'string' ? question.message : undefined,
+      inputKind: options.length > 0 ? 'options' : 'text',
+      multiSelect: question?.multiSelect === true,
+      allowFreeformInput: question?.allowFreeformInput === false ? false : true,
+      options,
+    }];
+  });
 }
 
 function getAllowPermissionOption(options: PendingUserRequestOption[]): PendingUserRequestOption | undefined {
@@ -1294,6 +1404,14 @@ function buildAbandonedUserRequestResponse(request: PendingUserRequest): Record<
       || option.kind === 'reject',
     );
     return { outcome: { outcome: 'selected', optionId: rejectOption?.optionId || 'reject_once' } };
+  }
+  if (request.questions?.length) {
+    return {
+      answers: Object.fromEntries(request.questions.map((question) => [
+        question.header,
+        { selected: [], freeText: null, skipped: true } satisfies PendingUserRequestAnswer,
+      ])),
+    };
   }
   return { answer: '' };
 }
@@ -1348,7 +1466,7 @@ function queueUserRequestForTurn(
   method: string,
   params: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 ): boolean {
-  const turn = findTurnForSession(agentId, typeof params?.sessionId === 'string' ? params.sessionId : undefined);
+  const turn = findTurnForUserRequest(agentId, typeof params?.sessionId === 'string' ? params.sessionId : undefined);
   if (!turn) return false;
 
   if (turn.userRequest) {
@@ -1357,13 +1475,9 @@ function queueUserRequestForTurn(
 
   const requestId = createUserRequestId(agentId, rpcRequestId);
   const options = normalizePermissionOptions(params);
-  const prompt = typeof params?.prompt === 'string'
-    ? params.prompt
-    : typeof params?.message === 'string'
-      ? params.message
-      : typeof params?.question === 'string'
-        ? params.question
-      : 'The agent is asking for your approval.';
+  const questions = normalizeUserRequestQuestions(params);
+  const prompt = firstString(params?.prompt, params?.message, params?.question)
+    ?? (questions.length === 1 ? questions[0].question : 'The agent is asking for your response.');
 
   const request: PendingUserRequest = {
     id: requestId,
@@ -1371,10 +1485,11 @@ function queueUserRequestForTurn(
     agentId,
     chatId: turn.chatId,
     sessionId: typeof params?.sessionId === 'string' ? params.sessionId : turn.sessionId,
-    title: method === 'session/request_permission' ? 'Permission request' : 'Agent question',
+    title: firstString(params?.title) ?? (method === 'session/request_permission' ? 'Permission request' : 'Agent question'),
     prompt,
     inputKind: options.length > 0 ? 'options' : 'text',
     options,
+    questions,
     createdAt: Date.now(),
   };
   turn.userRequest = request;
@@ -1408,6 +1523,14 @@ function buildUserRequestResponse(request: PendingUserRequest, body: any): Recor
     const optionId = typeof body?.optionId === 'string' ? body.optionId : '';
     return { outcome: { outcome: 'selected', optionId } };
   }
+  if (request.questions?.length) {
+    const rawAnswers = body?.answers && typeof body.answers === 'object' ? body.answers as Record<string, unknown> : {};
+    const answers = Object.fromEntries(request.questions.map((question) => [
+      question.header,
+      normalizeStructuredQuestionAnswer(question, rawAnswers[question.header] ?? rawAnswers[question.id]),
+    ]));
+    return { answers };
+  }
   const selectedOption = typeof body?.optionId === 'string'
     ? request.options.find(option => option.optionId === body?.optionId)
     : undefined;
@@ -1415,6 +1538,205 @@ function buildUserRequestResponse(request: PendingUserRequest, body: any): Recor
     return { answer: selectedOption.label || selectedOption.optionId, optionId: selectedOption.optionId };
   }
   return { answer: String(body?.answer ?? '') };
+}
+
+function normalizeStructuredQuestionAnswer(question: PendingUserRequestQuestion, rawAnswer: unknown): PendingUserRequestAnswer {
+  if (typeof rawAnswer === 'string') {
+    if (question.options.some(option => option.label === rawAnswer)) {
+      return { selected: [rawAnswer], freeText: null, skipped: false };
+    }
+    return { selected: [], freeText: rawAnswer, skipped: false };
+  }
+  if (Array.isArray(rawAnswer)) {
+    return { selected: rawAnswer.map(value => String(value)), freeText: null, skipped: rawAnswer.length === 0 };
+  }
+  if (rawAnswer && typeof rawAnswer === 'object') {
+    const answer = rawAnswer as { selected?: unknown; freeText?: unknown; skipped?: unknown };
+    const selected = Array.isArray(answer.selected) ? answer.selected.map(value => String(value)) : [];
+    const hasFreeText = typeof answer.freeText === 'string';
+    const freeText = hasFreeText ? answer.freeText as string : null;
+    return {
+      selected,
+      freeText,
+      skipped: answer.skipped === true || (selected.length === 0 && !hasFreeText),
+    };
+  }
+  return { selected: [], freeText: null, skipped: true };
+}
+
+function stripQuestionListPrefix(line: string): string {
+  return line
+    .replace(/^\s*(?:\d+[\.)]|[-*])\s*/, '')
+    .replace(/\s+$/g, '')
+    .replace(/[:?]\s*$/g, '')
+    .trim();
+}
+
+function parseTextQuestionUserRequest(text: string): Pick<PendingUserRequest, 'prompt' | 'questions'> | null {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const prompt = lines[0] || '';
+  if (!/^Please\s+(?:enter|provide|input|share|give)\b/i.test(prompt)) return null;
+
+  const questionLines = lines.slice(1)
+    .filter(line => /^(?:\d+[\.)]|[-*])\s+\S/.test(line))
+    .map(stripQuestionListPrefix)
+    .filter(Boolean);
+  if (questionLines.length === 0) return null;
+
+  return {
+    prompt,
+    questions: questionLines.map((question, index) => ({
+      id: question || `Question ${index + 1}`,
+      header: question || `Question ${index + 1}`,
+      question,
+      inputKind: 'text',
+      options: [],
+    })),
+  };
+}
+
+function queueSyntheticUserRequestFromText(turn: TurnState): boolean {
+  if (turn.userRequest || turn.error) return false;
+  const parseOffset = turn.syntheticQuestionParseOffset ?? 0;
+  const parsed = parseTextQuestionUserRequest(turn.fullText.slice(parseOffset).trim());
+  if (!parsed || !parsed.questions?.length) return false;
+
+  turn.userRequest = {
+    id: createUserRequestId(turn.agentId, `text-question:${turn.id}`),
+    method: SYNTHETIC_USER_REQUEST_METHOD,
+    agentId: turn.agentId,
+    chatId: turn.chatId,
+    sessionId: turn.sessionId,
+    title: 'Agent question',
+    prompt: parsed.prompt,
+    inputKind: 'text',
+    options: [],
+    questions: parsed.questions,
+    createdAt: Date.now(),
+  };
+  turn.statusText = 'Waiting for your response';
+  turn.phase = 'thinking';
+  scheduleTurnPersist(turn);
+  return true;
+}
+
+function buildSyntheticUserRequestFollowupPrompt(request: PendingUserRequest, body: any): string { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const rawAnswers = body?.answers && typeof body.answers === 'object' ? body.answers as Record<string, unknown> : {};
+  const answerLines = (request.questions || []).map((question) => {
+    const answer = normalizeStructuredQuestionAnswer(question, rawAnswers[question.header] ?? rawAnswers[question.id]);
+    const value = answer.freeText ?? answer.selected.join(', ');
+    return `${question.header}: ${value || '(skipped)'}`;
+  });
+  return `User answered the questions:\n${answerLines.join('\n')}\n\nContinue with the task using these answers.`;
+}
+
+function buildSyntheticUserRequestAnswerText(request: PendingUserRequest, body: any): string { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (request.questions?.length) {
+    const rawAnswers = body?.answers && typeof body.answers === 'object' ? body.answers as Record<string, unknown> : {};
+    const answerLines = request.questions.map((question) => {
+      const answer = normalizeStructuredQuestionAnswer(question, rawAnswers[question.header] ?? rawAnswers[question.id]);
+      const value = answer.freeText ?? answer.selected.join(', ');
+      return `${question.header}: ${value || '(skipped)'}`;
+    });
+    return `You answered:\n${answerLines.join('\n')}`;
+  }
+  const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
+  return `You answered:\n${answer || '(skipped)'}`;
+}
+
+function findSyntheticUserRequestTurn(sess: UserSession, agentId: string, userId: string, requestId: string): TurnState | null {
+  for (const turn of sess.activeTurns.values()) {
+    if (
+      turn.agentId === agentId
+      && turn.userId === userId
+      && turn.userRequest?.id === requestId
+      && turn.userRequest.method === SYNTHETIC_USER_REQUEST_METHOD
+    ) {
+      return turn;
+    }
+  }
+  return null;
+}
+
+function continueTurnWithPrompt(proc: AgentProcess, sess: UserSession, turn: TurnState, prompt: string): void {
+  const turnChatKey = turn.chatId || '__default';
+  if (!proc.rpc || !turn.sessionId) {
+    turn.done = true;
+    turn.phase = 'done';
+    turn.error = 'Agent session is not available';
+    turn.statusText = turn.error;
+    void flushTurnPersist(turn);
+    scheduleTurnRelease(sess, turnChatKey, turn);
+    return;
+  }
+
+  proc.rpc
+    .send('session/prompt', {
+      sessionId: turn.sessionId,
+      prompt: [{ type: 'text', text: prompt }],
+    })
+    .then(async (result: Record<string, unknown> | undefined) => {
+      if (!turn.done) {
+        finishTurnAfterPromptResult(turn, result);
+        if (turn.done && sess.activeTurns.size === 0) sess.phase = 'idle';
+      }
+      await flushTurnPersist(turn);
+      if (turn.done) {
+        turn.prompt = '';
+        scheduleTurnRelease(sess, turnChatKey, turn);
+      }
+    })
+    .catch(async (err: Error) => {
+      if (!turn.done) {
+        turn.done = true;
+        turn.phase = 'done';
+        turn.error = err.message || String(err);
+        turn.statusText = turn.error;
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
+      }
+      await flushTurnPersist(turn);
+      scheduleTurnRelease(sess, turnChatKey, turn);
+    });
+}
+
+async function handleSyntheticUserRequestResponse(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  token: Awaited<ReturnType<typeof getToken>>,
+  requestId: string,
+  body: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+): Promise<NextResponse | null> {
+  const turn = findSyntheticUserRequestTurn(sess, agentId, userId, requestId);
+  if (!turn) return null;
+  const request = turn.userRequest;
+  if (!request || request.id !== requestId || request.method !== SYNTHETIC_USER_REQUEST_METHOD) {
+    return NextResponse.json({ ok: false, error: 'request_not_active' }, { status: 409 });
+  }
+
+  const requestAgent = configStore.getAgentById(agentId);
+  if (!requestAgent || !canTalkTo(token, requestAgent.owner, agentId, requestAgent.public, configStore.hasAgentAccess)) {
+    return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
+  }
+
+  const turnChatKey = request.chatId || '__default';
+  if (sess.activeTurns.get(turnChatKey) !== turn) {
+    clearPendingUserRequestForTurn(turn, 'inactive');
+    return NextResponse.json({ ok: false, error: 'request_not_active' }, { status: 409 });
+  }
+
+  const followupPrompt = buildSyntheticUserRequestFollowupPrompt(request, body);
+  const answerText = buildSyntheticUserRequestAnswerText(request, body);
+  turn.userRequest = undefined;
+  turn.statusText = 'Thinking';
+  turn.phase = 'thinking';
+  turn.error = undefined;
+  turn.syntheticQuestionParseOffset = turn.fullText.length;
+  turn.events.push({ type: 'user_response', ts: Date.now(), text: answerText });
+  continueTurnWithPrompt(proc, sess, turn, followupPrompt);
+  scheduleTurnPersist(turn);
+  return NextResponse.json({ ok: true });
 }
 
 /* ─────────── Chat Recovery: compare ACP replay with SQLite ─────────── */
@@ -1821,6 +2143,9 @@ export async function POST(req: NextRequest) {
 
     if (action === 'respond-user-request') {
       const requestId = typeof body?.requestId === 'string' ? body.requestId : '';
+      const syntheticResponse = await handleSyntheticUserRequestResponse(proc, sess, agentId, userId, token, requestId, body);
+      if (syntheticResponse) return syntheticResponse;
+
       const pending = pendingUserRequestResponders.get(requestId);
       if (!pending) return NextResponse.json({ ok: false, error: 'request_not_found' }, { status: 404 });
 

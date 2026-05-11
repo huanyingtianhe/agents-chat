@@ -18,12 +18,24 @@ const noToolsBranchSource = noToolsBranchStart >= 0 && noToolsBranchEnd >= 0
 const freeformRequestHandlerIndex = routeSource.indexOf(
   "if (method === 'session/request_input' || method === 'session/request_user_input')",
 );
-const freeformQueuedInNoToolsBranch = /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn[\s\S]*?rpc\.respond\(id,\s*\{\s*answer:\s*''\s*\}\s*\)/.test(noToolsBranchSource);
+const freeformQueuedInNoToolsBranch = /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn/.test(noToolsBranchSource);
 
 assert.match(
   routeSource,
   /type\s+PendingUserRequest\s*=/,
   'route.ts should define a serializable PendingUserRequest type',
+);
+
+assert.match(
+  routeSource,
+  /type\s+PendingUserRequestQuestion\s*=/,
+  'route.ts should define structured user request questions',
+);
+
+assert.match(
+  routeSource,
+  /questions\??:\s*PendingUserRequestQuestion\[\]/,
+  'PendingUserRequest should preserve structured questions from ACP user-input requests',
 );
 
 assert.match(
@@ -54,6 +66,24 @@ assert.match(
   routeSource,
   /function\s+queueUserRequestForTurn[\s\S]*?turn\.userRequest\s*=\s*request;[\s\S]*?turn\.statusText\s*=\s*['"]Waiting for your response['"];[\s\S]*?scheduleTurnPersist\(turn\);/,
   'queueUserRequestForTurn should persist pending request state when the agent starts waiting for user input',
+);
+
+assert.match(
+  routeSource,
+  /function\s+normalizeUserRequestQuestions[\s\S]*?params\?\.questions[\s\S]*?params\?\.input\?\.questions/,
+  'queueUserRequestForTurn should normalize structured questions from common ACP request shapes',
+);
+
+assert.match(
+  routeSource,
+  /function\s+normalizePermissionOptions[\s\S]*?params\?\.choices/,
+  'user-input requests should normalize ACP choices as selectable options',
+);
+
+assert.match(
+  routeSource,
+  /function\s+queueUserRequestForTurn[\s\S]*?const\s+questions\s*=\s*normalizeUserRequestQuestions\(params\)[\s\S]*?questions,/,
+  'queueUserRequestForTurn should attach normalized structured questions to the pending request',
 );
 
 assert.match(
@@ -98,16 +128,76 @@ assert.match(
   'session/request_permission should auto-approve only after an Always allow grant exists, otherwise it should queue the request',
 );
 
-assert.match(
+assert.doesNotMatch(
   routeSource,
   /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn[\s\S]*?rpc\.respond\(id,\s*\{\s*answer:\s*''\s*\}\s*\)/,
-  'session/request_input and session/request_user_input should fall back to { answer: \'\' } when queueing fails',
+  'session/request_input and session/request_user_input should not auto-answer empty when queueing fails',
 );
 
 assert.match(
   routeSource,
   /action\s*===\s*['"]respond-user-request['"][\s\S]*?pendingUserRequestResponders\.get/,
   'route.ts should expose a respond-user-request action that resolves the stored JSON-RPC request',
+);
+
+assert.match(
+  routeSource,
+  /function\s+buildUserRequestResponse[\s\S]*?request\.questions\?\.length[\s\S]*?return\s+\{\s*answers\s*\}/,
+  'respond-user-request should resolve structured questions with VS Code-compatible answers',
+);
+
+assert.match(
+  routeSource,
+  /function\s+buildAbandonedUserRequestResponse[\s\S]*?request\.questions\?\.length[\s\S]*?skipped:\s*true/,
+  'abandoned structured questions should be returned as skipped answers',
+);
+
+assert.match(
+  routeSource,
+  /const\s+SYNTHETIC_USER_REQUEST_METHOD\s*=\s*['"]client\/text_question['"]/,
+  'route.ts should define a synthetic user request method for plain agent question prompts',
+);
+
+assert.match(
+  routeSource,
+  /function\s+parseTextQuestionUserRequest[\s\S]*?Please[\s\S]*?Question\s*\$\{index\s*\+\s*1\}/,
+  'route.ts should parse plain agent question prompts into structured request fields',
+);
+
+assert.match(
+  routeSource,
+  /function\s+finishTurnAfterPromptResult[\s\S]*?queueSyntheticUserRequestFromText\(turn\)[\s\S]*?return;/,
+  'finishTurnAfterPromptResult should keep the turn active when the agent output is a plain question prompt',
+);
+
+assert.match(
+  routeSource,
+  /function\s+buildSyntheticUserRequestFollowupPrompt[\s\S]*?User answered the questions/,
+  'route.ts should build a follow-up prompt from synthetic user request answers',
+);
+
+assert.match(
+  routeSource,
+  /function\s+buildSyntheticUserRequestAnswerText[\s\S]*?You answered/,
+  'route.ts should build visible inline answer text for synthetic user request responses',
+);
+
+assert.match(
+  routeSource,
+  /function\s+handleSyntheticUserRequestResponse[\s\S]*?events\.push\(\{\s*type:\s*['"]user_response['"]/,
+  'synthetic user request responses should record the submitted answers in the turn event stream',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]respond-user-request['"][\s\S]*?handleSyntheticUserRequestResponse/,
+  'respond-user-request should handle synthetic text-question requests even without a JSON-RPC responder',
+);
+
+assert.doesNotMatch(
+  routeSource,
+  /function\s+handleSyntheticUserRequestResponse[\s\S]*?turn\.fullText\s*=\s*['"][\s\S]*?turn\.events\s*=\s*\[\]/,
+  'synthetic user request responses should preserve existing turn text and events so prior thinking/tool history stays visible',
 );
 
 assert.match(
@@ -232,13 +322,19 @@ assert.match(
 
 assert.match(
   routeSource,
-  /function\s+queueUserRequestForTurn[\s\S]*?findTurnForSession\(agentId,\s*typeof\s+params\?\.sessionId\s*===\s*['"]string['"]\s*\?\s*params\.sessionId\s*:\s*undefined\)/,
+  /function\s+queueUserRequestForTurn[\s\S]*?findTurnForUserRequest\(agentId,\s*typeof\s+params\?\.sessionId\s*===\s*['"]string['"]\s*\?\s*params\.sessionId\s*:\s*undefined\)/,
   'queueUserRequestForTurn should resolve turns through agent-scoped session lookup',
 );
 
 assert.match(
   routeSource,
-  /const\s+prompt\s*=\s*typeof\s+params\?\.prompt\s*===\s*['"]string['"][\s\S]*?typeof\s+params\?\.message\s*===\s*['"]string['"][\s\S]*?typeof\s+params\?\.question\s*===\s*['"]string['"]/,
+  /function\s+findTurnForUserRequest[\s\S]*?findSingleActiveTurnForAgent\(agentId\)[\s\S]*?function\s+queueUserRequestForTurn[\s\S]*?findTurnForUserRequest\(agentId,/,
+  'queueUserRequestForTurn should safely fall back for ACP user-input requests that omit sessionId',
+);
+
+assert.match(
+  routeSource,
+  /const\s+prompt\s*=\s*firstString\(params\?\.prompt,\s*params\?\.message,\s*params\?\.question\)/,
   'queueUserRequestForTurn should derive prompt text from params.prompt, params.message, or params.question',
 );
 

@@ -1248,6 +1248,108 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.agent', { hasText: 'Thanks, I will use westus2.' })).toBeVisible({ timeout: 10000 });
   });
 
+  test('forwards structured ACP questions to the user inline in chat', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    let respondedBody: any = null;
+    let answered = false;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-structured' } }) });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            activeTurn: answered
+              ? {
+                  id: 'turn-structured',
+                  fullText: 'Please provide two numbers:\n\n12 + 30 = 42',
+                  done: true,
+                  phase: 'done',
+                  statusText: '',
+                  events: [
+                    { type: 'text_chunk', ts: Date.now(), text: 'Please provide two numbers:' },
+                    { type: 'user_response', ts: Date.now(), text: 'You answered:\nFirst number: 12\nSecond number: 30' },
+                    { type: 'text_chunk', ts: Date.now(), text: '\n\n12 + 30 = 42' },
+                  ],
+                }
+              : {
+                  id: 'turn-structured',
+                  fullText: '',
+                  done: false,
+                  phase: 'thinking',
+                  statusText: 'Waiting for your response',
+                  events: [],
+                  userRequest: {
+                    id: 'request-two-numbers',
+                    method: 'session/request_user_input',
+                    agentId: 'alpha',
+                    title: 'Agent question',
+                    prompt: 'Please provide two numbers:',
+                    inputKind: 'text',
+                    options: [],
+                    questions: [
+                      { header: 'First number', question: 'First number:' },
+                      { header: 'Second number', question: 'Second number:' },
+                    ],
+                    createdAt: Date.now(),
+                  },
+                },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'respond-user-request') {
+        respondedBody = body;
+        answered = true;
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (body?.action === 'turn-clear') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha use the test-user-input skill');
+    await textarea.press('Enter');
+
+    const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Please provide two numbers:' });
+    await expect(requestCard).toBeVisible({ timeout: 10000 });
+    await requestCard.getByRole('textbox', { name: 'First number' }).fill('12');
+    await requestCard.getByRole('textbox', { name: 'Second number' }).fill('30');
+    await requestCard.getByRole('button', { name: 'Send' }).click();
+
+    await expect.poll(() => respondedBody?.requestId ?? null).toBe('request-two-numbers');
+    expect(respondedBody?.answers).toEqual({
+      'First number': { selected: [], freeText: '12', skipped: false },
+      'Second number': { selected: [], freeText: '30', skipped: false },
+    });
+    const answerMessage = chatArea.locator('.message.agent', { hasText: '12 + 30 = 42' });
+    await expect(answerMessage).toBeVisible({ timeout: 10000 });
+    await expect(answerMessage.locator('.userAnswerPart')).toContainText('You answered');
+    await expect(answerMessage.locator('.userAnswerPart')).toContainText('First number: 12');
+    await expect(answerMessage.locator('.userAnswerPart')).toContainText('Second number: 30');
+  });
+
   test('prevents duplicate inline permission responses while submit is pending', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');

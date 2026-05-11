@@ -437,11 +437,14 @@ test.describe('Chat UI', () => {
     console.log('PASS: lastChatId restored from server, chat loaded from SQLite after reload');
   });
 
-  test('should not resend unanswered message when resuming multiple saved sessions', async ({ page }) => {
+  test('should resend the last unanswered message after loading a saved session', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const pendingText = 'UI recovery should not resend this message';
-    const chatId = `ui-no-resend-${Date.now()}`;
+    const pendingText = 'UI recovery should resend this message';
+    const replyText = 'Auto-resend completed.';
+    const chatId = `ui-auto-resend-${Date.now()}`;
     const resumeRequests: string[] = [];
+    const sendRequests: any[] = [];
+    let pollCount = 0;
 
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
@@ -462,7 +465,36 @@ test.describe('Chat UI', () => {
         resumeRequests.push(body.agentId);
         await route.fulfill({
           contentType: 'application/json',
-          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: false, pendingUserMessage: pendingText }),
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-auto-resend' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        pollCount++;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-auto-resend',
+              messageId: body.messageId,
+              fullText: replyText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: replyText }],
+            },
+          }),
         });
         return;
       }
@@ -476,6 +508,7 @@ test.describe('Chat UI', () => {
         ts: Date.now(),
         messages: [
           { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
         ],
         agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
       };
@@ -496,10 +529,520 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
     await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
 
-    await expect(chatArea.locator('text=Re-sending unanswered message')).toHaveCount(0);
-    await expect(chatArea.locator('.message.agent')).toHaveCount(0);
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
+    await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
+    expect(pollCount).toBeGreaterThan(0);
     await expect(chatArea.locator('text=turn_in_progress')).toHaveCount(0);
-    console.log('PASS: multiple resume results did not trigger UI auto-resend');
+    console.log('PASS: unanswered saved message was resent once after session load');
+  });
+
+  test('should resend a mentioned message to the correct agent when multiple agents exist', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = '@beta please resume only beta';
+    const cleanedText = 'please resume only beta';
+    const replyText = 'Beta handled the resent message.';
+    const chatId = `ui-auto-resend-target-agent-${Date.now()}`;
+    const resumeRequests: string[] = [];
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        resumeRequests.push(body.agentId);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-beta', phase: 'thinking', turn: { id: 'turn-auto-resend-beta' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-auto-resend-beta',
+              messageId: body.messageId,
+              fullText: replyText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: replyText }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI auto resend correct target',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'beta', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'beta', text: cleanedText, chatId });
+    expect(sendRequests.some((request) => request.agentId === 'alpha')).toBe(false);
+    await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('should use scheduler routing when auto-resending a multi-agent message', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = '@alpha @beta coordinate this resend';
+    const cleanedText = 'coordinate this resend';
+    const chatId = `ui-auto-resend-scheduler-${Date.now()}`;
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.agentId === 'scheduler' ? 'session-scheduler' : body.sessionId, phase: 'thinking', turn: { id: `turn-${body.agentId}` } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        const responseText = body.agentId === 'scheduler'
+          ? '{ "done": true, "summary": "scheduler handled resend" }'
+          : 'worker handled resend';
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: `turn-${body.agentId}`,
+              fullText: responseText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: responseText }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI auto resend scheduler routing',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta', scheduler: 'session-scheduler' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBeGreaterThan(0);
+    expect(sendRequests[0].agentId).toBe('scheduler');
+    expect(sendRequests[0].text).toContain(cleanedText);
+    expect(sendRequests.some((request) => request.agentId === 'alpha')).toBe(false);
+    expect(sendRequests.some((request) => request.agentId === 'beta')).toBe(false);
+  });
+
+  test('should resend to scheduler again when the failed auto-mode message was sent to scheduler', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = '@alpha @beta coordinate this resend after scheduler failure';
+    const cleanedText = 'coordinate this resend after scheduler failure';
+    const chatId = `ui-auto-resend-scheduler-failed-${Date.now()}`;
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-scheduler', phase: 'thinking', turn: { id: 'turn-scheduler-resend' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'thinking',
+            ready: false,
+            activeTurn: {
+              id: 'turn-scheduler-resend',
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI auto resend scheduler failed target',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'scheduler', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta', scheduler: 'session-scheduler' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0].agentId).toBe('scheduler');
+    expect(sendRequests[0].text).toContain(cleanedText);
+    expect(sendRequests.some((request) => request.agentId === 'alpha')).toBe(false);
+    expect(sendRequests.some((request) => request.agentId === 'beta')).toBe(false);
+  });
+
+  test('should use auto mode to resend a two-agent mention to the scheduler-selected worker only', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = '@alpha @beta choose the right worker for this resend';
+    const selectedInstruction = 'Beta should handle this resent prompt';
+    const chatId = `ui-auto-resend-selected-worker-${Date.now()}`;
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: `session-${body.agentId}`, phase: 'thinking', turn: { id: `turn-${body.agentId}` } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        if (body.agentId === 'scheduler') {
+          const schedulerDecision = JSON.stringify({ done: false, nextAgent: 'beta', instruction: selectedInstruction });
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: true,
+              phase: 'idle',
+              ready: true,
+              activeTurn: {
+                id: 'turn-scheduler',
+                fullText: schedulerDecision,
+                done: true,
+                phase: 'done',
+                statusText: '',
+                events: [{ type: 'text_chunk', ts: Date.now(), text: schedulerDecision }],
+              },
+            }),
+          });
+          return;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'thinking',
+            ready: false,
+            activeTurn: {
+              id: `turn-${body.agentId}`,
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI auto resend selected worker',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta', scheduler: 'session-scheduler' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(2);
+
+    expect(sendRequests[0].agentId).toBe('scheduler');
+    expect(sendRequests[1]).toMatchObject({ action: 'send', agentId: 'beta', text: selectedInstruction, chatId });
+    expect(sendRequests.some((request) => request.agentId === 'alpha')).toBe(false);
+  });
+
+  test('should block manual send while auto-resend is running', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const pendingText = 'UI recovery should keep running while resend is active';
+    const manualText = 'manual message during auto resend';
+    const chatId = `ui-auto-resend-block-send-${Date.now()}`;
+    const resumeRequests: string[] = [];
+    const sendRequests: any[] = [];
+    const interruptRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        resumeRequests.push(body.agentId);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-auto-resend-block-send' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'thinking',
+            ready: false,
+            activeTurn: {
+              id: 'turn-auto-resend-block-send',
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [],
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'interrupt') {
+        interruptRequests.push(body);
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI auto resend blocks manual send',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(1);
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
+
+    await expect(page.getByRole('button', { name: 'Stop generation' })).toBeVisible({ timeout: 10000 });
+    await textarea.fill(manualText);
+    await textarea.press('Enter');
+
+    await expect.poll(() => interruptRequests.length, { timeout: 10000 }).toBe(1);
+    await page.waitForTimeout(500);
+    expect(sendRequests).toHaveLength(1);
+    await expect(chatArea.locator('.message.user', { hasText: manualText })).toHaveCount(0);
+    await expect(textarea).toHaveValue(manualText);
+    console.log('PASS: manual send was blocked while auto-resend was running');
   });
 
   test('forwards ACP permission questions to the user inline in chat', async ({ page }) => {

@@ -813,6 +813,7 @@ export default function Page() {
   const inputDraftRef = useRef('');
   const needsContextRestoreRef = useRef(false);
   const currentAgentSessionsRef = useRef<Record<string, string>>({});
+  const autoResentUserMessageRef = useRef<Set<string>>(new Set());
 
   /* ── Derived ── */
 
@@ -1016,6 +1017,8 @@ export default function Page() {
           needsContextRestoreRef.current = false;
         }
         // Handle recovered messages and pending user messages from session/load replay
+        let resumedActiveTurn = false;
+        let recoveredMessageCount = 0;
         for (const [index, r] of results.entries()) {
           if (r.status !== 'fulfilled') continue;
           const agentId = entries[index]?.[0];
@@ -1024,15 +1027,21 @@ export default function Page() {
             currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
           }
           if (agentId && val?.activeTurn && !val.activeTurn.done) {
+            resumedActiveTurn = true;
             resumeActiveTurn(agentId, val.activeTurn);
           }
           // Append recovered agent messages that were in ACP but missing from our DB
           if (val?.recoveredMessages?.length > 0) {
+            recoveredMessageCount += val.recoveredMessages.length;
             for (const rm of val.recoveredMessages) {
               addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
             }
             addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
           }
+        }
+        if (!resumedActiveTurn && recoveredMessageCount === 0) {
+          const chatMessages = chatMessagesRef.current[activeChatId] || messagesRef.current;
+          void resendLastUnansweredMessage(activeChatId, chatMessages);
         }
       } catch { /* ignore */ }
     })();
@@ -2474,6 +2483,62 @@ export default function Page() {
     }
   }
 
+  function getLastUnansweredUserMessage(chatMessages: ChatMessage[]): ChatMessage | null {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const message = chatMessages[i];
+      if (message.type === 'system') continue;
+      if (isSendFailureMessage(message)) continue;
+      if (message.type === 'user') return message;
+      const hasAgentText = message.content.trim() || message.parts?.some((part) => part.kind === 'text' && part.text.trim());
+      if (hasAgentText) return null;
+    }
+    return null;
+  }
+
+  function isSendFailureMessage(message: ChatMessage): boolean {
+    if (message.type !== 'agent') return false;
+    const text = message.content.trim();
+    return text.startsWith('⚠️') && (
+      text.includes('Failed to send prompt to agent') ||
+      text.includes('Send failed')
+    );
+  }
+
+  function getAutoResendTargets(text: string): { agentIds: string[]; message: string } {
+    if (agents.length > 0) return parseAgents(text, agents);
+    const sessionAgentIds = Object.keys(currentAgentSessionsRef.current)
+      .filter((id) => id !== SCHEDULER_AGENT_ID && !!lastSessionId(currentAgentSessionsRef.current[id]));
+    const mentionedSessionAgentIds = sessionAgentIds.filter((id) =>
+      new RegExp(`(?:^|\\s)@${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`).test(text)
+    );
+    return { agentIds: mentionedSessionAgentIds.length > 0 ? mentionedSessionAgentIds : sessionAgentIds.slice(0, 1), message: text.replace(/(?:^|\s)@(\S+)/g, '').trim() || text };
+  }
+
+  async function resendLastUnansweredMessage(chatId: string, chatMessages: ChatMessage[]) {
+    const lastMessage = getLastUnansweredUserMessage(chatMessages);
+    if (!lastMessage || !lastMessage.content.trim()) return false;
+    if (Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId)) return false;
+
+    const resendKey = `${chatId}:${lastMessage.id}:${lastMessage.ts}`;
+    if (autoResentUserMessageRef.current.has(resendKey)) return false;
+
+    const { agentIds, message } = getAutoResendTargets(lastMessage.content);
+    if (agentIds.length === 0) return false;
+
+    autoResentUserMessageRef.current.add(resendKey);
+    const orchestrationId = `resume-${makeId()}`;
+    try {
+      await dispatchParsedPrompt(agentIds, message, lastMessage.content, orchestrationId, {
+        chatId,
+        relation: 'Resent unanswered message after session load',
+      });
+      return true;
+    } catch (err) {
+      addMessage({ type: 'system', content: `⚠️ Failed to resend unanswered message: ${err instanceof Error ? err.message : String(err)}` }, chatId);
+      return false;
+    }
+  }
+
   function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string; phase?: string; statusText?: string; userRequest?: AgentUserRequest }) {
     const resumeChatId = currentChatIdRef.current;
     const pendingId = turn.messageId || `pending-${makeId()}`;
@@ -2886,24 +2951,60 @@ export default function Page() {
 
   /* ── Send handler ── */
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || agents.length === 0) return;
-
-    const { agentIds, message } = parseAgents(text, agents);
+  async function dispatchParsedPrompt(
+    agentIds: string[],
+    message: string,
+    originalText: string,
+    orchestrationId: string,
+    options?: { chatId?: string; relation?: string },
+  ) {
     const useOrchestration = agentIds.length > 1;
-    const orchestrationId = `orch-${makeId()}`;
+    const effectiveMessage = message || originalText;
+    const dispatchOptions = options?.chatId || options?.relation
+      ? { chatId: options?.chatId, relation: options?.relation }
+      : undefined;
 
     if (useOrchestration) {
       orchestrationsRef.current[orchestrationId] = {
-        id: orchestrationId, mode: orchestrationMode, agentIds,
-        originalTask: message || text, results: {},
+        id: orchestrationId,
+        mode: orchestrationMode,
+        agentIds,
+        originalTask: effectiveMessage,
+        results: {},
         nextIndex: orchestrationMode === 'pipeline' ? 1 : 0,
         summaryStarted: false,
         round: orchestrationMode === 'discussion' ? 1 : 0,
         maxRounds: orchestrationMode === 'discussion' ? discussionRounds : 1,
       };
     }
+
+    if (!useOrchestration) {
+      await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', dispatchOptions);
+      return;
+    }
+    if (orchestrationMode === 'auto') {
+      void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText);
+    } else if (orchestrationMode === 'discussion') {
+      await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', {
+        ...dispatchOptions,
+        round: 1,
+        relation: dispatchOptions?.relation || 'Round 1 independent perspective',
+      })));
+    } else {
+      await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', {
+        ...dispatchOptions,
+        round: 1,
+        relation: dispatchOptions?.relation || 'Pipeline initial step',
+      });
+    }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || agents.length === 0) return;
+
+    const { agentIds, message } = parseAgents(text, agents);
+    const orchestrationId = `orch-${makeId()}`;
 
     shouldStickToBottomRef.current = true;
     addMessage({ type: 'user', content: text });
@@ -2921,19 +3022,7 @@ export default function Page() {
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(hist)); } catch { /* ignore */ }
 
     try {
-      const effectiveMessage = message || text;
-
-      if (!useOrchestration) {
-        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker');
-        return;
-      }
-      if (orchestrationMode === 'auto') {
-        void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, text);
-      } else if (orchestrationMode === 'discussion') {
-        await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Round 1 independent perspective' })));
-      } else {
-        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', { round: 1, relation: 'Pipeline initial step' });
-      }
+      await dispatchParsedPrompt(agentIds, message, text, orchestrationId);
     } catch (err) {
       addMessage({ type: 'system', content: `Send failed: ${err instanceof Error ? err.message : String(err)}` });
     }
@@ -3315,6 +3404,8 @@ export default function Page() {
         needsContextRestoreRef.current = false;
       }
       // Handle recovered messages and pending user messages
+      let resumedActiveTurn = false;
+      let recoveredMessageCount = 0;
       for (const [index, r] of resumeResults.entries()) {
         if (r.status !== 'fulfilled') continue;
         const agentId = sessionEntries[index]?.[0];
@@ -3323,14 +3414,20 @@ export default function Page() {
           currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
         }
         if (agentId && val?.activeTurn && !val.activeTurn.done) {
+          resumedActiveTurn = true;
           resumeActiveTurn(agentId, val.activeTurn);
         }
         if (val?.recoveredMessages?.length > 0) {
+          recoveredMessageCount += val.recoveredMessages.length;
           for (const rm of val.recoveredMessages) {
             addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
           }
           addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
         }
+      }
+      if (!resumedActiveTurn && recoveredMessageCount === 0) {
+        const loadedMessages = chatMessagesRef.current[chatId] || targetMessages;
+        void resendLastUnansweredMessage(chatId, loadedMessages);
       }
     }
 

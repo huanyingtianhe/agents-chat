@@ -1118,6 +1118,97 @@ test.describe('Chat UI', () => {
     console.log('PASS: failed saved message waited for manual resend');
   });
 
+  test('should treat saved user-only message without a session or response as failed on load', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = 'UI no session send should become failed';
+    const replyText = 'Manual resend after no-session failure completed.';
+    const chatId = `ui-no-session-failed-send-${Date.now()}`;
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-no-session-resend' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-no-session-resend',
+              messageId: body.messageId,
+              fullText: replyText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: replyText }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI no session failure',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect.poll(async () => page.evaluate(async (chatId) => {
+      const response = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
+      const data = await response.json();
+      return data.chat?.messages?.[0]?.sendStatus || null;
+    }, chatId), { timeout: 5000 }).toBe('failed');
+
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
+    await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
+  });
+
   test('should manually resend a mentioned failed message to the correct agent when multiple agents exist', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = '@beta please resume only beta';

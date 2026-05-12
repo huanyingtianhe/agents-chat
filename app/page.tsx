@@ -970,12 +970,17 @@ export default function Page() {
           .then(r => r.json())
           .then(chatData => {
             if (chatData.ok && chatData.chat) {
-              const msgs = migrateFailedSendWarnings(chatData.chat.messages || []);
-              currentAgentSessionsRef.current = chatData.chat.agentSessions || {};
+              const agentSessions = chatData.chat.agentSessions || {};
+              const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions);
+              const msgs = migration.messages;
+              currentAgentSessionsRef.current = agentSessions;
               setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
               setChatName(chatData.chat.name || lastChatId);
               needsContextRestoreRef.current = true;
               setLoadedChatIdForResume(lastChatId);
+              if (migration.changed) {
+                void persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
+              }
             }
           })
           .catch(() => { /* ignore */ });
@@ -1166,8 +1171,33 @@ export default function Page() {
     return !/(?:^|\s)@\S+/.test(userMessage.content);
   }
 
-  function migrateFailedSendWarnings(chatMessages: ChatMessage[]): ChatMessage[] {
+  function hasPersistedAgentSession(agentSessions?: Record<string, string>): boolean {
+    return Object.values(agentSessions || {}).some((session) => !!lastSessionId(session));
+  }
+
+  function hasVisibleMessageText(message: ChatMessage): boolean {
+    return Boolean(
+      message.content.trim() ||
+      message.parts?.some((part) => part.kind === 'text' && part.text.trim())
+    );
+  }
+
+  function getLatestUserWithoutSavedResponseIndex(chatMessages: ChatMessage[]): number {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const message = chatMessages[i];
+      if (message.type === 'system') continue;
+      if (message.type === 'user') return i;
+      if (hasVisibleMessageText(message)) return -1;
+    }
+    return -1;
+  }
+
+  function migrateFailedSendWarnings(
+    chatMessages: ChatMessage[],
+    agentSessions?: Record<string, string>,
+  ): { messages: ChatMessage[]; changed: boolean } {
     const migrated: ChatMessage[] = [];
+    let changed = false;
     for (const message of chatMessages) {
       if (isSendFailureMessage(message)) {
         const previous = migrated[migrated.length - 1];
@@ -1181,12 +1211,52 @@ export default function Page() {
             resendAgentIds,
             resendMessage: shouldInferTarget ? (previous.resendMessage || previous.content) : previous.resendMessage,
           };
+          changed = true;
           continue;
         }
       }
       migrated.push(message);
     }
-    return migrated;
+    if (!hasPersistedAgentSession(agentSessions)) {
+      const userIndex = getLatestUserWithoutSavedResponseIndex(migrated);
+      const userMessage = userIndex >= 0 ? migrated[userIndex] : null;
+      if (userMessage?.type === 'user' && userMessage.sendStatus !== 'failed') {
+        migrated[userIndex] = {
+          ...userMessage,
+          sendStatus: 'failed',
+          sendError: userMessage.sendError || 'Failed to send prompt to agent',
+        };
+        changed = true;
+      }
+    }
+    return { messages: migrated, changed };
+  }
+
+  function getPersistableMessages(chatMessages: ChatMessage[]): ChatMessage[] {
+    return chatMessages.filter(m => !(m.type === 'system' && m.ts !== 0));
+  }
+
+  async function persistLoadedChatMigration(
+    chatId: string,
+    name: string,
+    ts: number,
+    chatMessages: ChatMessage[],
+    agentSessions: Record<string, string>,
+  ) {
+    const chatData = {
+      id: chatId,
+      name: name || chatId,
+      ts: ts || Date.now(),
+      messages: getPersistableMessages(chatMessages),
+      agentSessions,
+    };
+    try {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: chatData }),
+      });
+    } catch { /* ignore */ }
   }
 
   async function loadChatIntoCache(chatId: string) {
@@ -1194,13 +1264,18 @@ export default function Page() {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
       if (data.ok && data.chat) {
-        setMessagesForChat(chatId, migrateFailedSendWarnings(data.chat.messages || []));
+        const agentSessions = data.chat.agentSessions || {};
+        const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+        setMessagesForChat(chatId, migration.messages);
+        if (migration.changed) {
+          void persistLoadedChatMigration(chatId, data.chat.name || chatId, data.chat.ts || Date.now(), migration.messages, agentSessions);
+        }
         setChatHistory(prev => {
           const entry = {
             id: data.chat.id,
             name: data.chat.name || chatId,
             ts: data.chat.ts || Date.now(),
-            agentSessions: data.chat.agentSessions || {},
+            agentSessions,
           };
           if (prev.some(c => c.id === chatId)) return prev.map(c => c.id === chatId ? entry : c);
           return normalizeChatHistory([entry, ...prev]);
@@ -3541,8 +3616,7 @@ export default function Page() {
     const currentName = currentId === currentChatIdRef.current ? chatNameRef.current : (existingHistoryEntry?.name || currentId);
     const userMsgs = currentMessages.filter(m => m.type === 'user');
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
-    const persistable = currentMessages
-      .filter(m => !(m.type === 'system' && m.ts !== 0));
+    const persistable = getPersistableMessages(currentMessages);
 
     const agentSessions = currentId === currentChatIdRef.current
       ? currentAgentSessionsRef.current
@@ -3609,6 +3683,8 @@ export default function Page() {
     let targetMessages: ChatMessage[] = [];
     let targetName = chatHistory.find(c => c.id === chatId)?.name || chatId;
     let agentSessions: Record<string, string> = {};
+    let migratedFailedSendState = false;
+    let targetTs = Date.now();
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
@@ -3617,9 +3693,17 @@ export default function Page() {
         return;
       }
       if (data.ok && data.chat) {
-        targetMessages = chatMessagesRef.current[chatId] || migrateFailedSendWarnings(data.chat.messages || []);
-        targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
+        const cachedMessages = chatMessagesRef.current[chatId];
+        if (cachedMessages) {
+          targetMessages = cachedMessages;
+        } else {
+          const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+          targetMessages = migration.messages;
+          migratedFailedSendState = migration.changed;
+        }
+        targetName = data.chat.name || targetName;
+        targetTs = data.chat.ts || targetTs;
         currentAgentSessionsRef.current = agentSessions;
       }
     } catch {
@@ -3639,6 +3723,9 @@ export default function Page() {
     setExpandedMessages({});
     setInput('');
     setSelectedAgentFilter(null);
+    if (migratedFailedSendState) {
+      void persistLoadedChatMigration(chatId, targetName, targetTs, targetMessages, agentSessions);
+    }
     // Keep active runs for other chats alive; pollers use their captured chatId.
     setChatHistory(prev => {
       if (prev.some(c => c.id === chatId)) {

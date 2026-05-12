@@ -30,6 +30,13 @@ if (process.env.AZURE_AD_CLIENT_ID) {
       },
       checks: ['pkce'],
       client: { token_endpoint_auth_method: 'none' },
+      profile(profile) {
+        return {
+          id: profile.sub || profile.oid,
+          name: profile.name || profile.preferred_username,
+          email: profile.email || profile.preferred_username || profile.upn,
+        };
+      },
     }),
   );
 }
@@ -124,7 +131,9 @@ export const authOptions: AuthOptions = {
             .split(',')
             .map((e) => e.trim().toLowerCase())
             .filter(Boolean);
-          const userEmail = (user.email || '').toLowerCase();
+          // Check both user.email and token.email — Azure AD may populate
+          // the email on the token (from the id_token) rather than user object
+          const userEmail = (user.email || token.email || '').toString().toLowerCase();
           token.role = adminEmails.includes(userEmail) ? 'admin' : 'user';
         }
       }

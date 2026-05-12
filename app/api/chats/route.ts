@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, saveChat, deleteChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat } from '@/lib/chatStore';
+import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,11 +47,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, migrated: result });
   }
 
-  // Save last active chat ID
+  // Save last active chat ID (empty string clears the preference)
   if (body?.action === 'set-last-chat') {
     const chatId = body?.chatId;
-    if (typeof chatId !== 'string' || !chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
+    if (typeof chatId !== 'string') return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
     await setLastChatId(userId, chatId);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Rename a chat
+  if (body?.action === 'rename') {
+    const chatId = body?.chatId;
+    const newName = body?.name;
+    if (typeof chatId !== 'string' || !chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
+    if (typeof newName !== 'string' || !newName.trim()) return NextResponse.json({ ok: false, error: 'missing_name' }, { status: 400 });
+    await renameChat(userId, chatId, newName.trim());
     return NextResponse.json({ ok: true });
   }
 

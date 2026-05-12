@@ -18,8 +18,8 @@ async function login(page: Page) {
   await page.fill('input[placeholder="Admin username"]', ADMIN_USER);
   await page.fill('input[placeholder="Password"]', ADMIN_PASS);
   await page.click('button[type="submit"]');
-  // Wait for the chat UI to be visible (handles redirect automatically)
-  await page.waitForSelector('.chatContainer', { timeout: 30000 });
+  // Wait for the chat UI to be visible — could be chatContainer or emptyHomepage
+  await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   await page.waitForTimeout(500);
 }
 
@@ -35,6 +35,19 @@ async function deleteAllChats(page: Page) {
         await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       }, chat.id);
     }
+  }
+  // Clear lastChatId on the server so page reload shows empty homepage
+  await page.evaluate(async () => {
+    await fetch('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set-last-chat', chatId: '' }) });
+  });
+}
+
+/** Ensure an active chat exists — clicks "+ New Chat" if on empty homepage */
+async function ensureActiveChat(page: Page) {
+  const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 2000 }).catch(() => false);
+  if (isEmpty) {
+    await page.click('button.newChatButton, button.emptyHomepageNewChat');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
   }
 }
 
@@ -64,8 +77,9 @@ test.describe('Login', () => {
 
   test('should login successfully with admin credentials', async ({ page }) => {
     await login(page);
-    // Should see the welcome message
-    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+    // Should see either the chat container or the empty homepage
+    const hasChatUI = await page.locator('.chatContainer, .emptyHomepage').isVisible();
+    expect(hasChatUI).toBe(true);
   });
 });
 
@@ -74,10 +88,12 @@ test.describe('Chat UI', () => {
     await login(page);
     await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+    await ensureActiveChat(page);
   });
 
   test('should display chat input and send button', async ({ page }) => {
+    await ensureActiveChat(page);
     await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
@@ -319,6 +335,7 @@ test.describe('Chat UI', () => {
   });
 
   test('should send a message and receive a reply', async ({ page }) => {
+    await ensureActiveChat(page);
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
     await textarea.fill('What is 1+1? Reply with just the number.');
     await page.click('button[aria-label="Send message"]');
@@ -913,8 +930,9 @@ test.describe('Chat UI', () => {
   });
 
   test('should create a new chat', async ({ page }) => {
-    // Click New Chat button
+    // From empty homepage, click the sidebar New Chat button
     await page.click('button.newChatButton');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
     // Should show welcome message in the new empty chat
     await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
@@ -927,6 +945,7 @@ test.describe('Chat UI', () => {
 
   test('should switch between chats and remember context', async ({ page }) => {
     test.setTimeout(360000); // 6 min — two agent round-trips + session reload
+    await ensureActiveChat(page);
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
     const chatArea = page.locator('.chatContainer');
 
@@ -982,6 +1001,7 @@ test.describe('Chat UI', () => {
   });
 
   test('should delete a chat', async ({ page }) => {
+    await ensureActiveChat(page);
     // There should be existing chats in the sidebar from previous tests
     // If not, create one by sending a message, waiting, then creating a new chat
 
@@ -1024,6 +1044,7 @@ test.describe('Chat UI', () => {
 
   test('should persist messages to SQLite after send and reload', async ({ page }) => {
     test.setTimeout(240000);
+    await ensureActiveChat(page);
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
     const chatArea = page.locator('.chatContainer');
 
@@ -1118,6 +1139,7 @@ test.describe('Chat UI', () => {
   });
 
   test('should not store chat messages in localStorage', async ({ page }) => {
+    await ensureActiveChat(page);
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
 
     // Send a message
@@ -1150,6 +1172,7 @@ test.describe('Chat UI', () => {
   });
 
   test('should save and restore lastChatId from server on reload', async ({ page }) => {
+    await ensureActiveChat(page);
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
 
@@ -1171,10 +1194,7 @@ test.describe('Chat UI', () => {
 
     // Reload the page
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
-
-    // Wait for chat to load from server
-    await page.waitForTimeout(2000);
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
 
     // The user message should be visible — loaded from SQLite via lastChatId
     await expect(chatArea.locator('.message.user:has-text("lastChatId test")')).toBeVisible({ timeout: 15000 });
@@ -3312,6 +3332,7 @@ test.describe('Chat UI', () => {
   });
 
   test('should switch lastChatId when creating new chat', async ({ page }) => {
+    await ensureActiveChat(page);
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
 
     // Send a message in the first chat
@@ -3347,12 +3368,219 @@ test.describe('Chat UI', () => {
   });
 });
 
+test.describe('Empty Homepage', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should show empty homepage when no chats exist', async ({ page }) => {
+    await expect(page.locator('.emptyHomepage')).toBeVisible();
+    await expect(page.locator('.emptyHomepageTitle')).toContainText('Agents Chat');
+    await expect(page.locator('.emptyHomepageNewChat')).toBeVisible();
+    // Chat container should NOT be visible
+    await expect(page.locator('.chatContainer')).not.toBeVisible();
+  });
+
+  test('should create chat from empty homepage button', async ({ page }) => {
+    await page.click('button.emptyHomepageNewChat');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+    // Empty homepage should be gone
+    await expect(page.locator('.emptyHomepage')).not.toBeVisible();
+  });
+
+  test('should create chat from sidebar New Chat button on empty homepage', async ({ page }) => {
+    await page.click('button.newChatButton');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+  });
+});
+
+test.describe('Delete Active Chat', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should delete the active chat and return to empty homepage', async ({ page }) => {
+    // Create a chat first
+    await page.click('button.emptyHomepageNewChat');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+
+    // Verify one chat exists in sidebar
+    await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+
+    // Open the "..." menu on the chat
+    await page.locator('.chatHistoryRow').first().hover();
+    await page.locator('.chatHistoryRow').first().locator('.chatMoreBtn').click();
+    await page.waitForTimeout(300);
+
+    // Click Delete
+    await page.locator('.chatActionItem.danger').click();
+    await page.waitForTimeout(500);
+
+    // Should return to empty homepage
+    await expect(page.locator('.emptyHomepage')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.chatHistoryRow')).toHaveCount(0);
+  });
+});
+
+test.describe('Chat Rename', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
+    await ensureActiveChat(page);
+  });
+
+  test('should rename a chat via the menu', async ({ page }) => {
+    // Open the "..." menu on the chat
+    await page.locator('.chatHistoryRow').first().hover();
+    await page.locator('.chatHistoryRow').first().locator('.chatMoreBtn').click();
+    await page.waitForTimeout(300);
+
+    // Click Rename
+    await page.locator('.chatActionItem:has-text("Rename")').click();
+    await page.waitForTimeout(300);
+
+    // Should show rename input
+    const renameInput = page.locator('.chatRenameInput');
+    await expect(renameInput).toBeVisible();
+
+    // Clear and type new name
+    await renameInput.fill('My Renamed Chat');
+    await renameInput.press('Enter');
+    await page.waitForTimeout(500);
+
+    // Verify the name changed in the sidebar
+    await expect(page.locator('.chatHistoryRow').first().locator('.chatHistoryItem')).toContainText('My Renamed Chat');
+  });
+
+  test('should preserve renamed chat name after creating new chat', async ({ page }) => {
+    // Rename the first chat
+    await page.locator('.chatHistoryRow').first().hover();
+    await page.locator('.chatHistoryRow').first().locator('.chatMoreBtn').click();
+    await page.waitForTimeout(300);
+    await page.locator('.chatActionItem:has-text("Rename")').click();
+    const renameInput = page.locator('.chatRenameInput');
+    await renameInput.fill('Persisted Name');
+    await renameInput.press('Enter');
+    await page.waitForTimeout(500);
+
+    // Create a new chat
+    await page.click('button.newChatButton');
+    await page.waitForTimeout(500);
+
+    // The renamed chat should still show the custom name
+    await expect(page.locator('.chatHistoryItem:has-text("Persisted Name")')).toBeVisible();
+  });
+});
+
+test.describe('Agent Filter Tabs', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should show agent filter tabs in sidebar', async ({ page }) => {
+    // "All" tab should be visible and active
+    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toBeVisible();
+    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toHaveClass(/active/);
+  });
+
+  test('should switch agent filter and show empty homepage', async ({ page }) => {
+    // Create a chat under "All" tab
+    await page.click('button.emptyHomepageNewChat');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+
+    // Click a different agent tab (skip "All", click the second tab)
+    const tabs = page.locator('.chatAgentFilterBtn');
+    const tabCount = await tabs.count();
+    if (tabCount > 1) {
+      await tabs.nth(1).click();
+      await page.waitForTimeout(500);
+
+      // Should show empty homepage since there are no chats for that agent
+      await expect(page.locator('.emptyHomepage')).toBeVisible();
+
+      // Switch back to All — should show the chat we created
+      await page.locator('.chatAgentFilterBtn:has-text("All")').click();
+      await page.waitForTimeout(500);
+      await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+    }
+  });
+
+  test('should persist agent filter tab after reload', async ({ page }) => {
+    // Click a non-All agent tab
+    const tabs = page.locator('.chatAgentFilterBtn');
+    const tabCount = await tabs.count();
+    if (tabCount > 1) {
+      const tabName = await tabs.nth(1).textContent();
+      await tabs.nth(1).click();
+      await page.waitForTimeout(500);
+      await expect(tabs.nth(1)).toHaveClass(/active/);
+
+      // Reload
+      await page.reload();
+      await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+
+      // The same tab should still be active
+      await expect(page.locator(`.chatAgentFilterBtn:has-text("${tabName}")`)).toHaveClass(/active/);
+    }
+  });
+});
+
+test.describe('ESC Key Modal Close', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should close agent settings modal with ESC', async ({ page }) => {
+    // Open agents panel
+    await page.click('button[title="Agents"]');
+    await expect(page.locator('.agentsSidebar')).toBeVisible();
+
+    // Click on agent settings (gear icon or agent name)
+    const agentItem = page.locator('.agentItem').first();
+    const settingsBtn = agentItem.locator('.agentSettingsBtn, button[title*="Settings"], button[title*="settings"]').first();
+    const hasSettings = await settingsBtn.isVisible({ timeout: 2000 }).catch(() => false);
+
+    if (hasSettings) {
+      await settingsBtn.click();
+      await page.waitForTimeout(500);
+
+      // Check if a modal opened
+      const modal = page.locator('.modalOverlay');
+      if (await modal.isVisible({ timeout: 2000 }).catch(() => false)) {
+        // Press ESC
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(500);
+
+        // Modal should be closed
+        await expect(modal).not.toBeVisible();
+        console.log('PASS: ESC closed the modal');
+      }
+    } else {
+      console.log('SKIP: No agent settings button found');
+    }
+  });
+});
+
 test.describe('Theme', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
   });
 
   test('should open theme menu', async ({ page }) => {

@@ -32,6 +32,7 @@ export type StoredChat = {
   id: string;
   name: string;
   ts: number;
+  agentId?: string;
   messages: StoredMessage[];
   /** Map of agentId → ACP sessionId so sessions can be resumed */
   agentSessions: Record<string, string>;
@@ -164,16 +165,21 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_file_comment_replies_comment ON file_comment_replies(comment_id);
   `);
 
+  // Migration: add agent_id column to chats
+  try {
+    _db.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''`);
+  } catch { /* column already exists */ }
+
   return _db;
 }
 
 /* ─────────── Chat CRUD ─────────── */
 
 /** List all chats for a user (metadata only, no messages). */
-export async function listChats(userId: string): Promise<{ id: string; name: string; ts: number }[]> {
+export async function listChats(userId: string): Promise<{ id: string; name: string; ts: number; agentId?: string }[]> {
   const db = getDb();
-  const rows = db.prepare('SELECT chat_id, name, ts FROM chats WHERE user_id = ? ORDER BY ts DESC, chat_id DESC').all(userId) as any[];
-  return rows.map(r => ({ id: r.chat_id, name: r.name, ts: r.ts }));
+  const rows = db.prepare('SELECT chat_id, name, ts, agent_id FROM chats WHERE user_id = ? ORDER BY ts DESC, chat_id DESC').all(userId) as any[];
+  return rows.map(r => ({ id: r.chat_id, name: r.name, ts: r.ts, agentId: r.agent_id || undefined }));
 }
 
 /** Get a single chat with full messages. */
@@ -193,6 +199,7 @@ function mapStoredChatRow(row: any): StoredChat {
     id: row.chat_id,
     name: row.name,
     ts: row.ts,
+    agentId: row.agent_id || undefined,
     messages: JSON.parse(row.messages || '[]'),
     agentSessions: JSON.parse(row.agent_sessions || '{}'),
   };
@@ -207,12 +214,13 @@ function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat)
   // ACP session updates are written by updateChatAgentSession; chat saves may
   // carry stale client session maps, so conflict updates preserve DB sessions.
   db.prepare(`
-    INSERT INTO chats (user_id, chat_id, name, ts, messages, agent_sessions)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO chats (user_id, chat_id, name, ts, messages, agent_sessions, agent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id, chat_id) DO UPDATE SET
       name = excluded.name,
       ts = excluded.ts,
-      messages = excluded.messages
+      messages = excluded.messages,
+      agent_id = CASE WHEN excluded.agent_id != '' THEN excluded.agent_id ELSE chats.agent_id END
   `).run(
     userId,
     chat.id,
@@ -220,6 +228,7 @@ function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat)
     chat.ts,
     JSON.stringify(chat.messages),
     JSON.stringify(chat.agentSessions || {}),
+    chat.agentId || '',
   );
 }
 
@@ -275,6 +284,12 @@ export async function updateChatAgentSession(userId: string, chatId: string, age
   if (list[list.length - 1] !== sessionId) list.push(sessionId);
   sessions[agentId] = list;
   db.prepare('UPDATE chats SET agent_sessions = ? WHERE user_id = ? AND chat_id = ?').run(JSON.stringify(sessions), userId, chatId);
+}
+
+/** Rename a chat. */
+export async function renameChat(userId: string, chatId: string, newName: string): Promise<void> {
+  const db = getDb();
+  db.prepare('UPDATE chats SET name = ? WHERE user_id = ? AND chat_id = ?').run(newName, userId, chatId);
 }
 
 /** Delete a chat. */

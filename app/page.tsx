@@ -406,6 +406,7 @@ type ChatHistoryEntry = {
   id: string;
   name: string;
   ts: number;
+  agentId?: string;
   agentSessions?: Record<string, string>;
 };
 
@@ -481,6 +482,7 @@ const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
 const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
+const STORAGE_AGENT_FILTER = 'acp_agent_filter_v1';
 const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
 
 const THEMES = {
@@ -685,10 +687,12 @@ function getMentionedAgentIds(text: string, agents: Agent[]) {
   return selected;
 }
 
-function parseAgents(text: string, agents: Agent[]) {
+function parseAgents(text: string, agents: Agent[], preferredAgentId?: string | null) {
   const agentIds = getMentionedAgentIds(text, agents);
   if (agentIds.length === 0) {
-    const fallback = agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
+    // Use preferred agent (from chat's agentId) if available, otherwise fall back to first non-scheduler
+    const preferred = preferredAgentId ? agents.find(a => a.id === preferredAgentId) : null;
+    const fallback = preferred || agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
     return { agentIds: [fallback.id], message: text };
   }
   const message = text.replace(/(?:^|\s)@(\S+)/g, '').trim();
@@ -740,9 +744,9 @@ export default function Page() {
   const [runVersion, setRunVersion] = useState(0);
   const [chatName, setChatName] = useState('New Chat');
   const [chatCounter, setChatCounter] = useState(1);
-  const [currentChatId, setCurrentChatId] = useState<string>('chat-1');
+  const [currentChatId, setCurrentChatId] = useState<string>('');
   const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
-  const [activeSidebarChatId, setActiveSidebarChatId] = useState<string>('chat-1');
+  const [activeSidebarChatId, setActiveSidebarChatId] = useState<string>('');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -750,6 +754,23 @@ export default function Page() {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
+  function switchAgentFilter(agentId: string | null) {
+    if (agentId === chatAgentFilter) return;
+    // Save current chat before switching
+    void saveCurrentChatToHistory();
+    setChatAgentFilter(agentId);
+    try { window.localStorage.setItem(STORAGE_AGENT_FILTER, agentId || ''); } catch { /* ignore */ }
+    // Deselect active chat — show empty homepage
+    currentChatIdRef.current = '';
+    setCurrentChatId('');
+    setActiveSidebarChatId('');
+    setChatName('New Chat');
+    clearChatMessages();
+    currentAgentSessionsRef.current = {};
+  }
   const [shareDialog, setShareDialog] = useState<ShareDialog | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [agentUserRequestSubmissions, setAgentUserRequestSubmissions] = useState<Record<string, AgentUserRequestSubmission>>({});
@@ -931,6 +952,21 @@ export default function Page() {
 
   useEffect(() => { setMentionSelectedIndex(0); }, [input, agents]);
 
+  // Close any open modal on ESC key
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (showAgentSettings) { setShowAgentSettings(false); return; }
+      if (showAddAgent) { setShowAddAgent(false); return; }
+      if (showAddRelayAgent) { setShowAddRelayAgent(false); return; }
+      if (showAddRemoteAgent) { setShowAddRemoteAgent(false); return; }
+      if (showSetupScript) { setShowSetupScript(false); return; }
+      if (shareDialog) { setShareDialog(null); return; }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+
   useEffect(() => {
     const activeRequestIds = new Set<string>();
     for (const chatMessages of Object.values(chatMessagesRef.current)) {
@@ -965,6 +1001,12 @@ export default function Page() {
       setMdDiffOnly(savedFileWorkspace.diffOnly);
       setMdEditorMode(savedFileWorkspace.editorMode);
     }
+
+    // Restore agent filter tab
+    try {
+      const savedFilter = window.localStorage.getItem(STORAGE_AGENT_FILTER);
+      if (savedFilter) setChatAgentFilter(savedFilter);
+    } catch { /* ignore */ }
 
     // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
@@ -1057,7 +1099,7 @@ export default function Page() {
   useEffect(() => {
     if (!mounted || authStatus === 'loading') return;
     const activeChatId = currentChatIdRef.current;
-    if (!activeChatId || activeChatId === 'chat-1') return;
+    if (!activeChatId) return;
     if (loadedChatIdForResume !== activeChatId) return;
     if (sessionResumedChatIdRef.current === activeChatId) return;
     sessionResumedChatIdRef.current = activeChatId;
@@ -3349,7 +3391,13 @@ export default function Page() {
     const text = input.trim();
     if (!text || agents.length === 0) return;
 
-    const { agentIds, message } = parseAgents(text, agents);
+    // Auto-create a chat if none is active (empty homepage state)
+    if (!currentChatIdRef.current) {
+      await createNewChat();
+    }
+
+    const currentChatAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId;
+    const { agentIds, message } = parseAgents(text, agents, currentChatAgentId);
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
 
@@ -3620,21 +3668,26 @@ export default function Page() {
   async function saveChatToHistory(chatId: string, preserveOrder = false) {
     void preserveOrder;
     const currentId = chatId;
+    if (!currentId) return Date.now(); // No active chat — nothing to save
     const currentMessages = chatMessagesRef.current[currentId] || (currentId === currentChatIdRef.current ? messagesRef.current : []);
     const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
     const currentName = currentId === currentChatIdRef.current ? chatNameRef.current : (existingHistoryEntry?.name || currentId);
     const userMsgs = currentMessages.filter(m => m.type === 'user');
-    const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
+    // Prefer the existing history name (which includes renames) over auto-generated name
+    // But treat the default "New Chat" name as if no name exists, so it auto-generates from the first message
+    const hasCustomName = existingHistoryEntry?.name && existingHistoryEntry.name !== 'New Chat';
+    const name = hasCustomName ? existingHistoryEntry!.name : (userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName);
     const persistable = getPersistableMessages(currentMessages);
 
     const agentSessions = currentId === currentChatIdRef.current
       ? currentAgentSessionsRef.current
       : (existingHistoryEntry?.agentSessions || {});
+    const agentId = existingHistoryEntry?.agentId || '';
 
     // Keep the sidebar timestamp stable for existing chats. It represents the
     // chat's list/order timestamp, not every background turn update.
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
-    const chatData = { id: currentId, name, ts: savedAt, messages: persistable, agentSessions };
+    const chatData = { id: currentId, name, ts: savedAt, messages: persistable, agentSessions, agentId };
 
     // Save to server
     try {
@@ -3654,7 +3707,7 @@ export default function Page() {
     } catch { /* ignore */ }
 
     setChatHistory(prev => {
-      const entry = { id: currentId, name, ts: savedAt, agentSessions };
+      const entry = { id: currentId, name, ts: savedAt, agentSessions, agentId };
       if (prev.some(c => c.id === currentId)) {
         return prev.map(c => c.id === currentId ? entry : c);
       }
@@ -3821,7 +3874,7 @@ export default function Page() {
     }).catch(() => { /* ignore */ });
 
     // Register the new chat in history immediately so it persists
-    const newEntry = { id: newId, name: newName, ts: Date.now() };
+    const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
     setChatHistory(prev => {
       if (prev.some(c => c.id === newId)) return prev;
       return normalizeChatHistory([newEntry, ...prev]);
@@ -3876,12 +3929,36 @@ export default function Page() {
     }
   }
 
+  async function renameChatById(chatId: string, newName: string) {
+    if (!newName.trim()) return;
+    const trimmed = newName.trim();
+    try {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rename', chatId, name: trimmed }),
+      });
+      setChatHistory(prev => prev.map(c => c.id === chatId ? { ...c, name: trimmed } : c));
+      if (chatId === currentChatId) setChatName(trimmed);
+    } catch { /* ignore */ }
+    setRenamingChatId(null);
+    setRenameValue('');
+  }
+
   async function deleteChatById(chatId: string) {
-    if (chatId === currentChatId) return; // Can't delete active chat
     try {
       await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
       setChatHistory(prev => prev.filter(c => c.id !== chatId));
       setOpenChatMenuId(null);
+      // If deleting the active chat, return to empty homepage
+      if (chatId === currentChatId) {
+        currentChatIdRef.current = '';
+        setCurrentChatId('');
+        setActiveSidebarChatId('');
+        setChatName('New Chat');
+        clearChatMessages();
+        currentAgentSessionsRef.current = {};
+      }
     } catch { /* ignore */ }
   }
 
@@ -3976,34 +4053,58 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
-              <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat</button>
+              <div className="chatAgentFilterRow">
+                <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => switchAgentFilter(null)}>All</button>
+                {agents.map(a => (
+                  <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => switchAgentFilter(a.id)}>{a.name || a.id}</button>
+                ))}
+              </div>
+              <div className="newChatRow">
+                <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
+              </div>
               {(() => {
-                const allChats = chatHistory.some(c => c.id === currentChatId)
-                  ? chatHistory
-                  : [{ id: currentChatId, name: chatName, ts: chatHistory[0]?.ts ? chatHistory[0].ts + 1 : Date.now() }, ...chatHistory];
+                const allChats = (currentChatId && !chatHistory.some(c => c.id === currentChatId))
+                  ? [{ id: currentChatId, name: chatName, ts: chatHistory[0]?.ts ? chatHistory[0].ts + 1 : Date.now() }, ...chatHistory]
+                  : chatHistory;
                 const uniqueChats = normalizeChatHistory(allChats);
-                return uniqueChats.map((chat) => {
+                const filteredChats = chatAgentFilter
+                  ? uniqueChats.filter(c => c.agentId === chatAgentFilter || (!c.agentId && c.id === currentChatId))
+                  : uniqueChats;
+                return filteredChats.map((chat) => {
                   const isCurrent = chat.id === currentChatId;
                   const isActive = chat.id === activeSidebarChatId;
                   const sidebarStatus = getChatSidebarStatus(chat.id);
+                  const isRenaming = renamingChatId === chat.id;
                   return (
                     <div key={chat.id} className={`chatHistoryRow ${isActive ? 'active' : ''}`}>
-                      <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isCurrent ? undefined : loadChat(chat.id)}>
-                        <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
-                        <span className="chatHistoryText">
-                          <span className="chatHistoryName">{isCurrent ? chatName : chat.name}</span>
-                          <span className="chatHistoryMetaRow">
-                            <span className="chatHistoryMeta" suppressHydrationWarning>
-                              {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
-                            </span>
-                            {sidebarStatus ? (
-                              <span className={`chatStatusBadge ${sidebarStatus.kind}`} title={getStatusDisplayText(sidebarStatus.label, 'Running')}>
-                                {getSidebarStatusDisplayLabel(sidebarStatus.label)}
+                      {isRenaming ? (
+                        <div className="chatRenameWrap">
+                          <input
+                            className="chatRenameInput"
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') void renameChatById(chat.id, renameValue);
+                              if (e.key === 'Escape') { setRenamingChatId(null); setRenameValue(''); }
+                            }}
+                            onBlur={() => void renameChatById(chat.id, renameValue)}
+                          />
+                        </div>
+                      ) : (
+                        <button className={`chatHistoryItem ${isActive ? 'active' : ''}`} title={chat.name} onClick={() => isCurrent ? undefined : loadChat(chat.id)}>
+                          <span className="chatHistoryIcon">{isActive ? '💬' : '📝'}</span>
+                          <span className="chatHistoryText">
+                            <span className="chatHistoryName">{isCurrent ? chatName : chat.name}</span>
+                            <span className="chatHistoryMetaRow">
+                              <span className="chatHistoryMeta" suppressHydrationWarning>
+                                {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
                               </span>
-                            ) : null}
+                              {sidebarStatus ? <span className={`chatStatusBadge ${sidebarStatus.kind}`} title={getStatusDisplayText(sidebarStatus.label, 'Running')}>{getSidebarStatusDisplayLabel(sidebarStatus.label)}</span> : null}
+                            </span>
                           </span>
-                        </span>
-                      </button>
+                        </button>
+                      )}
                       <div className="chatActionsWrap">
                         <button
                           type="button"
@@ -4027,12 +4128,24 @@ export default function Page() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenChatMenuId(null);
+                                setRenameValue(isCurrent ? chatName : chat.name);
+                                setRenamingChatId(chat.id);
+                              }}
+                            >
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              className="chatActionItem"
+                              role="menuitem"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChatMenuId(null);
                                 void shareCurrentChat(chat.id);
                               }}
                             >
                               Share
                             </button>
-                            {!isCurrent ? (
                               <button
                                 type="button"
                                 className="chatActionItem danger"
@@ -4044,7 +4157,6 @@ export default function Page() {
                               >
                                 Delete
                               </button>
-                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -4585,6 +4697,18 @@ export default function Page() {
                 )
               )}
             </div>
+          ) : !currentChatId ? (
+          /* ── Empty homepage: no chat selected ── */
+          <div className="emptyHomepage">
+            <div className="emptyHomepageContent">
+              <div className="emptyHomepageLogo">💬</div>
+              <h2 className="emptyHomepageTitle">Agents Chat</h2>
+              <p className="emptyHomepageSubtitle">Start a new conversation with your agents</p>
+              <button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>
+                + New Chat{chatAgentFilter ? ` with ${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter}` : ''}
+              </button>
+            </div>
+          </div>
           ) : (
           <>
           <section className="chatContainer" ref={chatContainerRef}>
@@ -4969,8 +5093,8 @@ export default function Page() {
 
       {/* ── Setup script modal ── */}
       {showSetupScript && (
-        <div className="modalOverlay" onClick={() => setShowSetupScript(false)}>
-          <div className="modal setupScriptModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal setupScriptModal">
             <h2>🖥️ Node Setup Kit</h2>
             <p className="setupScriptDesc">
               Download the setup kit and run it on your devbox to connect it as a node.
@@ -5009,8 +5133,8 @@ export default function Page() {
 
       {/* ── Add relay agent modal ── */}
       {showAddRelayAgent && (
-        <div className="modalOverlay" onClick={() => setShowAddRelayAgent(false)}>
-          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal">
             <h2>➕ Add Agent on <code>{relayAgentNode}</code></h2>
             <label>
               <span>Agent ID</span>
@@ -5039,8 +5163,8 @@ export default function Page() {
 
       {/* ── Add remote agent modal (from agents panel) ── */}
       {showAddRemoteAgent && (
-        <div className="modalOverlay" onClick={() => setShowAddRemoteAgent(false)}>
-          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal">
             <h2>🌐 Add Agent from Remote Node</h2>
             <label>
               <span>Agent ID</span>
@@ -5079,7 +5203,7 @@ export default function Page() {
 
       {/* ── Share link dialog ── */}
       {shareDialog && (
-        <div className="modalOverlay" onClick={() => setShareDialog(null)}>
+        <div className="modalOverlay">
           <div className={`modal shareLinkModal ${shareDialog.variant}`} role="dialog" aria-modal="true" aria-labelledby="shareDialogTitle" onClick={(e) => e.stopPropagation()}>
             <h2 id="shareDialogTitle">{shareDialog.title}</h2>
             {shareDialog.url ? (
@@ -5117,8 +5241,8 @@ export default function Page() {
 
       {/* ── Agent settings modal (admin or owner) ── */}
       {showAgentSettings && settingsAgentConfig && (
-        <div className="modalOverlay" onClick={() => setShowAgentSettings(false)}>
-          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal">
             <h2>⚙️ {settingsAgentConfig.name}</h2>
             <label>
               <span>Agent ID</span>
@@ -5208,8 +5332,8 @@ export default function Page() {
       )}
 
       {showAgentSettings && !settingsAgentConfig && agentSettingsLoading && (
-        <div className="modalOverlay" onClick={() => setShowAgentSettings(false)}>
-          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal">
             <div style={{ textAlign: 'center', padding: '20px', color: '#8a90a2' }}>Loading...</div>
           </div>
         </div>
@@ -5217,8 +5341,8 @@ export default function Page() {
 
       {/* ── Add agent modal ── */}
       {showAddAgent && (
-        <div className="modalOverlay" onClick={() => setShowAddAgent(false)}>
-          <div className="modal agentSettingsModal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal">
             <h2>➕ Add New Agent</h2>
             <label>
               <span>Agent ID</span>
@@ -5600,8 +5724,39 @@ export default function Page() {
           display: grid;
           gap: 8px;
         }
+        .chatAgentFilterRow {
+          display: flex;
+          gap: 4px;
+          padding: 0 0 6px;
+          flex-wrap: wrap;
+        }
+        .chatAgentFilterBtn {
+          padding: 4px 10px;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: transparent;
+          color: var(--text-soft);
+          font-size: 11px;
+          cursor: pointer;
+          transition: all 0.15s;
+          white-space: nowrap;
+        }
+        .chatAgentFilterBtn:hover {
+          color: var(--text);
+          border-color: var(--border-strong);
+        }
+        .chatAgentFilterBtn.active {
+          background: var(--accent-soft);
+          color: var(--accent);
+          border-color: var(--accent);
+          font-weight: 600;
+        }
+        .newChatRow {
+          display: flex;
+          gap: 6px;
+        }
         .newChatButton {
-          width: 100%;
+          flex: 1;
           padding: 10px 12px;
           border-radius: 12px;
           border: 1px dashed var(--border-strong);
@@ -5619,6 +5774,20 @@ export default function Page() {
         .newChatButton:disabled {
           opacity: 0.4;
           cursor: not-allowed;
+        }
+        .chatRenameWrap {
+          flex: 1;
+          padding: 6px 12px;
+        }
+        .chatRenameInput {
+          width: 100%;
+          padding: 6px 8px;
+          border: 1px solid var(--accent);
+          border-radius: 8px;
+          background: var(--bg);
+          color: var(--text);
+          font-size: 12px;
+          outline: none;
         }
         .chatHistoryItem {
           display: flex;
@@ -6010,7 +6179,50 @@ export default function Page() {
           padding: 24px;
           display: flex;
           flex-direction: column;
-          gap: 16px;
+          gap: 10px;
+        }
+        .emptyHomepage {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 0;
+        }
+        .emptyHomepageContent {
+          text-align: center;
+          max-width: 400px;
+          padding: 40px 24px;
+        }
+        .emptyHomepageLogo {
+          font-size: 56px;
+          margin-bottom: 16px;
+          opacity: 0.7;
+        }
+        .emptyHomepageTitle {
+          font-size: 24px;
+          font-weight: 700;
+          color: var(--text);
+          margin: 0 0 8px;
+        }
+        .emptyHomepageSubtitle {
+          font-size: 14px;
+          color: var(--text-soft);
+          margin: 0 0 28px;
+        }
+        .emptyHomepageNewChat {
+          padding: 12px 28px;
+          border-radius: 12px;
+          border: 1px dashed var(--border-strong);
+          background: transparent;
+          color: var(--accent);
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .emptyHomepageNewChat:hover {
+          background: var(--accent-soft);
+          border-color: var(--accent);
         }
         .chatInputDock {
           position: relative;
@@ -6024,7 +6236,8 @@ export default function Page() {
           max-width: 80%;
           padding: 14px 16px;
           border-radius: 18px;
-          line-height: 1.58;
+          line-height: 1.5;
+          font-size: 13.5px;
           border: 1px solid var(--border);
           box-shadow: 0 14px 30px rgba(0,0,0,0.08);
           position: relative;
@@ -6094,43 +6307,70 @@ export default function Page() {
           color: var(--accent);
         }
         .messageContent {
-          white-space: pre-wrap;
           word-break: break-word;
         }
         .markdownBody :global(*) { max-width: 100%; }
-        .markdownBody :global(p) { margin: 0 0 0.75em; }
+        .markdownBody :global(p) { margin: 0 0 0.4em; }
         .markdownBody :global(p:last-child) { margin-bottom: 0; }
         .markdownBody :global(ul),
-        .markdownBody :global(ol) { margin: 0.5em 0 0.75em 1.25em; padding: 0; }
-        .markdownBody :global(li) { margin: 0.25em 0; }
+        .markdownBody :global(ol) {
+          margin: 0.25em 0 0.4em;
+          padding-left: 1.4em;
+        }
+        .markdownBody :global(ul) { list-style-type: disc; }
+        .markdownBody :global(ul ul) { list-style-type: circle; margin: 0.1em 0; }
+        .markdownBody :global(ul ul ul) { list-style-type: square; }
+        .markdownBody :global(ol) { list-style-type: decimal; }
+        .markdownBody :global(ol ol) { list-style-type: lower-alpha; margin: 0.1em 0; }
+        .markdownBody :global(li) {
+          margin: 0.08em 0;
+          padding-left: 0.2em;
+          line-height: 1.45;
+        }
+        .markdownBody :global(li > p) { margin: 0; }
+        .markdownBody :global(li > p + p) { margin-top: 0.25em; }
+        .markdownBody :global(li > ul),
+        .markdownBody :global(li > ol) { margin-top: 0.1em; margin-bottom: 0.1em; }
         .markdownBody :global(code) {
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: 0.92em;
+          font-size: 0.88em;
           background: var(--code-bg);
           border: 1px solid var(--border);
-          border-radius: 6px;
-          padding: 0.12em 0.35em;
+          border-radius: 5px;
+          padding: 0.1em 0.32em;
         }
         .markdownBody :global(pre) {
           background: var(--code-bg);
           border: 1px solid var(--border);
-          border-radius: 14px;
-          padding: 12px 14px;
+          border-radius: 10px;
+          padding: 10px 14px;
           overflow-x: auto;
-          margin: 0.75em 0;
+          margin: 0.4em 0;
+          font-size: 0.88em;
+          line-height: 1.45;
         }
-        .markdownBody :global(pre code) { background: transparent; border: 0; padding: 0; }
-        .markdownBody :global(blockquote) { margin: 0.75em 0; padding: 0.1em 0 0.1em 0.9em; border-left: 3px solid var(--accent); color: var(--text-soft); }
-        .markdownBody :global(h1),
-        .markdownBody :global(h2),
-        .markdownBody :global(h3),
-        .markdownBody :global(h4) { margin: 0.8em 0 0.45em; line-height: 1.3; }
-        .markdownBody :global(table) { width: 100%; border-collapse: collapse; margin: 0.75em 0; font-size: 0.95em; }
+        .markdownBody :global(pre code) { background: transparent; border: 0; padding: 0; font-size: inherit; }
+        .markdownBody :global(blockquote) {
+          margin: 0.4em 0;
+          padding: 0.2em 0 0.2em 0.85em;
+          border-left: 3px solid var(--accent);
+          color: var(--text-soft);
+          font-style: italic;
+        }
+        .markdownBody :global(blockquote p) { margin: 0.15em 0; }
+        .markdownBody :global(h1) { font-size: 1.3em; margin: 0.7em 0 0.3em; line-height: 1.25; font-weight: 700; }
+        .markdownBody :global(h2) { font-size: 1.15em; margin: 0.6em 0 0.25em; line-height: 1.25; font-weight: 700; }
+        .markdownBody :global(h3) { font-size: 1.05em; margin: 0.5em 0 0.2em; line-height: 1.3; font-weight: 600; }
+        .markdownBody :global(h4) { font-size: 1em; margin: 0.45em 0 0.15em; line-height: 1.3; font-weight: 600; }
+        .markdownBody :global(table) { width: 100%; border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; }
         .markdownBody :global(th),
-        .markdownBody :global(td) { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
-        .markdownBody :global(th) { background: var(--panel-soft); }
-        .markdownBody :global(a) { color: var(--accent); text-decoration: underline; }
-        .markdownBody :global(hr) { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+        .markdownBody :global(td) { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+        .markdownBody :global(th) { background: var(--panel-soft); font-weight: 600; }
+        .markdownBody :global(a) { color: var(--accent); text-decoration: none; }
+        .markdownBody :global(a:hover) { text-decoration: underline; }
+        .markdownBody :global(hr) { border: 0; border-top: 1px solid var(--border); margin: 0.6em 0; }
+        .markdownBody :global(strong) { font-weight: 600; }
+        .markdownBody :global(img) { border-radius: 8px; }
         .messageContent.collapsed {
           max-height: 220px;
           overflow: hidden;

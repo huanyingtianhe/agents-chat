@@ -1,57 +1,15 @@
 {
   "agents": [
     {
-      "id": "scheduler",
-      "name": "Scheduler",
-      "command": "agency copilot",
-      "args": [
-        "--acp"
-      ],
-      "cwd": "Q:\\Repos\\EventStream-TSG",
-      "yolo": false,
-      "noTools": true
-    },
-    {
       "id": "copilot",
       "name": "GitHub Copilot CLI",
-      "command": "agency copilot",
+      "command": "agency",
       "args": [
+        "copilot",
         "--acp"
       ],
-      "cwd": "Q:\\Repos\\EventStream-TSG",
+      "cwd": "C:\\Users\\xujiang1",
       "yolo": true
-    },
-    {
-      "id": "es-workload-ag",
-      "name": "ES-DEV",
-      "command": "agency copilot",
-      "args": [
-        "--acp"
-      ],
-      "cwd": "Q:\\Repos\\workload-eventstream",
-      "yolo": true
-    },
-    {
-      "id": "api-tester",
-      "name": "API Tester",
-      "command": "agency copilot",
-      "args": [
-        "--acp"
-      ],
-      "cwd": "Q:\\Repos\\workload-eventstream-web-api-testing",
-      "yolo": true
-    },
-    {
-      "id": "mwc-copilot",
-      "name": "MWC copilot",
-      "command": "copilot.exe",
-      "args": [
-        "--acp"
-      ],
-      "cwd": "Q:\\Repos\\workload-eventstream",
-      "yolo": true,
-      "relay": true,
-      "relayConnectionName": "cpc-wulei-kl9r5"
     }
   ]
 }

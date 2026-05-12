@@ -992,7 +992,7 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
   const sessionParams = await buildSessionParams(proc, isAdmin);
-  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay})...`);
+  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
   const result = await proc.rpc.send('session/new', sessionParams);
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);

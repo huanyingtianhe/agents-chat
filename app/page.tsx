@@ -5740,8 +5740,13 @@ export default function Page() {
           display: flex;
           gap: 4px;
           padding: 0 0 6px;
-          flex-wrap: wrap;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+          flex-shrink: 0;
         }
+        .chatAgentFilterRow::-webkit-scrollbar { display: none; }
         .chatAgentFilterBtn {
           padding: 4px 10px;
           border-radius: 8px;
@@ -5752,6 +5757,7 @@ export default function Page() {
           cursor: pointer;
           transition: all 0.15s;
           white-space: nowrap;
+          flex-shrink: 0;
         }
         .chatAgentFilterBtn:hover {
           color: var(--text);

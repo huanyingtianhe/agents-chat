@@ -1848,9 +1848,10 @@ export async function POST(req: NextRequest) {
       const agents = allAgents.map(a => {
         const userCanModify = canModify(token, a.owner);
         const userCanTalk = canTalkTo(token, a.owner, a.id, a.public, configStore.hasAgentAccess);
-        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, cwd: a.cwd };
+        const relayNode = a.relay && a.relayConnectionName ? configStore.getNodeByName(a.relayConnectionName) : null;
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label, cwd: a.cwd };
         if (userCanModify) {
-          return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName };
+          return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label };
         }
         return base;
       });

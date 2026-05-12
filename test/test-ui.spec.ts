@@ -163,6 +163,69 @@ test.describe('Chat UI', () => {
     await expect(page.locator('text=GitHub Copilot CLI')).toBeVisible({ timeout: 10000 });
   });
 
+  test('should show remote node display name in agents list', async ({ page }) => {
+    const suffix = Date.now();
+    const nodeName = `ui-node-id-${suffix}`;
+    const nodeLabel = 'UI Friendly Node';
+    const agentId = `ui-node-agent-${suffix}`;
+    const agentName = 'UI Node Display Agent';
+
+    async function cleanup() {
+      await page.evaluate(async ({ agentId, nodeName }) => {
+        await fetch('/api/acp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete-agent', agentId }),
+        }).catch(() => null);
+        await fetch('/api/nodes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'remove-node', name: nodeName }),
+        }).catch(() => null);
+      }, { agentId, nodeName });
+    }
+
+    await cleanup();
+    try {
+      const seedResult = await page.evaluate(async ({ agentId, agentName, nodeName, nodeLabel }) => {
+        const nodeResponse = await fetch('/api/nodes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'add-node', name: nodeName, label: nodeLabel }),
+        });
+        const agentResponse = await fetch('/api/acp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'create-agent',
+            agent: {
+              id: agentId,
+              name: agentName,
+              relay: true,
+              relayConnectionName: nodeName,
+              cwd: '/',
+              yolo: true,
+            },
+          }),
+        });
+        return { nodeOk: nodeResponse.ok, agentOk: agentResponse.ok };
+      }, { agentId, agentName, nodeName, nodeLabel });
+      expect(seedResult).toEqual({ nodeOk: true, agentOk: true });
+
+      await page.reload();
+      await page.waitForSelector('.chatContainer', { timeout: 30000 });
+      await page.click('button[title="Agents"]');
+      await expect(page.locator('.agentsSidebar')).toBeVisible();
+      const agentRow = page.locator('.agentListItem', { hasText: agentName });
+      await expect(agentRow).toBeVisible({ timeout: 10000 });
+      const nodeInfo = agentRow.locator('.agentListId');
+      await expect(nodeInfo).toHaveText(`🌐 ${nodeLabel}`);
+      await expect(nodeInfo).toHaveAttribute('title', nodeName);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('should show only the first word of chat status in the sidebar', async ({ page }) => {
     const chatId = `ui-sidebar-status-${Date.now()}`;
     const chatName = 'Sidebar long status';

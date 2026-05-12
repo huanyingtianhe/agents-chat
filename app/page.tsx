@@ -82,6 +82,7 @@ type Agent = {
   yolo?: boolean;
   relay?: boolean;
   relayConnectionName?: string;
+  relayConnectionLabel?: string;
   owner?: string;
   canModify?: boolean;
   canTalk?: boolean;
@@ -925,6 +926,17 @@ export default function Page() {
 
   function getSidebarStatusDisplayLabel(label: string): string {
     return getStatusDisplayText(label, 'Running').match(/[A-Za-z0-9]+/)?.[0] || 'Running';
+  }
+
+  function getAgentLocationLabel(agent: Agent): string {
+    if (!agent.relay) return `@${agent.id}`;
+    const nodeId = agent.relayConnectionName || agent.id;
+    return `🌐 ${agent.relayConnectionLabel?.trim() || nodeId}`;
+  }
+
+  function getAgentLocationTitle(agent: Agent): string | undefined {
+    if (!agent.relay) return undefined;
+    return agent.relayConnectionName || agent.id;
   }
 
   const getChatSidebarStatus= useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
@@ -5006,7 +5018,7 @@ export default function Page() {
                   <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
                   <span className="agentListInfo">
                     <span className="agentListName">{agent.name || agent.id}{agent.canTalk === false ? ' 🔒' : ''}</span>
-                    <span className="agentListId">{agent.relay ? `🌐 ${agent.relayConnectionName}` : `@${agent.id}`}</span>
+                    <span className="agentListId" title={getAgentLocationTitle(agent)}>{getAgentLocationLabel(agent)}</span>
                   </span>
                   <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
                 </button>

@@ -38,3 +38,39 @@ a {
 ::selection {
   background: rgba(255, 255, 255, 0.18);
 }
+
+/* Agent filter overflow menu (rendered via portal to document.body) */
+.chatAgentFilterOverflowMenu {
+  background: var(--panel, #151b2e);
+  border: 1px solid var(--border-strong, #2a3550);
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 170px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.chatAgentFilterOverflowItem {
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft, #8899bb);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+.chatAgentFilterOverflowItem:hover {
+  background: var(--accent-soft, rgba(0,200,255,0.1));
+  color: var(--text, #e7edf8);
+}
+.chatAgentFilterOverflowItem.active {
+  background: var(--accent-soft, rgba(0,200,255,0.1));
+  color: var(--accent, #00c8ff);
+  font-weight: 600;
+}

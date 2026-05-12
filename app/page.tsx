@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -4153,15 +4154,14 @@ export default function Page() {
                         <button ref={overflowBtnRef} className={`chatAgentFilterBtn chatAgentFilterMoreBtn ${agentFilterOverflowOpen ? 'active' : ''}`} onClick={() => setAgentFilterOverflowOpen(v => !v)}>···</button>
                         {agentFilterOverflowOpen && (() => {
                           const rect = overflowBtnRef.current?.getBoundingClientRect();
-                          const menuStyle: React.CSSProperties = rect
-                            ? { position: 'fixed', top: rect.bottom + 4, left: rect.left, zIndex: 1000 }
-                            : { position: 'fixed', top: 0, left: 0, zIndex: 1000 };
-                          return (
-                            <div className="chatAgentFilterOverflowMenu" style={menuStyle}>
+                          if (!rect) return null;
+                          return createPortal(
+                            <div className="chatAgentFilterOverflowMenu" style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, zIndex: 9999 }}>
                               {displayOverflow.map(a => (
                                 <button key={a.id} className={`chatAgentFilterOverflowItem ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
                               ))}
-                            </div>
+                            </div>,
+                            document.body
                           );
                         })()}
                       </div>
@@ -5895,40 +5895,6 @@ export default function Page() {
         .chatAgentFilterMoreBtn {
           font-weight: 900;
           letter-spacing: 1px;
-        }
-        .chatAgentFilterOverflowMenu {
-          background: var(--panel);
-          border: 1px solid var(--border-strong);
-          border-radius: 10px;
-          padding: 4px;
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          min-width: 170px;
-          max-height: 240px;
-          overflow-y: auto;
-          box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-        }
-        .chatAgentFilterOverflowItem {
-          padding: 6px 12px;
-          border-radius: 7px;
-          border: none;
-          background: transparent;
-          color: var(--text-soft);
-          font-size: 11px;
-          cursor: pointer;
-          text-align: left;
-          white-space: nowrap;
-          transition: all 0.12s;
-        }
-        .chatAgentFilterOverflowItem:hover {
-          background: var(--accent-soft);
-          color: var(--text);
-        }
-        .chatAgentFilterOverflowItem.active {
-          background: var(--accent-soft);
-          color: var(--accent);
-          font-weight: 600;
         }
         .newChatRow {
           display: flex;

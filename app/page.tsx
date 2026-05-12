@@ -758,6 +758,7 @@ export default function Page() {
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
+  const [agentFilterOverflowOpen, setAgentFilterOverflowOpen] = useState(false);
   function switchAgentFilter(agentId: string | null) {
     if (agentId === chatAgentFilter) return;
     // Save current chat before switching
@@ -968,6 +969,7 @@ export default function Page() {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (agentFilterOverflowOpen) { setAgentFilterOverflowOpen(false); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
       if (showAddAgent) { setShowAddAgent(false); return; }
       if (showAddRelayAgent) { setShowAddRelayAgent(false); return; }
@@ -977,7 +979,18 @@ export default function Page() {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+  }, [agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+
+  // Close agent filter overflow menu when clicking outside
+  useEffect(() => {
+    if (!agentFilterOverflowOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.chatAgentFilterOverflow')) setAgentFilterOverflowOpen(false);
+    };
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [agentFilterOverflowOpen]);
 
   useEffect(() => {
     const activeRequestIds = new Set<string>();
@@ -4065,12 +4078,40 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
-              <div className="chatAgentFilterRow">
-                <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => switchAgentFilter(null)}>All</button>
-                {agents.map(a => (
-                  <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => switchAgentFilter(a.id)}>{a.name || a.id}</button>
-                ))}
-              </div>
+              {(() => {
+                const MAX_VISIBLE = 4;
+                const visibleAgents = agents.slice(0, MAX_VISIBLE);
+                const overflowAgents = agents.slice(MAX_VISIBLE);
+                // If the active filter is in overflow, swap it into visible
+                const activeInOverflow = chatAgentFilter && overflowAgents.some(a => a.id === chatAgentFilter);
+                const displayVisible = activeInOverflow
+                  ? [...visibleAgents.slice(0, MAX_VISIBLE - 1), agents.find(a => a.id === chatAgentFilter)!]
+                  : visibleAgents;
+                const displayOverflow = activeInOverflow
+                  ? [visibleAgents[MAX_VISIBLE - 1], ...overflowAgents.filter(a => a.id !== chatAgentFilter)]
+                  : overflowAgents;
+
+                return (
+                  <div className="chatAgentFilterRow">
+                    <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => { switchAgentFilter(null); setAgentFilterOverflowOpen(false); }}>All</button>
+                    {displayVisible.map(a => (
+                      <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
+                    ))}
+                    {displayOverflow.length > 0 && (
+                      <div className="chatAgentFilterOverflow">
+                        <button className={`chatAgentFilterBtn chatAgentFilterMoreBtn ${agentFilterOverflowOpen ? 'active' : ''}`} onClick={() => setAgentFilterOverflowOpen(v => !v)}>···</button>
+                        {agentFilterOverflowOpen && (
+                          <div className="chatAgentFilterOverflowMenu">
+                            {displayOverflow.map(a => (
+                              <button key={a.id} className={`chatAgentFilterOverflowItem ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="newChatRow">
                 <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
               </div>
@@ -5740,13 +5781,10 @@ export default function Page() {
           display: flex;
           gap: 4px;
           padding: 0 0 6px;
-          overflow-x: auto;
-          overflow-y: hidden;
-          scrollbar-width: none;
-          -ms-overflow-style: none;
+          align-items: center;
           flex-shrink: 0;
+          flex-wrap: wrap;
         }
-        .chatAgentFilterRow::-webkit-scrollbar { display: none; }
         .chatAgentFilterBtn {
           padding: 4px 10px;
           border-radius: 8px;
@@ -5767,6 +5805,51 @@ export default function Page() {
           background: var(--accent-soft);
           color: var(--accent);
           border-color: var(--accent);
+          font-weight: 600;
+        }
+        .chatAgentFilterOverflow {
+          position: relative;
+        }
+        .chatAgentFilterMoreBtn {
+          font-weight: 900;
+          letter-spacing: 1px;
+        }
+        .chatAgentFilterOverflowMenu {
+          position: absolute;
+          top: calc(100% + 4px);
+          left: 0;
+          z-index: 100;
+          background: var(--panel);
+          border: 1px solid var(--border-strong);
+          border-radius: 10px;
+          padding: 4px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 170px;
+          max-height: 240px;
+          overflow-y: auto;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+        }
+        .chatAgentFilterOverflowItem {
+          padding: 6px 12px;
+          border-radius: 7px;
+          border: none;
+          background: transparent;
+          color: var(--text-soft);
+          font-size: 11px;
+          cursor: pointer;
+          text-align: left;
+          white-space: nowrap;
+          transition: all 0.12s;
+        }
+        .chatAgentFilterOverflowItem:hover {
+          background: var(--accent-soft);
+          color: var(--text);
+        }
+        .chatAgentFilterOverflowItem.active {
+          background: var(--accent-soft);
+          color: var(--accent);
           font-weight: 600;
         }
         .newChatRow {

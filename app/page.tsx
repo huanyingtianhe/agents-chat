@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -741,6 +742,7 @@ export default function Page() {
   const [discussionRounds, setDiscussionRounds] = useState(2);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [runVersion, setRunVersion] = useState(0);
   const [chatName, setChatName] = useState('New Chat');
@@ -758,6 +760,8 @@ export default function Page() {
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
+  const [agentFilterOverflowOpen, setAgentFilterOverflowOpen] = useState(false);
+  const [maxVisibleAgents, setMaxVisibleAgents] = useState(4);
   function switchAgentFilter(agentId: string | null) {
     if (agentId === chatAgentFilter) return;
     // Save current chat before switching
@@ -876,6 +880,9 @@ export default function Page() {
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const filterRowRef = useRef<HTMLDivElement | null>(null);
+  const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
+  const sidebarDragRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -968,6 +975,7 @@ export default function Page() {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (agentFilterOverflowOpen) { setAgentFilterOverflowOpen(false); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
       if (showAddAgent) { setShowAddAgent(false); return; }
       if (showAddRelayAgent) { setShowAddRelayAgent(false); return; }
@@ -977,7 +985,68 @@ export default function Page() {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+  }, [agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+
+  // Close agent filter overflow menu when clicking outside
+  useEffect(() => {
+    if (!agentFilterOverflowOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Menu is portaled to body, so check both the trigger and the menu itself
+      if (!target.closest('.chatAgentFilterOverflow') && !target.closest('.chatAgentFilterOverflowMenu')) {
+        setAgentFilterOverflowOpen(false);
+      }
+    };
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [agentFilterOverflowOpen]);
+
+  // Sidebar resize drag handler
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!sidebarDragRef.current) return;
+      const newWidth = Math.max(200, Math.min(600, e.clientX));
+      setSidebarWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      if (sidebarDragRef.current) {
+        sidebarDragRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
+  }, []);
+
+  // Dynamically compute how many agent filter tabs fit in the row
+  useEffect(() => {
+    const row = filterRowRef.current;
+    if (!row || agents.length === 0) return;
+    const computeMax = () => {
+      const rowWidth = row.clientWidth;
+      const gap = 4;
+      const moreBtnWidth = 38; // "···" button
+      const allBtnWidth = 34; // "All" button
+      // Estimate each agent button width from name length: ~6.5px per char + 22px padding/border
+      const agentWidths = agents.map(a => Math.ceil((a.name || a.id).length * 6.5) + 22);
+      let used = allBtnWidth + gap;
+      let fits = 0;
+      for (let i = 0; i < agentWidths.length; i++) {
+        const remaining = agents.length - i - 1;
+        const reserveMore = remaining > 0 ? moreBtnWidth + gap : 0;
+        if (used + agentWidths[i] + gap + reserveMore > rowWidth) break;
+        used += agentWidths[i] + gap;
+        fits++;
+      }
+      setMaxVisibleAgents(Math.max(1, fits));
+    };
+    const observer = new ResizeObserver(computeMax);
+    observer.observe(row);
+    computeMax();
+    return () => observer.disconnect();
+  }, [agents]);
 
   useEffect(() => {
     const activeRequestIds = new Set<string>();
@@ -4039,7 +4108,7 @@ export default function Page() {
 
       {mobilePanelOpen ? <div className="mobilePanelBackdrop" onClick={() => { setShowChatsPanel(false); setShowAgentsPanel(false); setShowNodesPanel(false); }} /> : null}
 
-      <div className={`chatLayout ${sidebarCollapsed ? 'sidebarCollapsed' : ''} ${(showAgentsPanel || showNodesPanel) ? 'agentsSidebarOpen' : ''}`}>
+      <div className={`chatLayout ${sidebarCollapsed ? 'sidebarCollapsed' : ''} ${(showAgentsPanel || showNodesPanel) ? 'agentsSidebarOpen' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
         {/* ── Left sidebar: chats + files ── */}
         <aside className={`participantsSidebar ${showChatsPanel ? 'mobilePanelVisible' : ''}`}>
           <div className="participantsHeader">
@@ -4065,12 +4134,44 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
-              <div className="chatAgentFilterRow">
-                <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => switchAgentFilter(null)}>All</button>
-                {agents.map(a => (
-                  <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => switchAgentFilter(a.id)}>{a.name || a.id}</button>
-                ))}
-              </div>
+              {(() => {
+                const visibleAgents = agents.slice(0, maxVisibleAgents);
+                const overflowAgents = agents.slice(maxVisibleAgents);
+                // If the active filter is in overflow, swap it into visible
+                const activeInOverflow = chatAgentFilter && overflowAgents.some(a => a.id === chatAgentFilter);
+                const displayVisible = activeInOverflow
+                  ? [...visibleAgents.slice(0, maxVisibleAgents - 1), agents.find(a => a.id === chatAgentFilter)!]
+                  : visibleAgents;
+                const displayOverflow = activeInOverflow
+                  ? [visibleAgents[maxVisibleAgents - 1], ...overflowAgents.filter(a => a.id !== chatAgentFilter)]
+                  : overflowAgents;
+
+                return (
+                  <div className="chatAgentFilterRow" ref={filterRowRef}>
+                    <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => { switchAgentFilter(null); setAgentFilterOverflowOpen(false); }}>All</button>
+                    {displayVisible.map(a => (
+                      <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
+                    ))}
+                    {displayOverflow.length > 0 && (
+                      <div className="chatAgentFilterOverflow">
+                        <button ref={overflowBtnRef} className={`chatAgentFilterBtn chatAgentFilterMoreBtn ${agentFilterOverflowOpen ? 'active' : ''}`} onClick={() => setAgentFilterOverflowOpen(v => !v)}>···</button>
+                        {agentFilterOverflowOpen && (() => {
+                          const rect = overflowBtnRef.current?.getBoundingClientRect();
+                          if (!rect) return null;
+                          return createPortal(
+                            <div className="chatAgentFilterOverflowMenu" style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, zIndex: 9999 }}>
+                              {displayOverflow.map(a => (
+                                <button key={a.id} className={`chatAgentFilterOverflowItem ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
+                              ))}
+                            </div>,
+                            document.body
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="newChatRow">
                 <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
               </div>
@@ -4261,6 +4362,19 @@ export default function Page() {
             </div>
           )}
         </aside>
+
+        {/* ── Sidebar resize handle ── */}
+        {!sidebarCollapsed && (
+          <div
+            className="sidebarResizeHandle"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              sidebarDragRef.current = true;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+          />
+        )}
 
         {/* ── Main chat area ── */}
         <div className="chatMain">
@@ -5574,11 +5688,11 @@ export default function Page() {
           min-height: 0;
           overflow: hidden;
           display: grid;
-          grid-template-columns: 280px minmax(0, 1fr);
-          transition: grid-template-columns 0.2s ease;
+          grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr);
+          transition: grid-template-columns 0.15s ease;
         }
         .chatLayout.agentsSidebarOpen {
-          grid-template-columns: 280px minmax(0, 1fr) 260px;
+          grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) 260px;
         }
         .chatLayout.sidebarCollapsed {
           grid-template-columns: 76px minmax(0, 1fr);
@@ -5587,7 +5701,7 @@ export default function Page() {
           grid-template-columns: 76px minmax(0, 1fr) 260px;
         }
         .participantsSidebar {
-          border-right: 1px solid var(--border);
+          border-right: none;
           background: var(--panel-bg);
           backdrop-filter: blur(16px);
           padding: 16px 12px;
@@ -5596,6 +5710,19 @@ export default function Page() {
           overflow-x: hidden;
           display: flex;
           flex-direction: column;
+        }
+        .sidebarResizeHandle {
+          width: 4px;
+          cursor: col-resize;
+          background: transparent;
+          border-right: 1px solid var(--border);
+          transition: background 0.15s;
+          z-index: 2;
+        }
+        .sidebarResizeHandle:hover,
+        .sidebarResizeHandle:active {
+          background: var(--accent);
+          border-right-color: var(--accent);
         }
         .participantsHeader {
           color: var(--text);
@@ -5740,7 +5867,8 @@ export default function Page() {
           display: flex;
           gap: 4px;
           padding: 0 0 6px;
-          flex-wrap: wrap;
+          align-items: center;
+          flex-shrink: 0;
         }
         .chatAgentFilterBtn {
           padding: 4px 10px;
@@ -5752,6 +5880,7 @@ export default function Page() {
           cursor: pointer;
           transition: all 0.15s;
           white-space: nowrap;
+          flex-shrink: 0;
         }
         .chatAgentFilterBtn:hover {
           color: var(--text);
@@ -5762,6 +5891,13 @@ export default function Page() {
           color: var(--accent);
           border-color: var(--accent);
           font-weight: 600;
+        }
+        .chatAgentFilterOverflow {
+          position: relative;
+        }
+        .chatAgentFilterMoreBtn {
+          font-weight: 900;
+          letter-spacing: 1px;
         }
         .newChatRow {
           display: flex;
@@ -7353,6 +7489,9 @@ export default function Page() {
           .chatLayout.sidebarCollapsed,
           .chatLayout.sidebarCollapsed.agentsSidebarOpen {
             grid-template-columns: minmax(0, 1fr);
+          }
+          .sidebarResizeHandle {
+            display: none;
           }
           .participantsSidebar,
           .agentsSidebar {

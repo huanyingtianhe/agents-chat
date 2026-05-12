@@ -396,6 +396,10 @@ type ChatMessage = {
   ptyPhase?: PtyPhase;
   parts?: ContentPart[];
   userRequest?: AgentUserRequest;
+  sendStatus?: 'failed';
+  sendError?: string;
+  resendAgentIds?: string[];
+  resendMessage?: string;
 };
 
 type ChatHistoryEntry = {
@@ -440,6 +444,14 @@ type SessionRunContext = {
   ptySendStarted?: boolean;
 };
 
+type DispatchToAgentOptions = {
+  round?: number;
+  relation?: string;
+  summary?: boolean;
+  chatId?: string;
+  commentId?: string;
+};
+
 type OrchestrationState = {
   id: string;
   mode: OrchestrationMode;
@@ -450,7 +462,18 @@ type OrchestrationState = {
   summaryStarted: boolean;
   round: number;
   maxRounds: number;
+  sourceUserMessageId?: string;
+  sourceChatId?: string;
+  sourceAgentIds?: string[];
+  sourceMessage?: string;
 };
+
+class PromptSendFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PromptSendFailedError';
+  }
+}
 
 /* ────────── Storage keys (UI prefs only — chat data is in SQLite) ────────── */
 
@@ -839,8 +862,6 @@ export default function Page() {
   const inputDraftRef = useRef('');
   const needsContextRestoreRef = useRef(false);
   const currentAgentSessionsRef = useRef<Record<string, string>>({});
-  const autoResentUserMessageRef = useRef<Set<string>>(new Set());
-
   /* ── Derived ── */
 
   const filteredAgents = useMemo(() => {
@@ -863,7 +884,7 @@ export default function Page() {
   const activeTheme = THEMES[themeId];
   const themeStyle = activeTheme.values as React.CSSProperties;
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
-  const isCurrentChatSending = useMemo(() => Object.values(sessionRunsRef.current).some((run) => run.chatId === currentChatId), [currentChatId, runVersion]);
+  const isCurrentChatSending = useMemo(() => isChatRunning(currentChatId), [currentChatId, runVersion]);
 
   const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
 
@@ -877,11 +898,14 @@ export default function Page() {
   }
 
   const getChatSidebarStatus= useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
-    const hasActiveRun = Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId);
+    const hasActiveRun = isChatRunning(chatId);
     const chatMessages = chatMessagesRef.current[chatId] || (chatId === currentChatId ? messages : []);
     const pendingAgent = [...chatMessages].reverse().find((m) => m.type === 'agent' && m.pending);
     if (hasActiveRun || pendingAgent) {
       return { label: pendingAgent?.statusText || 'Running', kind: 'running' };
+    }
+    if ([...chatMessages].reverse().some((m) => m.type === 'user' && m.sendStatus === 'failed')) {
+      return { label: 'Error', kind: 'error' };
     }
     const lastAgent = [...chatMessages].reverse().find((m) => m.type === 'agent');
     if (!lastAgent) return null;
@@ -946,7 +970,7 @@ export default function Page() {
           .then(r => r.json())
           .then(chatData => {
             if (chatData.ok && chatData.chat) {
-              const msgs = chatData.chat.messages || [];
+              const msgs = migrateFailedSendWarnings(chatData.chat.messages || []);
               currentAgentSessionsRef.current = chatData.chat.agentSessions || {};
               setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
               setChatName(chatData.chat.name || lastChatId);
@@ -1043,8 +1067,6 @@ export default function Page() {
           needsContextRestoreRef.current = false;
         }
         // Handle recovered messages and pending user messages from session/load replay
-        let resumedActiveTurn = false;
-        let recoveredMessageCount = 0;
         for (const [index, r] of results.entries()) {
           if (r.status !== 'fulfilled') continue;
           const agentId = entries[index]?.[0];
@@ -1053,21 +1075,15 @@ export default function Page() {
             currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
           }
           if (agentId && val?.activeTurn && !val.activeTurn.done) {
-            resumedActiveTurn = true;
             resumeActiveTurn(agentId, val.activeTurn);
           }
           // Append recovered agent messages that were in ACP but missing from our DB
           if (val?.recoveredMessages?.length > 0) {
-            recoveredMessageCount += val.recoveredMessages.length;
             for (const rm of val.recoveredMessages) {
               addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
             }
             addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
           }
-        }
-        if (!resumedActiveTurn && recoveredMessageCount === 0) {
-          const chatMessages = chatMessagesRef.current[activeChatId] || messagesRef.current;
-          void resendLastUnansweredMessage(activeChatId, chatMessages);
         }
       } catch { /* ignore */ }
     })();
@@ -1136,12 +1152,49 @@ export default function Page() {
     setMessagesForChat(chatId, base.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   }
 
+  function removeMessage(id: string, chatId = currentChatIdRef.current) {
+    const base = chatMessagesRef.current[chatId] || (chatId === currentChatIdRef.current ? messagesRef.current : []);
+    setMessagesForChat(chatId, base.filter((m) => m.id !== id));
+  }
+
+  function getSendFailureError(message: ChatMessage): string {
+    const text = message.content.trim();
+    return text.replace(/^⚠️\s*/, '').replace(/^Send failed:\s*/i, '') || 'Failed to send prompt to agent';
+  }
+
+  function shouldInferFailedTargetFromWarning(userMessage: ChatMessage): boolean {
+    return !/(?:^|\s)@\S+/.test(userMessage.content);
+  }
+
+  function migrateFailedSendWarnings(chatMessages: ChatMessage[]): ChatMessage[] {
+    const migrated: ChatMessage[] = [];
+    for (const message of chatMessages) {
+      if (isSendFailureMessage(message)) {
+        const previous = migrated[migrated.length - 1];
+        if (previous?.type === 'user') {
+          const shouldInferTarget = shouldInferFailedTargetFromWarning(previous);
+          const resendAgentIds = shouldInferTarget && message.agentId ? [message.agentId] : previous.resendAgentIds;
+          migrated[migrated.length - 1] = {
+            ...previous,
+            sendStatus: 'failed',
+            sendError: getSendFailureError(message),
+            resendAgentIds,
+            resendMessage: shouldInferTarget ? (previous.resendMessage || previous.content) : previous.resendMessage,
+          };
+          continue;
+        }
+      }
+      migrated.push(message);
+    }
+    return migrated;
+  }
+
   async function loadChatIntoCache(chatId: string) {
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
       if (data.ok && data.chat) {
-        setMessagesForChat(chatId, data.chat.messages || []);
+        setMessagesForChat(chatId, migrateFailedSendWarnings(data.chat.messages || []));
         setChatHistory(prev => {
           const entry = {
             id: data.chat.id,
@@ -1329,6 +1382,30 @@ export default function Page() {
           </form>
         )}
         {submissionError ? <div className="agentUserRequestError" role="alert">{submissionError}</div> : null}
+      </div>
+    );
+  }
+
+  function renderUserSendFailure(message: ChatMessage) {
+    if (message.type !== 'user' || message.sendStatus !== 'failed') return null;
+    const chatId = currentChatIdRef.current;
+    const waitingForAgents = !message.resendAgentIds?.length && (agentsLoading || agents.length === 0);
+    const resendDisabled = isChatRunning(chatId) || waitingForAgents;
+    const error = message.sendError || 'Failed to send prompt to agent';
+    return (
+      <div className="userSendFailure">
+        <span className="userSendFailureStatus" title={error} aria-label={`Failed: ${error}`}>
+          Failed
+        </span>
+        <button
+          type="button"
+          className="messageCopyButton userSendFailureButton"
+          disabled={resendDisabled}
+          title={waitingForAgents ? 'Waiting for agents to load' : undefined}
+          onClick={() => void resendFailedUserMessage(message)}
+        >
+          Resend
+        </button>
       </div>
     );
   }
@@ -2487,6 +2564,10 @@ export default function Page() {
     if (requestId) setAgentUserRequestSubmission(requestId, null);
   }
 
+  function isChatRunning(chatId: string) {
+    return Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId);
+  }
+
   async function submitAgentUserRequest(message: ChatMessage, response: AgentUserRequestResponse) {
     const request = message.userRequest;
     const agentId = message.agentId;
@@ -2527,12 +2608,7 @@ export default function Page() {
 
     // Handle send failures (e.g. turn_in_progress, session errors)
     if (sendResult && !sendResult.ok) {
-      updateMessage(pendingId, {
-        content: `⚠️ ${sendResult.error || 'Send failed'}`,
-        pending: false,
-      }, sendChatId);
-      finalizeRun(runKey);
-      return false;
+      throw new PromptSendFailedError(sendResult.error || 'Failed to send prompt to agent');
     }
 
     if (sendResult?.sessionId) {
@@ -2554,10 +2630,15 @@ export default function Page() {
     content: string,
     orchestrationId: string,
     kind: 'worker' | 'summary' = 'worker',
-    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string },
+    options?: DispatchToAgentOptions,
   ) {
     const dispatchChatId = options?.chatId || currentChatIdRef.current;
     const pendingId = `pending-${makeId()}`;
+    const runKey = `acp:${agentId}:${dispatchChatId}`;
+    if (sessionRunsRef.current[runKey]) {
+      throw new PromptSendFailedError('Agent is already running in this chat');
+    }
+
     addMessage({
       id: pendingId,
       type: 'agent',
@@ -2569,7 +2650,6 @@ export default function Page() {
       summary: options?.summary,
     }, dispatchChatId);
 
-    const runKey = `acp:${agentId}:${dispatchChatId}`;
     sessionRunsRef.current[runKey] = {
       agentId, pendingId, orchestrationId, kind,
       currentText: '',
@@ -2585,69 +2665,49 @@ export default function Page() {
       if (!sent) throw new Error('Failed to send prompt to agent');
       return runKey;
     } catch (err) {
-      updateMessage(pendingId, {
-        content: `⚠️ ${err instanceof Error ? err.message : 'Send failed'}`,
-        pending: false,
-      }, dispatchChatId);
-      finalizeRun(runKey);
+      removeMessage(pendingId, dispatchChatId);
+      delete sessionRunsRef.current[runKey];
+      notifyRunStateChanged();
       throw err;
     }
   }
 
-  function getLastUnansweredUserMessage(chatMessages: ChatMessage[]): ChatMessage | null {
-    for (let i = chatMessages.length - 1; i >= 0; i--) {
-      const message = chatMessages[i];
-      if (message.type === 'system') continue;
-      if (isSendFailureMessage(message)) continue;
-      if (message.type === 'user') return message;
-      const hasAgentText = message.content.trim() || message.parts?.some((part) => part.kind === 'text' && part.text.trim());
-      if (hasAgentText) return null;
-    }
-    return null;
-  }
-
   function isSendFailureMessage(message: ChatMessage): boolean {
-    if (message.type !== 'agent') return false;
+    if (message.type !== 'agent' && message.type !== 'system') return false;
     const text = message.content.trim();
+    if (message.type === 'system') {
+      return /^(?:⚠️\s*)?Send failed:/i.test(text);
+    }
     return text.startsWith('⚠️') && (
       text.includes('Failed to send prompt to agent') ||
       text.includes('Send failed')
     );
   }
 
-  function getAutoResendTargets(text: string): { agentIds: string[]; message: string } {
-    if (agents.length > 0) return parseAgents(text, agents);
-    const sessionAgentIds = Object.keys(currentAgentSessionsRef.current)
-      .filter((id) => id !== SCHEDULER_AGENT_ID && !!lastSessionId(currentAgentSessionsRef.current[id]));
-    const mentionedSessionAgentIds = sessionAgentIds.filter((id) =>
-      new RegExp(`(?:^|\\s)@${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`).test(text)
-    );
-    return { agentIds: mentionedSessionAgentIds.length > 0 ? mentionedSessionAgentIds : sessionAgentIds.slice(0, 1), message: text.replace(/(?:^|\s)@(\S+)/g, '').trim() || text };
+  function markUserMessageSendFailed(
+    chatId: string,
+    userMessageId: string,
+    error: string,
+    resendAgentIds: string[],
+    resendMessage: string,
+  ) {
+    updateMessage(userMessageId, {
+      sendStatus: 'failed',
+      sendError: error || 'Failed to send prompt to agent',
+      resendAgentIds,
+      resendMessage,
+    }, chatId);
+    void saveChatToHistory(chatId);
   }
 
-  async function resendLastUnansweredMessage(chatId: string, chatMessages: ChatMessage[]) {
-    const lastMessage = getLastUnansweredUserMessage(chatMessages);
-    if (!lastMessage || !lastMessage.content.trim()) return false;
-    if (Object.values(sessionRunsRef.current).some((run) => run.chatId === chatId)) return false;
-
-    const resendKey = `${chatId}:${lastMessage.id}:${lastMessage.ts}`;
-    if (autoResentUserMessageRef.current.has(resendKey)) return false;
-
-    const { agentIds, message } = getAutoResendTargets(lastMessage.content);
-    if (agentIds.length === 0) return false;
-
-    autoResentUserMessageRef.current.add(resendKey);
-    const orchestrationId = `resume-${makeId()}`;
-    try {
-      await dispatchParsedPrompt(agentIds, message, lastMessage.content, orchestrationId, {
-        chatId,
-        relation: 'Resent unanswered message after session load',
-      });
-      return true;
-    } catch (err) {
-      addMessage({ type: 'system', content: `⚠️ Failed to resend unanswered message: ${err instanceof Error ? err.message : String(err)}` }, chatId);
-      return false;
-    }
+  function clearUserMessageSendFailure(chatId: string, userMessageId: string) {
+    updateMessage(userMessageId, {
+      sendStatus: undefined,
+      sendError: undefined,
+      resendAgentIds: undefined,
+      resendMessage: undefined,
+    }, chatId);
+    void saveChatToHistory(chatId);
   }
 
   function resumeActiveTurn(agentId: string, turn: { messageId?: string; fullText?: string; phase?: string; statusText?: string; userRequest?: AgentUserRequest }) {
@@ -2686,10 +2746,12 @@ export default function Page() {
     const orchestration = orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
       orchestration.results[run.agentId] = run.currentText || '';
-      void maybeAdvanceOrchestration(run.orchestrationId);
     }
     delete sessionRunsRef.current[runKey];
     notifyRunStateChanged();
+    if (orchestration && run.kind === 'worker') {
+      void maybeAdvanceOrchestration(run.orchestrationId);
+    }
   }
 
   async function pollAcpAgent(agentId: string, chatId?: string) {
@@ -2849,9 +2911,56 @@ export default function Page() {
 
   /* ── Orchestration ── */
 
+  function markOrchestrationPromptSendFailed(orchestrationId: string, err: unknown) {
+    if (!(err instanceof PromptSendFailedError)) return false;
+    const state = orchestrationsRef.current[orchestrationId];
+    if (!state?.sourceChatId || !state.sourceUserMessageId) return false;
+
+    markUserMessageSendFailed(
+      state.sourceChatId,
+      state.sourceUserMessageId,
+      err.message,
+      state.sourceAgentIds?.length ? state.sourceAgentIds : state.agentIds,
+      state.sourceMessage || state.originalTask,
+    );
+    delete orchestrationsRef.current[orchestrationId];
+    return true;
+  }
+
+  async function dispatchOrchestrationStep(
+    orchestrationId: string,
+    agentId: string,
+    prompt: string,
+    kind: 'worker' | 'summary',
+    options?: DispatchToAgentOptions,
+  ) {
+    try {
+      await dispatchToAgent(agentId, prompt, orchestrationId, kind, options);
+      return true;
+    } catch (err) {
+      if (markOrchestrationPromptSendFailed(orchestrationId, err)) return false;
+      throw err;
+    }
+  }
+
+  async function cleanupDispatchedRuns(runKeys: string[]) {
+    await Promise.all(runKeys.map(async (runKey) => {
+      const run = sessionRunsRef.current[runKey];
+      if (!run) return;
+      clearAgentUserRequestSubmissionForMessage(run.pendingId, run.chatId);
+      try {
+        await acp({ action: 'interrupt', agentId: run.agentId, chatId: run.chatId });
+      } catch { /* ignore */ }
+      removeMessage(run.pendingId, run.chatId);
+      delete sessionRunsRef.current[runKey];
+    }));
+    notifyRunStateChanged();
+  }
+
   async function maybeAdvanceOrchestration(orchestrationId: string) {
     const state = orchestrationsRef.current[orchestrationId];
     if (!state || state.summaryStarted) return;
+    const orchestrationChatId = state.sourceChatId || currentChatIdRef.current;
 
     if (state.mode === 'discussion') {
       const allDone = state.agentIds.every((id) => typeof state.results[id] === 'string');
@@ -2872,7 +2981,8 @@ export default function Page() {
             '2. State which points you disagree with or want to revise',
             '3. Provide your updated perspective for this round', '', others,
           ].join('\n');
-          return dispatchToAgent(id, prompt, orchestrationId, 'worker', {
+          return dispatchOrchestrationStep(orchestrationId, id, prompt, 'worker', {
+            chatId: orchestrationChatId,
             round: state.round, relation: `Responding to round ${state.round - 1} perspectives`,
           });
         }));
@@ -2887,7 +2997,7 @@ export default function Page() {
         'Please output:', '1. Consensus reached', '2. Remaining disagreements', '3. Final recommended plan',
       ].join('\n');
       const summaryAgent = state.agentIds[0] || 'main';
-      await dispatchToAgent(summaryAgent, summaryPrompt, orchestrationId, 'summary', { relation: 'Final conclusion', summary: true });
+      await dispatchOrchestrationStep(orchestrationId, summaryAgent, summaryPrompt, 'summary', { chatId: orchestrationChatId, relation: 'Final conclusion', summary: true });
       return;
     }
 
@@ -2904,7 +3014,8 @@ export default function Page() {
           context ? `\nExisting context:\n${context}` : '',
         ].filter(Boolean).join('\n');
         state.nextIndex += 1;
-        await dispatchToAgent(nextId, prompt, orchestrationId, 'worker', {
+        await dispatchOrchestrationStep(orchestrationId, nextId, prompt, 'worker', {
+          chatId: orchestrationChatId,
           round: state.nextIndex + 1, relation: prevId ? `Based on ${prevId}'s output` : 'Pipeline initial step',
         });
         return;
@@ -2918,7 +3029,7 @@ export default function Page() {
         'Please output the final conclusion and next steps.',
       ].join('\n');
       const summaryAgent = state.agentIds[0] || 'main';
-      await dispatchToAgent(summaryAgent, summaryPrompt, orchestrationId, 'summary', { relation: 'Final conclusion', summary: true });
+      await dispatchOrchestrationStep(orchestrationId, summaryAgent, summaryPrompt, 'summary', { chatId: orchestrationChatId, relation: 'Final conclusion', summary: true });
     }
 
     if (state.mode === 'auto') {
@@ -2933,7 +3044,7 @@ export default function Page() {
 
       // Helper: clear previous turn and wait before next dispatch
       const prepareNextDispatch = async (agentId: string) => {
-        await acp({ action: 'turn-clear', agentId, chatId: currentChatIdRef.current }).catch(() => null);
+        await acp({ action: 'turn-clear', agentId, chatId: orchestrationChatId }).catch(() => null);
         await new Promise((r) => setTimeout(r, 800));
       };
 
@@ -2962,7 +3073,7 @@ export default function Page() {
               '\nPlease output:', '1. What was accomplished', '2. Final result', '3. Any remaining issues or next steps',
             ].join('\n');
             await prepareNextDispatch(schedulerAgentId);
-            await dispatchToAgent(schedulerAgentId, summaryPrompt, orchestrationId, 'summary', { relation: 'Auto: final summary', summary: true });
+            await dispatchOrchestrationStep(orchestrationId, schedulerAgentId, summaryPrompt, 'summary', { chatId: orchestrationChatId, relation: 'Auto: final summary', summary: true });
             return;
           }
 
@@ -2973,7 +3084,8 @@ export default function Page() {
           autoHistory.push({ agent: decision.nextAgent, instruction: decision.instruction || state.originalTask, step: autoStep + 1 });
           state.results = {};
           await prepareNextDispatch(decision.nextAgent);
-          await dispatchToAgent(decision.nextAgent, decision.instruction || state.originalTask, orchestrationId, 'worker', {
+          await dispatchOrchestrationStep(orchestrationId, decision.nextAgent, decision.instruction || state.originalTask, 'worker', {
+            chatId: orchestrationChatId,
             round: autoStep + 1,
             relation: `Auto: step ${autoStep + 1}`,
           });
@@ -3004,22 +3116,24 @@ export default function Page() {
             '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context>" }',
           ].join('\n');
           await prepareNextDispatch(schedulerAgentId);
-          await dispatchToAgent(schedulerAgentId, evalPrompt, orchestrationId, 'worker', {
+          await dispatchOrchestrationStep(orchestrationId, schedulerAgentId, evalPrompt, 'worker', {
+            chatId: orchestrationChatId,
             round: autoStep,
             relation: 'Auto: scheduler evaluating',
           });
           return;
         }
       } catch (err) {
+        if (markOrchestrationPromptSendFailed(orchestrationId, err)) return;
         console.error('[Auto] orchestration step failed:', err);
         addMessage({ type: 'system', content: `⚠️ Auto orchestration error: ${err instanceof Error ? err.message : String(err)}` });
-        }
+      }
     }
   }
 
   /* ── Auto (Scheduler) orchestration ── */
 
-  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string) {
+  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string, chatId: string) {
     const schedulerAgentId = SCHEDULER_AGENT_ID;
     const agentList = agentIds.map((id) => {
       const a = agents.find((x) => x.id === id);
@@ -3045,6 +3159,7 @@ export default function Page() {
     ].join('\n');
 
     await dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {
+      chatId,
       round: 0,
       relation: 'Auto: scheduler planning',
     });
@@ -3069,13 +3184,12 @@ export default function Page() {
     message: string,
     originalText: string,
     orchestrationId: string,
-    options?: { chatId?: string; relation?: string },
+    options?: { chatId?: string; relation?: string; sourceUserMessageId?: string },
   ) {
     const useOrchestration = agentIds.length > 1;
     const effectiveMessage = message || originalText;
-    const dispatchOptions = options?.chatId || options?.relation
-      ? { chatId: options?.chatId, relation: options?.relation }
-      : undefined;
+    const effectiveChatId = options?.chatId || currentChatIdRef.current;
+    const dispatchOptions = { chatId: effectiveChatId, relation: options?.relation };
 
     if (useOrchestration) {
       orchestrationsRef.current[orchestrationId] = {
@@ -3088,27 +3202,62 @@ export default function Page() {
         summaryStarted: false,
         round: orchestrationMode === 'discussion' ? 1 : 0,
         maxRounds: orchestrationMode === 'discussion' ? discussionRounds : 1,
+        sourceUserMessageId: options?.sourceUserMessageId,
+        sourceChatId: effectiveChatId,
+        sourceAgentIds: agentIds,
+        sourceMessage: effectiveMessage,
       };
     }
 
-    if (!useOrchestration) {
-      await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', dispatchOptions);
-      return;
+    try {
+      if (!useOrchestration) {
+        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', dispatchOptions);
+        return;
+      }
+      if (orchestrationMode === 'auto') {
+        await runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText, effectiveChatId);
+      } else if (orchestrationMode === 'discussion') {
+        const results = await Promise.allSettled(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', {
+          ...dispatchOptions,
+          round: 1,
+          relation: dispatchOptions?.relation || 'Round 1 independent perspective',
+        })));
+        const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed) {
+          const startedRunKeys = results
+            .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
+            .map((result) => result.value);
+          await cleanupDispatchedRuns(startedRunKeys);
+          throw failed.reason;
+        }
+      } else {
+        await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', {
+          ...dispatchOptions,
+          round: 1,
+          relation: dispatchOptions?.relation || 'Pipeline initial step',
+        });
+      }
+    } catch (err) {
+      if (useOrchestration) delete orchestrationsRef.current[orchestrationId];
+      throw err;
     }
-    if (orchestrationMode === 'auto') {
-      void runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText);
-    } else if (orchestrationMode === 'discussion') {
-      await Promise.all(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', {
-        ...dispatchOptions,
-        round: 1,
-        relation: dispatchOptions?.relation || 'Round 1 independent perspective',
-      })));
-    } else {
-      await dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', {
-        ...dispatchOptions,
-        round: 1,
-        relation: dispatchOptions?.relation || 'Pipeline initial step',
-      });
+  }
+
+  async function resendFailedUserMessage(message: ChatMessage) {
+    if (message.type !== 'user' || message.sendStatus !== 'failed') return;
+    const chatId = currentChatIdRef.current;
+    if (isChatRunning(chatId)) return;
+    if (!message.resendAgentIds?.length && (agentsLoading || agents.length === 0)) return;
+    const parsed = parseAgents(message.content, agents);
+    const agentIds = message.resendAgentIds?.length ? message.resendAgentIds : parsed.agentIds;
+    const resendMessage = message.resendMessage || parsed.message || message.content;
+    if (agentIds.length === 0 || !resendMessage.trim()) return;
+
+    clearUserMessageSendFailure(chatId, message.id);
+    try {
+      await dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id });
+    } catch (err) {
+      markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage);
     }
   }
 
@@ -3118,13 +3267,14 @@ export default function Page() {
 
     const { agentIds, message } = parseAgents(text, agents);
     const orchestrationId = `orch-${makeId()}`;
+    const sendChatId = currentChatIdRef.current;
 
     shouldStickToBottomRef.current = true;
-    addMessage({ type: 'user', content: text });
+    const userMessageId = addMessage({ type: 'user', content: text }, sendChatId);
     setInput('');
 
     // Persist user message to SQLite immediately (don't wait for agent response)
-    void saveCurrentChatToHistory();
+    void saveChatToHistory(sendChatId);
 
     // Save to input history
     const hist = inputHistoryRef.current;
@@ -3135,9 +3285,9 @@ export default function Page() {
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(hist)); } catch { /* ignore */ }
 
     try {
-      await dispatchParsedPrompt(agentIds, message, text, orchestrationId);
+      await dispatchParsedPrompt(agentIds, message, text, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId });
     } catch (err) {
-      addMessage({ type: 'system', content: `Send failed: ${err instanceof Error ? err.message : String(err)}` });
+      markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || text);
     }
   }
 
@@ -3383,18 +3533,21 @@ export default function Page() {
 
   /* ── New chat ── */
 
-  async function saveCurrentChatToHistory(preserveOrder = false) {
-    const currentId = currentChatIdRef.current;
-    const currentMessages = chatMessagesRef.current[currentId] || messagesRef.current;
-    const currentName = chatNameRef.current;
+  async function saveChatToHistory(chatId: string, preserveOrder = false) {
+    void preserveOrder;
+    const currentId = chatId;
+    const currentMessages = chatMessagesRef.current[currentId] || (currentId === currentChatIdRef.current ? messagesRef.current : []);
+    const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
+    const currentName = currentId === currentChatIdRef.current ? chatNameRef.current : (existingHistoryEntry?.name || currentId);
     const userMsgs = currentMessages.filter(m => m.type === 'user');
     const name = userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName;
     const persistable = currentMessages
       .filter(m => !(m.type === 'system' && m.ts !== 0));
 
-    const agentSessions = currentAgentSessionsRef.current;
+    const agentSessions = currentId === currentChatIdRef.current
+      ? currentAgentSessionsRef.current
+      : (existingHistoryEntry?.agentSessions || {});
 
-    const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
     // Keep the sidebar timestamp stable for existing chats. It represents the
     // chat's list/order timestamp, not every background turn update.
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
@@ -3407,12 +3560,14 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
-      // Also persist last active chat ID
-      void fetch('/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'set-last-chat', chatId: currentId }),
-      }).catch(() => { /* ignore */ });
+      if (currentId === currentChatIdRef.current) {
+        // Also persist last active chat ID
+        void fetch('/api/chats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'set-last-chat', chatId: currentId }),
+        }).catch(() => { /* ignore */ });
+      }
     } catch { /* ignore */ }
 
     setChatHistory(prev => {
@@ -3423,6 +3578,10 @@ export default function Page() {
       return normalizeChatHistory([entry, ...prev]);
     });
     return savedAt;
+  }
+
+  async function saveCurrentChatToHistory(preserveOrder = false) {
+    return saveChatToHistory(currentChatIdRef.current, preserveOrder);
   }
 
   function clearChatMessages() {
@@ -3458,7 +3617,7 @@ export default function Page() {
         return;
       }
       if (data.ok && data.chat) {
-        targetMessages = chatMessagesRef.current[chatId] || data.chat.messages || [];
+        targetMessages = chatMessagesRef.current[chatId] || migrateFailedSendWarnings(data.chat.messages || []);
         targetName = data.chat.name || targetName;
         agentSessions = data.chat.agentSessions || {};
         currentAgentSessionsRef.current = agentSessions;
@@ -3516,9 +3675,7 @@ export default function Page() {
       if (allLoaded) {
         needsContextRestoreRef.current = false;
       }
-      // Handle recovered messages and pending user messages
-      let resumedActiveTurn = false;
-      let recoveredMessageCount = 0;
+      // Handle recovered messages and pending user messages.
       for (const [index, r] of resumeResults.entries()) {
         if (r.status !== 'fulfilled') continue;
         const agentId = sessionEntries[index]?.[0];
@@ -3527,20 +3684,14 @@ export default function Page() {
           currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: val.sessionId };
         }
         if (agentId && val?.activeTurn && !val.activeTurn.done) {
-          resumedActiveTurn = true;
           resumeActiveTurn(agentId, val.activeTurn);
         }
         if (val?.recoveredMessages?.length > 0) {
-          recoveredMessageCount += val.recoveredMessages.length;
           for (const rm of val.recoveredMessages) {
             addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
           }
           addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
         }
-      }
-      if (!resumedActiveTurn && recoveredMessageCount === 0) {
-        const loadedMessages = chatMessagesRef.current[chatId] || targetMessages;
-        void resendLastUnansweredMessage(chatId, loadedMessages);
       }
     }
 
@@ -4432,6 +4583,7 @@ export default function Page() {
                           <div className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
                           </div>
+                          {renderUserSendFailure(message)}
                           {message.pending && message.content && (
                             <div className="streamingIndicator">
                               <span className="streamingPulse" />
@@ -5783,7 +5935,8 @@ export default function Page() {
           gap: 8px;
           margin-top: 10px;
         }
-        .messageCopyButton {
+        .messageCopyButton,
+        :global(.userSendFailureButton) {
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -5798,7 +5951,8 @@ export default function Page() {
           cursor: pointer;
           transition: all 160ms ease;
         }
-        .messageCopyButton:hover {
+        .messageCopyButton:hover,
+        :global(.userSendFailureButton:hover) {
           border-color: var(--border-strong);
           background: var(--accent-soft);
         }
@@ -5908,6 +6062,40 @@ export default function Page() {
         }
         .collapseToggle:hover { border-color: var(--border-strong); background: var(--accent-soft); }
         .messageContent.pending { opacity: 0.78; }
+        :global(.userSendFailure) {
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 8px;
+          margin-top: 8px;
+          color: #fca5a5;
+          font-size: 12px;
+        }
+        :global(.userSendFailureStatus) {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 30px;
+          border: 1px solid rgba(252, 165, 165, 0.45);
+          background: rgba(252, 165, 165, 0.1);
+          color: #fecaca;
+          border-radius: 10px;
+          padding: 0 10px;
+          font-size: 12px;
+          line-height: 1;
+          cursor: help;
+        }
+        :global(.userSendFailureButton) {
+          flex-shrink: 0;
+        }
+        :global(.userSendFailureButton:disabled) {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+        :global(.userSendFailureButton:disabled:hover) {
+          border-color: var(--border);
+          background: var(--panel-soft);
+        }
         .partsStream { display: flex; flex-direction: column; gap: 6px; }
         .partsStream.collapsed { max-height: 300px; overflow: hidden; position: relative; }
         .partsStream.collapsed::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, var(--message-agent)); pointer-events: none; }

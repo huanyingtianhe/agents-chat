@@ -22,6 +22,10 @@ export type StoredMessage = {
   summary?: boolean;
   parts?: unknown[];
   userRequest?: unknown;
+  sendStatus?: 'failed';
+  sendError?: string;
+  resendAgentIds?: string[];
+  resendMessage?: string;
 };
 
 export type StoredChat = {

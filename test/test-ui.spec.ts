@@ -6,7 +6,7 @@
  *   or: npx playwright test test/test-ui.spec.ts
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Locator, Page } from '@playwright/test';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
@@ -36,6 +36,13 @@ async function deleteAllChats(page: Page) {
       }, chat.id);
     }
   }
+}
+
+async function expectCompactFailedSendStatus(message: Locator, error = 'Failed to send prompt to agent') {
+  const status = message.locator('.userSendFailureStatus');
+  await expect(status).toHaveText('Failed');
+  await expect(status).toHaveAttribute('title', error);
+  await expect(message.locator('.userSendFailure')).not.toContainText(error);
 }
 
 test.describe('Login', () => {
@@ -166,6 +173,572 @@ test.describe('Chat UI', () => {
     const replyText = await agentReply.textContent();
     expect(replyText!.length).toBeGreaterThan(0);
     console.log(`Agent replied: "${replyText!.slice(0, 100)}"`);
+  });
+
+  test('should show failed send status on the user message and allow resend', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const replyText = 'Resent message completed.';
+    let sendCalls = 0;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendCalls++;
+        if (sendCalls > 1) {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-resend-user-status' } }),
+          });
+          return;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'Failed to send prompt to agent' }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-resend-user-status',
+              fullText: replyText,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: replyText }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill('@alpha trigger a send failure');
+    await page.click('button[aria-label="Send message"]');
+
+    await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(1);
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: 'trigger a send failure' });
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
+    await expect(chatArea.locator('.message.system', { hasText: 'Send failed' })).toHaveCount(0);
+
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(2);
+    await expect(failedUserMessage.locator('.userSendFailure')).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
+  });
+
+  test('should style failed message resend like message action buttons', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const failedText = 'failed message style check';
+    const chatId = `ui-resend-style-${Date.now()}`;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, failedText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: 'UI resend style',
+        ts: now,
+        messages: [
+          {
+            id: 'u1',
+            type: 'user',
+            content: failedText,
+            sendStatus: 'failed',
+            sendError: 'Failed to send prompt to agent',
+            resendAgentIds: ['alpha'],
+            resendMessage: failedText,
+            ts: now,
+          },
+          { id: 'a1', type: 'agent', content: 'normal answer with copy action', agentId: 'alpha', ts: now + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, failedText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const resendButton = chatArea.locator('.message.user', { hasText: failedText }).getByRole('button', { name: 'Resend' });
+    const copyButton = chatArea.locator('.message.agent', { hasText: 'normal answer with copy action' }).locator('.messageCopyButton');
+    await expect(resendButton).toBeVisible({ timeout: 15000 });
+    await expect(copyButton).toBeVisible();
+
+    const styles = await resendButton.evaluate((button) => {
+      const copyButton = document.querySelector('.message.agent .messageCopyButton') as HTMLElement | null;
+      if (!copyButton) throw new Error('Expected an agent copy button for style comparison');
+      const resendStyle = getComputedStyle(button as HTMLElement);
+      const copyStyle = getComputedStyle(copyButton);
+      return {
+        resend: {
+          minHeight: resendStyle.minHeight,
+          borderRadius: resendStyle.borderRadius,
+          backgroundColor: resendStyle.backgroundColor,
+          color: resendStyle.color,
+          fontSize: resendStyle.fontSize,
+          lineHeight: resendStyle.lineHeight,
+          paddingLeft: resendStyle.paddingLeft,
+          paddingRight: resendStyle.paddingRight,
+        },
+        copy: {
+          minHeight: copyStyle.minHeight,
+          borderRadius: copyStyle.borderRadius,
+          backgroundColor: copyStyle.backgroundColor,
+          color: copyStyle.color,
+          fontSize: copyStyle.fontSize,
+          lineHeight: copyStyle.lineHeight,
+          paddingLeft: copyStyle.paddingLeft,
+          paddingRight: copyStyle.paddingRight,
+        },
+      };
+    });
+    expect(styles.resend).toEqual(styles.copy);
+
+    const alignment = await resendButton.evaluate((button) => {
+      const row = button.closest('.userSendFailure') as HTMLElement | null;
+      const status = row?.querySelector('.userSendFailureStatus') as HTMLElement | null;
+      if (!row || !status) throw new Error('Expected failed-send row and status badge');
+      const rowRect = row.getBoundingClientRect();
+      const statusRect = status.getBoundingClientRect();
+      const buttonRect = (button as HTMLElement).getBoundingClientRect();
+      return {
+        rowLeft: Math.round(rowRect.left),
+        statusLeft: Math.round(statusRect.left),
+        resendLeft: Math.round(buttonRect.left),
+        statusRight: Math.round(statusRect.right),
+      };
+    });
+    expect(alignment.statusLeft).toBe(alignment.rowLeft);
+    expect(alignment.resendLeft).toBeGreaterThan(alignment.statusRight);
+  });
+
+  test('should keep failed send status on the original chat when user switches before failure returns', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const failedText = 'delayed failure belongs to original chat';
+    let sendCalls = 0;
+    let releaseFailure: () => void = () => {};
+    const failureReady = new Promise<void>((resolve) => {
+      releaseFailure = resolve;
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendCalls++;
+        await failureReady;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'Failed to send prompt to agent' }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(failedText);
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(1);
+
+    await page.click('button.newChatButton');
+    await expect(chatArea.locator('.message.system', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
+    releaseFailure();
+    await expect(chatArea.locator('.message.user', { hasText: failedText })).toHaveCount(0);
+
+    await page.locator('.chatHistoryItem', { hasText: failedText }).click();
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: failedText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(chatArea.locator('.message.system', { hasText: 'Send failed' })).toHaveCount(0);
+  });
+
+  test('should disable failed message resend while the chat has an active run', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const pendingText = 'saved failed message waits for active run';
+    const chatId = `ui-resend-disabled-running-${Date.now()}`;
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-active-run' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'thinking',
+            ready: false,
+            activeTurn: {
+              id: 'turn-active-run',
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI resend disabled while running',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, sendStatus: 'failed', sendError: 'Failed to send prompt to agent', resendAgentIds: ['alpha'], resendMessage: pendingText, ts: Date.now() },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeEnabled();
+
+    await textarea.fill('keep alpha busy');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeDisabled();
+  });
+
+  test('should mark the source user message failed when an auto orchestration follow-up send fails', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = '@alpha @beta coordinate follow-up failure';
+    const schedulerDecision = '{ "done": false, "nextAgent": "beta", "instruction": "Beta follow-up instruction" }';
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        if (body.agentId === 'beta') {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: false, error: 'Failed to send prompt to agent' }),
+          });
+          return;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-scheduler', phase: 'thinking', turn: { id: 'turn-scheduler-follow-up' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-scheduler-follow-up',
+              fullText: schedulerDecision,
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: schedulerDecision }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sendRequests.some((request) => request.agentId === 'beta'), { timeout: 10000 }).toBe(true);
+
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: userText });
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(chatArea.locator('.message.system', { hasText: 'Auto orchestration error' })).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
+  });
+
+  test('should remove partial discussion agent messages when one initial send fails', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = '@alpha @beta discuss partial initial failure';
+    const sendRequests: any[] = [];
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        if (body.agentId === 'beta') {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: false, error: 'Failed to send prompt to agent' }),
+          });
+          return;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: 'turn-alpha-discussion-partial' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'thinking',
+            ready: false,
+            activeTurn: {
+              id: 'turn-alpha-discussion-partial',
+              fullText: '',
+              done: false,
+              phase: 'thinking',
+              statusText: 'Thinking',
+              events: [],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.getByRole('button', { name: /Discussion/ }).click();
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sendRequests.some((request) => request.agentId === 'beta'), { timeout: 10000 }).toBe(true);
+
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: userText });
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(chatArea.locator('.message.agent')).toHaveCount(0);
+  });
+
+  test('should keep resend disabled for mentioned legacy failures until agents load', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const pendingText = '@beta wait for agents before resend';
+    const cleanedText = 'wait for agents before resend';
+    const chatId = `ui-resend-waits-for-agents-${Date.now()}`;
+    const sendRequests: any[] = [];
+    let releaseAgents: () => void = () => {};
+    const agentsReady = new Promise<void>((resolve) => {
+      releaseAgents = resolve;
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await agentsReady;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        sendRequests.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-beta', phase: 'thinking', turn: { id: 'turn-beta-after-agents-load' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-beta-after-agents-load',
+              fullText: 'Beta handled resend after agents loaded.',
+              done: true,
+              phase: 'done',
+              statusText: '',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: 'Beta handled resend after agents loaded.' }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async ({ chatId, pendingText }) => {
+      const chat = {
+        id: chatId,
+        name: 'UI resend waits for agents',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
+          { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
+        ],
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, pendingText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    const resendButton = failedUserMessage.getByRole('button', { name: 'Resend' });
+    await expect(resendButton).toBeDisabled();
+
+    releaseAgents();
+    await expect(resendButton).toBeEnabled({ timeout: 10000 });
+    await resendButton.click();
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'beta', text: cleanedText, chatId });
   });
 
   test('should create a new chat', async ({ page }) => {
@@ -437,10 +1010,10 @@ test.describe('Chat UI', () => {
     console.log('PASS: lastChatId restored from server, chat loaded from SQLite after reload');
   });
 
-  test('should resend the last unanswered message after loading a saved session', async ({ page }) => {
+  test('should show failed saved message status and resend only after user clicks Resend', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = 'UI recovery should resend this message';
-    const replyText = 'Auto-resend completed.';
+    const replyText = 'Manual resend completed.';
     const chatId = `ui-auto-resend-${Date.now()}`;
     const resumeRequests: string[] = [];
     const sendRequests: any[] = [];
@@ -509,6 +1082,7 @@ test.describe('Chat UI', () => {
         messages: [
           { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
           { id: 'a1', type: 'agent', content: '⚠️ Failed to send prompt to agent', agentId: 'alpha', ts: Date.now() + 1 },
+          { id: 's1', type: 'system', content: 'Send failed: Failed to send prompt to agent', ts: Date.now() + 2 },
         ],
         agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
       };
@@ -526,18 +1100,25 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
 
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
+    await expect(chatArea.locator('.message.system', { hasText: 'Send failed' })).toHaveCount(0);
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
     expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
     await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
     expect(pollCount).toBeGreaterThan(0);
     await expect(chatArea.locator('text=turn_in_progress')).toHaveCount(0);
-    console.log('PASS: unanswered saved message was resent once after session load');
+    console.log('PASS: failed saved message waited for manual resend');
   });
 
-  test('should resend a mentioned message to the correct agent when multiple agents exist', async ({ page }) => {
+  test('should manually resend a mentioned failed message to the correct agent when multiple agents exist', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = '@beta please resume only beta';
     const cleanedText = 'please resume only beta';
@@ -625,8 +1206,12 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
 
     expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'beta', text: cleanedText, chatId });
@@ -634,7 +1219,7 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
   });
 
-  test('should use scheduler routing when auto-resending a multi-agent message', async ({ page }) => {
+  test('should use scheduler routing when manually resending a failed multi-agent message', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = '@alpha @beta coordinate this resend';
     const cleanedText = 'coordinate this resend';
@@ -722,7 +1307,11 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBeGreaterThan(0);
     expect(sendRequests[0].agentId).toBe('scheduler');
     expect(sendRequests[0].text).toContain(cleanedText);
@@ -730,7 +1319,7 @@ test.describe('Chat UI', () => {
     expect(sendRequests.some((request) => request.agentId === 'beta')).toBe(false);
   });
 
-  test('should resend to scheduler again when the failed auto-mode message was sent to scheduler', async ({ page }) => {
+  test('should manually resend to scheduler again when the failed auto-mode message was sent to scheduler', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = '@alpha @beta coordinate this resend after scheduler failure';
     const cleanedText = 'coordinate this resend after scheduler failure';
@@ -815,7 +1404,11 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
     expect(sendRequests[0].agentId).toBe('scheduler');
     expect(sendRequests[0].text).toContain(cleanedText);
@@ -823,7 +1416,7 @@ test.describe('Chat UI', () => {
     expect(sendRequests.some((request) => request.agentId === 'beta')).toBe(false);
   });
 
-  test('should use auto mode to resend a two-agent mention to the scheduler-selected worker only', async ({ page }) => {
+  test('should use auto mode to manually resend a two-agent mention to the scheduler-selected worker only', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const pendingText = '@alpha @beta choose the right worker for this resend';
     const selectedInstruction = 'Beta should handle this resent prompt';
@@ -928,7 +1521,11 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
+    await expectCompactFailedSendStatus(failedUserMessage);
+    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(2);
 
     expect(sendRequests[0].agentId).toBe('scheduler');
@@ -936,11 +1533,11 @@ test.describe('Chat UI', () => {
     expect(sendRequests.some((request) => request.agentId === 'alpha')).toBe(false);
   });
 
-  test('should block manual send while auto-resend is running', async ({ page }) => {
+  test('should allow manual send while a failed saved message waits for manual resend', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
-    const pendingText = 'UI recovery should keep running while resend is active';
-    const manualText = 'manual message during auto resend';
+    const pendingText = 'UI recovery should wait for manual resend';
+    const manualText = 'manual message while resend is available';
     const chatId = `ui-auto-resend-block-send-${Date.now()}`;
     const resumeRequests: string[] = [];
     const sendRequests: any[] = [];
@@ -1006,7 +1603,7 @@ test.describe('Chat UI', () => {
     await page.evaluate(async ({ chatId, pendingText }) => {
       const chat = {
         id: chatId,
-        name: 'UI auto resend blocks manual send',
+        name: 'UI failed saved message does not block manual send',
         ts: Date.now(),
         messages: [
           { id: 'u1', type: 'user', content: pendingText, ts: Date.now() },
@@ -1028,21 +1625,19 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await expect(chatArea.locator(`.message.user:has-text("${pendingText}")`)).toBeVisible({ timeout: 15000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expectCompactFailedSendStatus(failedUserMessage);
     await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(1);
-    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
-    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
-
-    await expect(page.getByRole('button', { name: 'Stop generation' })).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await textarea.fill(manualText);
     await textarea.press('Enter');
 
-    await expect.poll(() => interruptRequests.length, { timeout: 10000 }).toBe(1);
-    await page.waitForTimeout(500);
-    expect(sendRequests).toHaveLength(1);
-    await expect(chatArea.locator('.message.user', { hasText: manualText })).toHaveCount(0);
-    await expect(textarea).toHaveValue(manualText);
-    console.log('PASS: manual send was blocked while auto-resend was running');
+    await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
+    expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: manualText, chatId });
+    await expect(chatArea.locator('.message.user', { hasText: manualText })).toBeVisible({ timeout: 10000 });
+    expect(interruptRequests).toHaveLength(0);
+    console.log('PASS: manual send remained available while failed saved message waited for manual resend');
   });
 
   test('forwards ACP permission questions to the user inline in chat', async ({ page }) => {

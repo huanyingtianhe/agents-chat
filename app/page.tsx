@@ -897,6 +897,15 @@ export default function Page() {
     });
   }
 
+  function getStatusDisplayText(label: string | undefined, fallback: string): string {
+    const trimmed = label?.trim() || '';
+    return /[A-Za-z0-9]/.test(trimmed) ? trimmed : fallback;
+  }
+
+  function getSidebarStatusDisplayLabel(label: string): string {
+    return getStatusDisplayText(label, 'Running').match(/[A-Za-z0-9]+/)?.[0] || 'Running';
+  }
+
   const getChatSidebarStatus= useCallback((chatId: string): { label: string; kind: 'running' | 'done' | 'error' } | null => {
     const hasActiveRun = isChatRunning(chatId);
     const chatMessages = chatMessagesRef.current[chatId] || (chatId === currentChatId ? messages : []);
@@ -3987,7 +3996,11 @@ export default function Page() {
                             <span className="chatHistoryMeta" suppressHydrationWarning>
                               {mounted ? new Date(chat.ts).toLocaleDateString() : ''}
                             </span>
-                            {sidebarStatus ? <span className={`chatStatusBadge ${sidebarStatus.kind}`}>{sidebarStatus.label}</span> : null}
+                            {sidebarStatus ? (
+                              <span className={`chatStatusBadge ${sidebarStatus.kind}`} title={getStatusDisplayText(sidebarStatus.label, 'Running')}>
+                                {getSidebarStatusDisplayLabel(sidebarStatus.label)}
+                              </span>
+                            ) : null}
                           </span>
                         </span>
                       </button>
@@ -4587,7 +4600,7 @@ export default function Page() {
                 )}
                 {message.pending && !message.content && !(message.parts && message.parts.length > 0) && !message.userRequest ? (
                   <div className="thinkingWrap">
-                    <span className="thinkingText">{message.statusText || 'Thinking'}</span>
+                    <span className="thinkingText">{getStatusDisplayText(message.statusText, 'Thinking')}</span>
                     <span className="thinkingDots"><span /><span /><span /></span>
                   </div>
                 ) : (() => {
@@ -4596,7 +4609,7 @@ export default function Page() {
                   const isCollapsed = expandedMessages[message.id] === false;
                   return (
                     <>
-                      {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{message.statusText}</div> : null}
+                      {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{getStatusDisplayText(message.statusText, 'Generating')}</div> : null}
                       {hasParts ? (() => {
                         const totalText = message.parts!.filter(p => p.kind === 'text').map(p => p.text).join('');
                         const partsLong = totalText.length > 400 || totalText.split('\n').length > 12 || message.parts!.length > 6;
@@ -4641,7 +4654,7 @@ export default function Page() {
                           {message.pending && (
                             <div className="streamingIndicator">
                               <span className="streamingPulse" />
-                              <span>{message.statusText || 'Generating'}</span>
+                              <span>{getStatusDisplayText(message.statusText, 'Generating')}</span>
                             </div>
                           )}
                         </div>
@@ -4674,7 +4687,7 @@ export default function Page() {
                           {message.pending && message.content && (
                             <div className="streamingIndicator">
                               <span className="streamingPulse" />
-                              <span>{message.statusText || 'Generating'}</span>
+                              <span>{getStatusDisplayText(message.statusText, 'Generating')}</span>
                             </div>
                           )}
                           {renderAgentUserRequest(message)}

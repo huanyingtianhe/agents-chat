@@ -147,6 +147,177 @@ test.describe('Chat UI', () => {
     await expect(page.locator('text=GitHub Copilot CLI')).toBeVisible({ timeout: 10000 });
   });
 
+  test('should show only the first word of chat status in the sidebar', async ({ page }) => {
+    const chatId = `ui-sidebar-status-${Date.now()}`;
+    const chatName = 'Sidebar long status';
+    const fullStatus = 'Starting environment';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, chatName, fullStatus }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: chatName,
+        ts: now,
+        messages: [
+          { id: 'u1', type: 'user', content: 'trigger long sidebar status', ts: now },
+          { id: 'a1', type: 'agent', content: '', agentId: 'alpha', pending: true, statusText: fullStatus, ts: now + 1 },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, chatName, fullStatus });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const chatRow = page.locator('.chatHistoryRow', { hasText: chatName }).first();
+    await expect(chatRow).toBeVisible({ timeout: 10000 });
+    const statusBadge = chatRow.locator('.chatStatusBadge.running');
+    await expect(statusBadge).toHaveText('Starting');
+    await expect(statusBadge).not.toHaveText(fullStatus);
+  });
+
+  test('should not show punctuation-only chat status in the sidebar', async ({ page }) => {
+    const chatId = `ui-sidebar-punctuation-status-${Date.now()}`;
+    const chatName = 'Sidebar punctuation status';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, chatName }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: chatName,
+        ts: now,
+        messages: [
+          { id: 'u1', type: 'user', content: 'trigger punctuation sidebar status', ts: now },
+          { id: 'a1', type: 'agent', content: '', agentId: 'alpha', pending: true, statusText: '.', ts: now + 1 },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, chatName });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const chatRow = page.locator('.chatHistoryRow', { hasText: chatName }).first();
+    await expect(chatRow).toBeVisible({ timeout: 10000 });
+    const statusBadge = chatRow.locator('.chatStatusBadge.running');
+    await expect(statusBadge).toHaveText('Running');
+    await expect(statusBadge).not.toHaveText('.');
+  });
+
+  test('should not show punctuation-only ongoing message status', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const chatId = `ui-message-punctuation-status-${Date.now()}`;
+    const chatName = 'Message punctuation status';
+    const partialText = 'partial answer with punctuation status';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, chatName, partialText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: chatName,
+        ts: now,
+        messages: [
+          { id: 'u1', type: 'user', content: 'trigger empty punctuation message status', ts: now },
+          { id: 'a1', type: 'agent', content: '', agentId: 'alpha', pending: true, statusText: '.', ts: now + 1 },
+          { id: 'u2', type: 'user', content: 'trigger content punctuation message status', ts: now + 2 },
+          { id: 'a2', type: 'agent', content: partialText, agentId: 'alpha', pending: true, statusText: '.', ts: now + 3 },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, chatName, partialText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(chatArea.locator('.thinkingText').first()).toHaveText('Thinking');
+    await expect(chatArea.locator('.thinkingText').first()).not.toHaveText('.');
+
+    const contentPending = chatArea.locator('.message.agent', { hasText: partialText });
+    await expect(contentPending.locator('.ptyStatusBadge')).toHaveText('Generating');
+    await expect(contentPending.locator('.streamingIndicator')).toContainText('Generating');
+    await expect(contentPending.locator('.ptyStatusBadge')).not.toHaveText('.');
+    await expect(contentPending.locator('.streamingIndicator')).not.toContainText('.');
+  });
+
   test('should send a message and receive a reply', async ({ page }) => {
     const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
     await textarea.fill('What is 1+1? Reply with just the number.');

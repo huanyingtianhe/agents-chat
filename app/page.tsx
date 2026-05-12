@@ -992,7 +992,10 @@ export default function Page() {
     if (!agentFilterOverflowOpen) return;
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.chatAgentFilterOverflow')) setAgentFilterOverflowOpen(false);
+      // Menu is portaled to body, so check both the trigger and the menu itself
+      if (!target.closest('.chatAgentFilterOverflow') && !target.closest('.chatAgentFilterOverflowMenu')) {
+        setAgentFilterOverflowOpen(false);
+      }
     };
     document.addEventListener('click', handleClick, true);
     return () => document.removeEventListener('click', handleClick, true);

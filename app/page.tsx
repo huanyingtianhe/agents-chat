@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
@@ -296,6 +296,15 @@ type ContentPart =
   | { kind: 'user_answer'; text: string }
   | { kind: 'text'; text: string };
 
+type ChatAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+  kind: 'image' | 'file';
+};
+
 type AgentUserRequestOption = {
   optionId: string;
   kind?: string;
@@ -398,6 +407,7 @@ type ChatMessage = {
   ptyPhase?: PtyPhase;
   parts?: ContentPart[];
   userRequest?: AgentUserRequest;
+  attachments?: ChatAttachment[];
   sendStatus?: 'failed';
   sendError?: string;
   resendAgentIds?: string[];
@@ -453,6 +463,7 @@ type DispatchToAgentOptions = {
   summary?: boolean;
   chatId?: string;
   commentId?: string;
+  attachments?: ChatAttachment[];
 };
 
 type OrchestrationState = {
@@ -469,6 +480,7 @@ type OrchestrationState = {
   sourceChatId?: string;
   sourceAgentIds?: string[];
   sourceMessage?: string;
+  sourceAttachments?: ChatAttachment[];
 };
 
 class PromptSendFailedError extends Error {
@@ -486,6 +498,10 @@ const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 const STORAGE_AGENT_FILTER = 'acp_agent_filter_v1';
 const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
+
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 const THEMES = {
   aurora: {
@@ -664,6 +680,249 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${value >= 10 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function getAttachmentKind(mimeType: string): ChatAttachment['kind'] {
+  return mimeType.startsWith('image/') ? 'image' : 'file';
+}
+
+const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  bash: 'text/x-shellscript',
+  bat: 'text/x-bat',
+  c: 'text/x-c',
+  cc: 'text/x-c++',
+  cer: 'application/x-pem-file',
+  cfg: 'text/plain',
+  clj: 'text/x-clojure',
+  cljs: 'text/x-clojure',
+  cmake: 'text/x-cmake',
+  cmd: 'text/x-bat',
+  conf: 'text/plain',
+  cpp: 'text/x-c++',
+  crt: 'application/x-pem-file',
+  cshtml: 'text/html',
+  csproj: 'text/xml',
+  cs: 'text/x-csharp',
+  css: 'text/css',
+  csv: 'text/csv',
+  cjs: 'text/javascript',
+  cts: 'text/typescript',
+  cxx: 'text/x-c++',
+  dart: 'text/x-dart',
+  diff: 'text/x-diff',
+  dockerfile: 'text/x-dockerfile',
+  editorconfig: 'text/plain',
+  env: 'text/plain',
+  erl: 'text/x-erlang',
+  ex: 'text/x-elixir',
+  exs: 'text/x-elixir',
+  fish: 'text/x-shellscript',
+  fs: 'text/x-fsharp',
+  fsproj: 'text/xml',
+  fsi: 'text/x-fsharp',
+  fsx: 'text/x-fsharp',
+  gitignore: 'text/plain',
+  go: 'text/x-go',
+  gql: 'text/graphql',
+  gradle: 'text/x-gradle',
+  graphql: 'text/graphql',
+  h: 'text/x-c',
+  hpp: 'text/x-c++',
+  hrl: 'text/x-erlang',
+  htm: 'text/html',
+  html: 'text/html',
+  hxx: 'text/x-c++',
+  ini: 'text/plain',
+  java: 'text/x-java-source',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  js: 'text/javascript',
+  json: 'application/json',
+  jsx: 'text/javascript',
+  key: 'application/x-pem-file',
+  kt: 'text/x-kotlin',
+  kts: 'text/x-kotlin',
+  less: 'text/css',
+  lock: 'text/plain',
+  log: 'text/plain',
+  lua: 'text/x-lua',
+  m: 'text/x-objective-c',
+  md: 'text/markdown',
+  mm: 'text/x-objective-c++',
+  mjs: 'text/javascript',
+  mts: 'text/typescript',
+  patch: 'text/x-diff',
+  pem: 'application/x-pem-file',
+  php: 'text/x-php',
+  pl: 'text/x-perl',
+  pm: 'text/x-perl',
+  pdf: 'application/pdf',
+  png: 'image/png',
+  props: 'text/xml',
+  properties: 'text/plain',
+  proto: 'text/x-protobuf',
+  ps1: 'text/x-powershell',
+  psd1: 'text/x-powershell',
+  psm1: 'text/x-powershell',
+  pub: 'application/x-pem-file',
+  py: 'text/x-python',
+  r: 'text/x-r',
+  razor: 'text/html',
+  rb: 'text/x-ruby',
+  rs: 'text/x-rustsrc',
+  sass: 'text/css',
+  scala: 'text/x-scala',
+  scss: 'text/css',
+  sh: 'text/x-shellscript',
+  sln: 'text/plain',
+  sql: 'text/x-sql',
+  svelte: 'text/html',
+  svg: 'image/svg+xml',
+  swift: 'text/x-swift',
+  targets: 'text/xml',
+  toml: 'text/toml',
+  ts: 'text/typescript',
+  tsbuildinfo: 'application/json',
+  tsx: 'text/typescript',
+  txt: 'text/plain',
+  vb: 'text/x-vb',
+  vbproj: 'text/xml',
+  vue: 'text/html',
+  xaml: 'text/xml',
+  xml: 'text/xml',
+  yaml: 'text/yaml',
+  yml: 'text/yaml',
+  zsh: 'text/x-shellscript',
+};
+
+const ATTACHMENT_MIME_BY_BASENAME: Record<string, string> = {
+  '.babelrc': 'application/json',
+  '.dockerignore': 'text/plain',
+  '.editorconfig': 'text/plain',
+  '.env': 'text/plain',
+  '.env.development': 'text/plain',
+  '.env.example': 'text/plain',
+  '.env.local': 'text/plain',
+  '.env.production': 'text/plain',
+  '.env.test': 'text/plain',
+  '.eslintignore': 'text/plain',
+  '.eslintrc': 'application/json',
+  '.gitattributes': 'text/plain',
+  '.gitignore': 'text/plain',
+  '.npmrc': 'text/plain',
+  '.prettierignore': 'text/plain',
+  '.prettierrc': 'application/json',
+  '.yarnrc': 'text/plain',
+  dockerfile: 'text/x-dockerfile',
+  gemfile: 'text/x-ruby',
+  justfile: 'text/plain',
+  makefile: 'text/x-makefile',
+  procfile: 'text/plain',
+  rakefile: 'text/x-ruby',
+};
+
+const ATTACHMENT_ACCEPT = [
+  'image/*',
+  ...Object.keys(ATTACHMENT_MIME_BY_EXTENSION).map((extension) => `.${extension}`),
+  ...Object.keys(ATTACHMENT_MIME_BY_BASENAME),
+].join(',');
+
+function getAttachmentFileKey(name: string): string {
+  return name.trim().split(/[\\/]/).pop()?.toLowerCase() || '';
+}
+
+function getAttachmentMimeType(name: string, providedMimeType: string): string {
+  const normalized = providedMimeType.trim().toLowerCase();
+  if (normalized && normalized !== 'application/octet-stream') return normalized;
+  const fileKey = getAttachmentFileKey(name);
+  const exact = ATTACHMENT_MIME_BY_BASENAME[fileKey] || ATTACHMENT_MIME_BY_EXTENSION[fileKey];
+  if (exact) return exact;
+  const extension = fileKey.includes('.') ? fileKey.split('.').pop()?.trim().toLowerCase() : '';
+  return (extension && ATTACHMENT_MIME_BY_EXTENSION[extension]) || normalized || 'application/octet-stream';
+}
+
+function withAttachmentDataUrlMimeType(dataUrl: string, mimeType: string): string {
+  return dataUrl.replace(/^data:[^;,]*;base64,/, `data:${mimeType};base64,`);
+}
+
+function getAttachmentTypeLabel(attachment: ChatAttachment): string {
+  const mimeType = attachment.mimeType.trim().toLowerCase();
+  if (attachment.kind === 'image') {
+    const imageType = mimeType.startsWith('image/') ? mimeType.slice('image/'.length).split(/[;+]/)[0] : '';
+    return imageType ? `${imageType.toUpperCase()} image` : 'Image';
+  }
+
+  const extension = attachment.name.includes('.') ? attachment.name.split('.').pop()?.toUpperCase() : '';
+  if (!mimeType || mimeType === 'application/octet-stream') return extension ? `${extension} file` : 'File';
+  if (mimeType === 'application/pdf') return 'PDF';
+  if (extension && Object.values(ATTACHMENT_MIME_BY_EXTENSION).includes(mimeType)) return `${extension} file`;
+  if (mimeType === 'text/plain') return 'Text file';
+  return mimeType;
+}
+
+function getAttachmentIconLabel(attachment: ChatAttachment): string {
+  const extension = attachment.name.includes('.') ? attachment.name.split('.').pop()?.trim().toLowerCase() : '';
+  if (!extension) return 'FILE';
+  const aliases: Record<string, string> = {
+    jpeg: 'JPG',
+    markdown: 'MD',
+    typescript: 'TS',
+    javascript: 'JS',
+  };
+  return (aliases[extension] || extension.toUpperCase()).slice(0, 3);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function filesToAttachments(files: File[], existing: ChatAttachment[]): Promise<{ attachments: ChatAttachment[]; error?: string }> {
+  if (files.length === 0) return { attachments: [] };
+  if (existing.length + files.length > MAX_ATTACHMENTS) return { attachments: [], error: `You can attach up to ${MAX_ATTACHMENTS} files.` };
+  const existingTotal = existing.reduce((sum, attachment) => sum + attachment.size, 0);
+  let newTotal = 0;
+  for (const file of files) {
+    if (file.size > MAX_ATTACHMENT_BYTES) return { attachments: [], error: `${file.name || 'File'} is larger than ${formatBytes(MAX_ATTACHMENT_BYTES)}.` };
+    newTotal += file.size;
+  }
+  if (existingTotal + newTotal > MAX_TOTAL_ATTACHMENT_BYTES) return { attachments: [], error: `Attachments can total up to ${formatBytes(MAX_TOTAL_ATTACHMENT_BYTES)}.` };
+
+  const attachments = await Promise.all(files.map(async (file) => {
+    const name = file.name || 'clipboard-file';
+    const mimeType = getAttachmentMimeType(name, file.type || 'application/octet-stream');
+    const dataUrl = withAttachmentDataUrlMimeType(await readFileAsDataUrl(file), mimeType);
+    return {
+      id: `attachment-${makeId()}`,
+      name,
+      mimeType,
+      size: file.size,
+      dataUrl,
+      kind: getAttachmentKind(mimeType),
+    } satisfies ChatAttachment;
+  }));
+  return { attachments };
+}
+
+function getAttachmentSummaryText(attachments: ChatAttachment[] = []): string {
+  if (attachments.length === 0) return '';
+  return `Attached file(s):\n${attachments.map((a) => `- ${a.name} (${a.mimeType}, ${formatBytes(a.size)})`).join('\n')}`;
+}
+
 function formatMessageTime(ts: number) {
   if (!ts) return '';
   return new Intl.DateTimeFormat('en-US', {
@@ -736,6 +995,9 @@ export default function Page() {
     { id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target one or more agents.', ts: 0 },
   ]);
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isDraggingAttachment, setIsDraggingAttachment] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
@@ -886,6 +1148,7 @@ export default function Page() {
   const shouldStickToBottomRef = useRef(true);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputHistoryRef = useRef<string[]>([]);
   const inputHistoryIndexRef = useRef(-1);
   const inputDraftRef = useRef('');
@@ -1453,6 +1716,48 @@ export default function Page() {
     } catch (err) {
       console.error('Failed to copy message', err);
     }
+  }
+
+  function renderAttachmentsList(list?: ChatAttachment[], mode: 'composer' | 'message' = 'message') {
+    if (!list?.length) return null;
+    return (
+      <div className={mode === 'composer' ? 'attachmentTray' : 'messageAttachments'}>
+        {list.map((attachment) => (
+          <div
+            key={attachment.id}
+            className={mode === 'composer' ? 'attachmentChip' : 'messageAttachment'}
+            title={mode === 'composer' ? `${attachment.name} · ${getAttachmentTypeLabel(attachment)} · ${formatBytes(attachment.size)}` : undefined}
+          >
+            {attachment.kind === 'image' ? (
+              <img
+                src={attachment.dataUrl}
+                alt={attachment.name}
+                className={mode === 'composer' ? 'attachmentThumb' : 'messageAttachmentImage'}
+              />
+            ) : (
+              <div className={mode === 'composer' ? 'attachmentFileIcon' : 'messageAttachmentFileIcon'} aria-hidden="true">
+                <span className="attachmentFileIconLabel">{getAttachmentIconLabel(attachment)}</span>
+              </div>
+            )}
+            <div className="attachmentMeta">
+              <span className="attachmentName" title={attachment.name}>{attachment.name}</span>
+              {mode === 'composer' ? null : <span className="attachmentDetails">{getAttachmentTypeLabel(attachment)} · {formatBytes(attachment.size)}</span>}
+            </div>
+            {mode === 'composer' ? (
+              <button
+                type="button"
+                className="attachmentRemoveButton"
+                aria-label={`Remove ${attachment.name}`}
+                title={`Remove ${attachment.name}`}
+                onClick={() => removeAttachment(attachment.id)}
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   function renderAgentUserRequest(message: ChatMessage) {
@@ -2790,7 +3095,7 @@ export default function Page() {
     }
   }
 
-  async function sendAcpPrompt(runKey: string, agentId: string, pendingId: string, content: string) {
+  async function sendAcpPrompt(runKey: string, agentId: string, pendingId: string, content: string, promptAttachments: ChatAttachment[] = []) {
     const run = sessionRunsRef.current[runKey];
     if (!run || run.ptySendStarted) return false;
 
@@ -2801,6 +3106,7 @@ export default function Page() {
     // using this chat even if the user switches chats while the turn is active.
     const sendChatId = run.chatId;
     const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: sendChatId, messageId: pendingId };
+    if (promptAttachments.length > 0) sendBody.attachments = promptAttachments;
     if (needsContextRestoreRef.current) {
       const historyMessages = chatMessagesRef.current[sendChatId] || (sendChatId === currentChatIdRef.current ? messagesRef.current : []);
       sendBody.chatHistory = historyMessages
@@ -2868,7 +3174,7 @@ export default function Page() {
     notifyRunStateChanged();
 
     try {
-      const sent = await sendAcpPrompt(runKey, agentId, pendingId, content);
+      const sent = await sendAcpPrompt(runKey, agentId, pendingId, content, options?.attachments || []);
       if (!sent) throw new Error('Failed to send prompt to agent');
       return runKey;
     } catch (err) {
@@ -2897,12 +3203,14 @@ export default function Page() {
     error: string,
     resendAgentIds: string[],
     resendMessage: string,
+    resendAttachments?: ChatAttachment[],
   ) {
     updateMessage(userMessageId, {
       sendStatus: 'failed',
       sendError: error || 'Failed to send prompt to agent',
       resendAgentIds,
       resendMessage,
+      attachments: resendAttachments,
     }, chatId);
     void saveChatToHistory(chatId);
   }
@@ -3081,10 +3389,11 @@ export default function Page() {
             void saveAgentComments(agentId, agentComments, agentName);
             current.currentText = textWithoutComments;
           }
+          const finalContent = current.currentText || (turn.error ? `⚠️ ${turn.error}` : '');
           updateMessage(current.pendingId, {
-            content: current.currentText || (turn.error ? `⚠️ ${turn.error}` : ''),
+            content: finalContent,
             pending: false,
-            parts: parts.length ? parts : undefined,
+            parts: finalContent && !current.currentText ? undefined : (parts.length ? parts : undefined),
             userRequest: undefined,
           }, effectiveChatId);
           await acp({ action: 'turn-clear', agentId, chatId: effectiveChatId }).catch(() => null);
@@ -3129,6 +3438,7 @@ export default function Page() {
       err.message,
       state.sourceAgentIds?.length ? state.sourceAgentIds : state.agentIds,
       state.sourceMessage || state.originalTask,
+      state.sourceAttachments,
     );
     delete orchestrationsRef.current[orchestrationId];
     return true;
@@ -3248,6 +3558,9 @@ export default function Page() {
       const agentList = (ext.autoAgentList as string) || '';
       const autoOriginalText = (ext.autoOriginalText as string) || state.originalTask;
       const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
+      const promptAttachments = (ext.promptAttachments as ChatAttachment[]) || [];
+      const dispatchedAttachmentAgents = (ext.dispatchedAttachmentAgents as string[]) || [];
+      const dispatchedAttachmentAgentSet = new Set(dispatchedAttachmentAgents);
 
       // Helper: clear previous turn and wait before next dispatch
       const prepareNextDispatch = async (agentId: string) => {
@@ -3291,10 +3604,14 @@ export default function Page() {
           autoHistory.push({ agent: decision.nextAgent, instruction: decision.instruction || state.originalTask, step: autoStep + 1 });
           state.results = {};
           await prepareNextDispatch(decision.nextAgent);
+          const workerAttachments = dispatchedAttachmentAgentSet.has(decision.nextAgent) ? [] : promptAttachments;
+          dispatchedAttachmentAgentSet.add(decision.nextAgent);
+          ext.dispatchedAttachmentAgents = Array.from(dispatchedAttachmentAgentSet);
           await dispatchOrchestrationStep(orchestrationId, decision.nextAgent, decision.instruction || state.originalTask, 'worker', {
             chatId: orchestrationChatId,
             round: autoStep + 1,
             relation: `Auto: step ${autoStep + 1}`,
+            attachments: workerAttachments,
           });
           return;
         }
@@ -3340,7 +3657,7 @@ export default function Page() {
 
   /* ── Auto (Scheduler) orchestration ── */
 
-  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string, chatId: string) {
+  async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string, chatId: string, promptAttachments: ChatAttachment[] = []) {
     const schedulerAgentId = SCHEDULER_AGENT_ID;
     const agentList = agentIds.map((id) => {
       const a = agents.find((x) => x.id === id);
@@ -3359,6 +3676,7 @@ export default function Page() {
       `\nAvailable agents:\n${agentList}`,
       `\nOriginal user message with agent mentions: ${originalText}`,
       `\nCleaned task text: ${task}`,
+      promptAttachments.length ? `\n${getAttachmentSummaryText(promptAttachments)}` : '',
       '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
       'The nextAgent value must be one of the available mentioned agents above.',
       '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
@@ -3379,9 +3697,84 @@ export default function Page() {
       (state as Record<string, unknown>).autoHistory = history;
       (state as Record<string, unknown>).autoAgentList = agentList;
       (state as Record<string, unknown>).autoOriginalText = originalText;
+      (state as Record<string, unknown>).promptAttachments = promptAttachments;
+      (state as Record<string, unknown>).dispatchedAttachmentAgents = [];
       (state as Record<string, unknown>).autoStep = 0;
       (state as Record<string, unknown>).autoPhase = 'awaiting-plan'; // 'awaiting-plan' | 'awaiting-execution' | 'awaiting-eval' | 'done'
     }
+  }
+
+  async function addFilesToComposer(fileList: FileList | File[]) {
+    const files = Array.from(fileList).filter(Boolean);
+    if (files.length === 0) return;
+    try {
+      const result = await filesToAttachments(files, attachments);
+      if (result.error) {
+        setAttachmentError(result.error);
+        return;
+      }
+      setAttachments((prev) => [...prev, ...result.attachments]);
+      setAttachmentError(null);
+    } catch (err) {
+      setAttachmentError(err instanceof Error ? err.message : 'Failed to read attachment.');
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+    setAttachmentError(null);
+  }
+
+  function clearAttachments() {
+    setAttachments([]);
+    setAttachmentError(null);
+  }
+
+  function getFilesFromClipboard(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
+    const files: File[] = [];
+    const seen = new Set<string>();
+    const addFile = (file: File | null) => {
+      if (!file) return;
+      const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      files.push(file);
+    };
+    Array.from(event.clipboardData.files || []).forEach(addFile);
+    Array.from(event.clipboardData.items || []).forEach((item) => {
+      if (item.kind === 'file') addFile(item.getAsFile());
+    });
+    return files;
+  }
+
+  function handleAttachmentPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = getFilesFromClipboard(event);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addFilesToComposer(files);
+  }
+
+  function dataTransferHasFiles(event: DragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types || []).includes('Files');
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsDraggingAttachment(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setIsDraggingAttachment(false);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLDivElement>) {
+    if (!dataTransferHasFiles(event)) return;
+    event.preventDefault();
+    setIsDraggingAttachment(false);
+    void addFilesToComposer(event.dataTransfer.files);
   }
 
   /* ── Send handler ── */
@@ -3391,12 +3784,13 @@ export default function Page() {
     message: string,
     originalText: string,
     orchestrationId: string,
-    options?: { chatId?: string; relation?: string; sourceUserMessageId?: string },
+    options?: { chatId?: string; relation?: string; sourceUserMessageId?: string; attachments?: ChatAttachment[] },
   ) {
     const useOrchestration = agentIds.length > 1;
     const effectiveMessage = message || originalText;
     const effectiveChatId = options?.chatId || currentChatIdRef.current;
-    const dispatchOptions = { chatId: effectiveChatId, relation: options?.relation };
+    const promptAttachments = options?.attachments || [];
+    const dispatchOptions = { chatId: effectiveChatId, relation: options?.relation, attachments: promptAttachments };
 
     if (useOrchestration) {
       orchestrationsRef.current[orchestrationId] = {
@@ -3413,6 +3807,7 @@ export default function Page() {
         sourceChatId: effectiveChatId,
         sourceAgentIds: agentIds,
         sourceMessage: effectiveMessage,
+        sourceAttachments: promptAttachments,
       };
     }
 
@@ -3422,7 +3817,7 @@ export default function Page() {
         return;
       }
       if (orchestrationMode === 'auto') {
-        await runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText, effectiveChatId);
+        await runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText, effectiveChatId, promptAttachments);
       } else if (orchestrationMode === 'discussion') {
         const results = await Promise.allSettled(agentIds.map((id) => dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', {
           ...dispatchOptions,
@@ -3462,45 +3857,48 @@ export default function Page() {
 
     clearUserMessageSendFailure(chatId, message.id);
     try {
-      await dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id });
+      await dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id, attachments: message.attachments || [] });
     } catch (err) {
-      markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage);
+      markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage, message.attachments);
     }
   }
 
   async function handleSend() {
     const text = input.trim();
-    if (!text || agents.length === 0) return;
+    const sendAttachments = attachments;
+    if ((!text && sendAttachments.length === 0) || agents.length === 0) return;
 
+    const textForAgent = text || 'Please review the attached file(s).';
     // Auto-create a chat if none is active (empty homepage state)
     if (!currentChatIdRef.current) {
       await createNewChat();
     }
 
     const currentChatAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId;
-    const { agentIds, message } = parseAgents(text, agents, currentChatAgentId);
+    const { agentIds, message } = parseAgents(textForAgent, agents, currentChatAgentId);
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
 
     shouldStickToBottomRef.current = true;
-    const userMessageId = addMessage({ type: 'user', content: text }, sendChatId);
+    const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
     setInput('');
+    clearAttachments();
 
     // Persist user message to SQLite immediately (don't wait for agent response)
     void saveChatToHistory(sendChatId);
 
     // Save to input history
     const hist = inputHistoryRef.current;
-    if (hist[hist.length - 1] !== text) hist.push(text);
+    if (text && hist[hist.length - 1] !== text) hist.push(text);
     if (hist.length > 100) hist.splice(0, hist.length - 100);
     inputHistoryIndexRef.current = -1;
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(hist)); } catch { /* ignore */ }
 
     try {
-      await dispatchParsedPrompt(agentIds, message, text, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId });
+      await dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
     } catch (err) {
-      markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || text);
+      markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
     }
   }
 
@@ -3754,10 +4152,15 @@ export default function Page() {
     const existingHistoryEntry = chatHistory.find(c => c.id === currentId);
     const currentName = currentId === currentChatIdRef.current ? chatNameRef.current : (existingHistoryEntry?.name || currentId);
     const userMsgs = currentMessages.filter(m => m.type === 'user');
+    const firstUser = userMsgs[0];
+    const attachmentName = firstUser?.attachments?.[0]?.name;
     // Prefer the existing history name (which includes renames) over auto-generated name
     // But treat the default "New Chat" name as if no name exists, so it auto-generates from the first message
     const hasCustomName = existingHistoryEntry?.name && existingHistoryEntry.name !== 'New Chat';
-    const name = hasCustomName ? existingHistoryEntry!.name : (userMsgs.length > 0 ? userMsgs[0].content.slice(0, 50) : currentName);
+    const autoName = firstUser
+      ? (firstUser.content.trim().slice(0, 50) || (attachmentName ? `Attached file: ${attachmentName}`.slice(0, 50) : currentName))
+      : currentName;
+    const name = hasCustomName ? existingHistoryEntry!.name : autoName;
     const persistable = getPersistableMessages(currentMessages);
 
     const agentSessions = currentId === currentChatIdRef.current
@@ -4908,6 +5311,7 @@ export default function Page() {
                             </div>
                           )}
                         </div>
+                        {renderAttachmentsList(message.attachments)}
                         {renderAgentUserRequest(message)}
                         <div className="messageActions">
                           {partsLong && !message.pending && (
@@ -4933,6 +5337,7 @@ export default function Page() {
                           <div className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
                           </div>
+                          {renderAttachmentsList(message.attachments)}
                           {renderUserSendFailure(message)}
                           {message.pending && message.content && (
                             <div className="streamingIndicator">
@@ -4981,7 +5386,20 @@ export default function Page() {
                 </div>
               )}
               <div className="inputArea">
-                <div className="composerShell">
+                <div
+                  className={`composerShell ${isDraggingAttachment ? 'dragOver' : ''}`}
+                  onDragOver={handleComposerDragOver}
+                  onDragLeave={handleComposerDragLeave}
+                  onDrop={handleComposerDrop}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept={ATTACHMENT_ACCEPT}
+                    className="srOnlyFileInput"
+                    onChange={(e) => { void addFilesToComposer(e.currentTarget.files || []); e.currentTarget.value = ''; }}
+                  />
                   {mentionedAgentIds.length > 0 ? (
                     <div className="targetPills">
                       {mentionedAgentIds.map((agentId) => (
@@ -5029,12 +5447,24 @@ export default function Page() {
                       )}
                     </div>
                   ) : null}
+                  {renderAttachmentsList(attachments, 'composer')}
+                  {attachmentError ? <div className="attachmentError" role="alert">{attachmentError}</div> : null}
                   <div className="composerRow">
+                    <button
+                      type="button"
+                      className="attachButton"
+                      aria-label="Attach files or photos"
+                      title="Attach files or photos"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      📎
+                    </button>
                     <textarea
                       ref={composerRef}
                       className="composerTextarea"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
+                      onPaste={handleAttachmentPaste}
                       onKeyDown={(e) => {
                         if (filteredAgents.length > 0) {
                           if (e.key === 'ArrowDown') { e.preventDefault(); setMentionSelectedIndex((p) => (p + 1) % filteredAgents.length); return; }
@@ -5085,7 +5515,7 @@ export default function Page() {
                     <div className="composerActions composerInlineActions">
                       {isCurrentChatSending
                         ? <button className="sendButton stopButton" onClick={() => void handleStop()} aria-label="Stop generation">⏹</button>
-                        : <button className="sendButton" onClick={() => void handleSend()} disabled={agents.length === 0 || !input.trim()} aria-label="Send message">
+                        : <button className="sendButton" onClick={() => void handleSend()} disabled={agents.length === 0 || (!input.trim() && attachments.length === 0)} aria-label="Send message">
                             <span className="sendButtonIcon">↑</span>
                           </button>
                       }
@@ -6759,6 +7189,153 @@ export default function Page() {
           0%, 80%, 100% { transform: translateY(0) scale(0.75); opacity: 0.45; }
           40% { transform: translateY(-3px) scale(1); opacity: 1; }
         }
+
+        :global(.messageAttachments),
+        :global(.attachmentTray) {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 10px;
+        }
+        :global(.attachmentTray) {
+          margin-top: 0;
+          padding: 4px 2px 0;
+        }
+        :global(.attachmentChip),
+        :global(.messageAttachment) {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          max-width: min(100%, 340px);
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: var(--panel-strong);
+          overflow: hidden;
+        }
+        :global(.attachmentChip) {
+          position: relative;
+          min-height: 26px;
+          padding: 4px 28px 4px 8px;
+          background: color-mix(in srgb, var(--panel-strong) 88%, var(--accent-soft));
+        }
+        :global(.messageAttachment) {
+          padding: 6px 8px;
+        }
+        :global(.attachmentThumb) {
+          width: 16px;
+          height: 16px;
+          object-fit: cover;
+          border-radius: 3px;
+          border: 1px solid var(--border);
+          background: var(--panel-soft);
+          flex: 0 0 auto;
+        }
+        :global(.messageAttachmentImage) {
+          width: 120px;
+          height: 90px;
+          object-fit: cover;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: var(--panel-soft);
+          flex: 0 0 auto;
+        }
+        :global(.attachmentFileIcon) {
+          width: 16px;
+          height: 16px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 2px;
+          background: transparent;
+          border: 0;
+          color: var(--accent);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 8px;
+          font-weight: 800;
+          line-height: 1;
+          flex: 0 0 auto;
+        }
+        :global(.attachmentFileIconLabel) {
+          display: block;
+          max-width: 16px;
+          overflow: hidden;
+          text-align: center;
+          letter-spacing: 0;
+          text-transform: uppercase;
+        }
+        :global(.messageAttachmentFileIcon) {
+          width: 42px;
+          height: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 8px;
+          background: var(--accent-soft);
+          border: 1px solid var(--border-strong);
+          color: var(--accent);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1;
+          flex: 0 0 auto;
+        }
+        :global(.attachmentMeta) {
+          display: flex;
+          flex-direction: column;
+          flex: 1 1 auto;
+          min-width: 0;
+          gap: 2px;
+        }
+        :global(.attachmentName) {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--text);
+          font-size: 13px;
+          font-weight: 700;
+        }
+        :global(.attachmentChip .attachmentName) {
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 16px;
+        }
+        :global(.attachmentDetails) {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--muted);
+          font-size: 11px;
+        }
+        :global(.attachmentRemoveButton) {
+          position: absolute;
+          top: 50%;
+          right: 5px;
+          width: 18px;
+          height: 18px;
+          min-width: 18px;
+          padding: 0;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          background: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+          color: var(--text-soft);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          line-height: 1;
+          transform: translateY(-50%);
+        }
+        :global(.attachmentRemoveButton):hover,
+        :global(.attachmentRemoveButton):focus-visible {
+          color: var(--danger);
+          border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+          background: color-mix(in srgb, var(--danger) 10%, transparent);
+        }
+        :global(.attachmentError) {
+          color: var(--danger);
+          font-size: 12px;
+          padding: 0 4px;
+        }
         .composerStack {
           position: relative;
           width: 100%;
@@ -6800,7 +7377,7 @@ export default function Page() {
           padding: 10px 12px;
           background: var(--panel-soft);
           border: 1px solid var(--border);
-          border-radius: 22px;
+          border-radius: 12px;
           box-shadow: 0 10px 26px rgba(0, 0, 0, 0.06);
           transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
         }
@@ -6808,6 +7385,21 @@ export default function Page() {
           border-color: var(--border-strong);
           box-shadow: 0 0 0 1px var(--accent-soft), 0 14px 30px rgba(0, 0, 0, 0.08);
           transform: translateY(-1px);
+        }
+        .composerShell.dragOver {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px var(--accent-soft), 0 14px 30px rgba(0, 0, 0, 0.1);
+        }
+        .srOnlyFileInput {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
         }
         .orchPill {
           cursor: pointer;
@@ -6920,6 +7512,25 @@ export default function Page() {
         }
         .composerHint {
           display: none;
+        }
+        .attachButton {
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          padding: 0;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--panel-strong);
+          color: var(--muted);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          align-self: flex-end;
+        }
+        .attachButton:hover {
+          color: var(--accent);
+          border-color: var(--border-strong);
+          background: var(--accent-soft);
         }
         .sendButton,
         .modalActions button {
@@ -7545,7 +8156,7 @@ export default function Page() {
             max-width: none;
           }
           .composerShell {
-            border-radius: 24px;
+            border-radius: 12px;
           }
           .sendButton {
             width: 40px;
@@ -7601,7 +8212,7 @@ export default function Page() {
           .composerShell {
             width: 100%;
             padding: 10px 12px;
-            border-radius: 20px;
+            border-radius: 12px;
           }
           .composerRow {
             gap: 8px;

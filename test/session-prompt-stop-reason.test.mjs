@@ -5,14 +5,14 @@ const routeSource = readFileSync(new URL('../app/api/acp/route.ts', import.meta.
 
 assert.match(
   routeSource,
-  /function\s+finishTurnAfterPromptResult\s*\([\s\S]*?stopReason[\s\S]*?turn\.fullText\.trim\(\)[\s\S]*?Agent stopped without a response/,
-  'route.ts should convert a non-end_turn prompt result with no text into a visible turn error',
+  /function\s+finishTurnAfterPromptResult\s*\([\s\S]*?!turn\.fullText\.trim\(\)[\s\S]*?Agent stopped without a response/,
+  'route.ts should convert any prompt result with no text into a visible turn error',
 );
 
 assert.match(
   routeSource,
-  /stopReason\s*!==\s*['"]end_turn['"]/,
-  'route.ts should explicitly check for stopReason !== end_turn',
+  /stopReason\s*===\s*['"]end_turn['"]\s*&&\s*queueSyntheticUserRequestFromText/,
+  'route.ts should still allow synthetic user requests on end_turn before applying the no-text error',
 );
 
 const helperCalls = routeSource.match(/finishTurnAfterPromptResult\(/g) || [];

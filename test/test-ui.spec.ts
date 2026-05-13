@@ -15,8 +15,11 @@ const ADMIN_PASS = 'admin123';
 /** Login helper — fills credentials and waits for redirect to main page */
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
-  await page.fill('input[placeholder="Admin username"]', ADMIN_USER);
-  await page.fill('input[placeholder="Password"]', ADMIN_PASS);
+  const usernameInput = page.locator('input[placeholder="Admin username"]');
+  const passwordInput = page.locator('input[placeholder="Password"]');
+  await usernameInput.fill(ADMIN_USER);
+  await passwordInput.fill(ADMIN_PASS);
+  await expect(page.locator('button[type="submit"]')).toBeEnabled({ timeout: 10000 });
   await page.click('button[type="submit"]');
   // Wait for the chat UI to be visible — could be chatContainer or emptyHomepage
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
@@ -95,6 +98,9 @@ test.describe('Chat UI', () => {
   test('should display chat input and send button', async ({ page }) => {
     await ensureActiveChat(page);
     await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
+    await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
+    await page.setViewportSize({ width: 420, height: 800 });
+    await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
@@ -153,6 +159,208 @@ test.describe('Chat UI', () => {
     expect(copiedText).not.toContain('thinking');
     expect(copiedText).not.toContain('tool');
     await expect(copyButton).toContainText('Copied');
+  });
+
+
+  test.describe('ACP attachments', () => {
+    async function mockAcpForAttachments(page: Page, captured: any[]) {
+      await page.route('**/api/acp', async (route) => {
+        const body = route.request().postDataJSON() as any;
+        if (body?.action === 'list-agents') {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }] }),
+          });
+          return;
+        }
+        if (body?.action === 'send') {
+          captured.push(body);
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, phase: 'idle', sessionId: 's1', turn: { id: 't1' } }),
+          });
+          return;
+        }
+        if (body?.action === 'poll') {
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, activeTurn: { done: true, fullText: 'received attachment', phase: 'done' } }),
+          });
+          return;
+        }
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+      });
+      await page.reload();
+      await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    }
+
+    test('upload button queues and sends image attachment', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+      await page.locator('input[type="file"]').setInputFiles({ name: 'tiny.png', mimeType: 'image/png', buffer: png });
+      await expect(page.locator('.attachmentChip', { hasText: 'tiny.png' })).toBeVisible();
+
+      await page.fill('textarea[placeholder="Message Agents Chat"]', 'please inspect this image');
+      await page.click('button[aria-label="Send message"]');
+
+      await expect(page.locator('.message.user .messageAttachments', { hasText: 'tiny.png' })).toBeVisible();
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].text).toBe('please inspect this image');
+      expect(captured[0].attachments).toHaveLength(1);
+      expect(captured[0].attachments[0]).toMatchObject({ name: 'tiny.png', mimeType: 'image/png', kind: 'image' });
+      expect(captured[0].attachments[0].dataUrl).toContain('data:image/png;base64,');
+    });
+
+    test('paste screenshot queues attachment without inserting text', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.focus('textarea[placeholder="Message Agents Chat"]');
+      await page.evaluate(async () => {
+        const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+        const file = new File([bytes], 'pasted.png', { type: 'image/png' });
+        const data = new DataTransfer();
+        data.items.add(file);
+        const textarea = document.querySelector('textarea[placeholder="Message Agents Chat"]') as HTMLTextAreaElement;
+        textarea.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      });
+
+      await expect(page.locator('.attachmentChip', { hasText: 'pasted.png' })).toBeVisible();
+      await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toHaveValue('');
+    });
+
+    test('file attachment chip has compact icon and remove control', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'tunel.py',
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.alloc(845, 1),
+      });
+      const chip = page.locator('.attachmentChip', { hasText: 'tunel.py' });
+      await expect(chip).toBeVisible();
+      await expect(chip).toHaveAttribute('title', 'tunel.py · PY file · 845 B');
+      await expect(chip.locator('.attachmentDetails')).toHaveCount(0);
+      await expect(chip.locator('.attachmentFileIcon')).toHaveCSS('width', '16px');
+      await expect(chip.locator('.attachmentFileIcon')).toHaveCSS('height', '16px');
+      await expect(chip.locator('.attachmentFileIcon')).toHaveText('PY');
+      const chipBox = await chip.boundingBox();
+      const inputBox = await page.locator('.composerTextarea').boundingBox();
+      expect(chipBox?.height).toBeLessThan(inputBox?.height || 0);
+
+      const removeButton = chip.locator('button[aria-label="Remove tunel.py"]');
+      await expect(removeButton).toBeVisible();
+      await expect(removeButton).toHaveCSS('position', 'absolute');
+      await removeButton.click();
+      await expect(page.locator('.attachmentChip', { hasText: 'tunel.py' })).toHaveCount(0);
+    });
+
+    test('attachment-only send is allowed and uses fallback prompt', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'note.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('hello attachment'),
+      });
+      const sendButton = page.locator('button[aria-label="Send message"]');
+      await expect(sendButton).toBeEnabled();
+      await sendButton.click();
+
+      await expect(page.locator('.message.user .messageAttachments', { hasText: 'note.txt' })).toBeVisible();
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].text).toBe('Please review the attached file(s).');
+      expect(captured[0].attachments).toHaveLength(1);
+      expect(captured[0].attachments[0]).toMatchObject({ name: 'note.txt', mimeType: 'text/plain', kind: 'file' });
+    });
+
+    test('markdown attachment send is normalized from octet-stream', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'README.md',
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.from('# Context\n\nHello'),
+      });
+      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize the context');
+      await page.click('button[aria-label="Send message"]');
+
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].attachments).toHaveLength(1);
+      expect(captured[0].attachments[0]).toMatchObject({ name: 'README.md', mimeType: 'text/markdown', kind: 'file' });
+      expect(captured[0].attachments[0].dataUrl).toContain('data:text/markdown;base64,');
+    });
+
+    test('PowerShell attachment send is normalized from octet-stream', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'setup-node.ps1',
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.from('Write-Host "hello"'),
+      });
+      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize the script');
+      await page.click('button[aria-label="Send message"]');
+
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].attachments).toHaveLength(1);
+      expect(captured[0].attachments[0]).toMatchObject({ name: 'setup-node.ps1', mimeType: 'text/x-powershell', kind: 'file' });
+      expect(captured[0].attachments[0].dataUrl).toContain('data:text/x-powershell;base64,');
+    });
+
+    test('common code attachments are normalized from octet-stream', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles([
+        { name: 'Program.cs', mimeType: 'application/octet-stream', buffer: Buffer.from('class Program {}') },
+        { name: 'main.cpp', mimeType: 'application/octet-stream', buffer: Buffer.from('int main() { return 0; }') },
+        { name: 'App.java', mimeType: 'application/octet-stream', buffer: Buffer.from('class App {}') },
+        { name: 'server.go', mimeType: 'application/octet-stream', buffer: Buffer.from('package main') },
+      ]);
+      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize these code files');
+      await page.click('button[aria-label="Send message"]');
+
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].attachments).toHaveLength(4);
+      expect(captured[0].attachments.map((attachment: any) => [attachment.name, attachment.mimeType])).toEqual([
+        ['Program.cs', 'text/x-csharp'],
+        ['main.cpp', 'text/x-c++'],
+        ['App.java', 'text/x-java-source'],
+        ['server.go', 'text/x-go'],
+      ]);
+    });
+
+    test('repo-common text attachments are normalized from octet-stream', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.locator('input[type="file"]').setInputFiles([
+        { name: 'test.mjs', mimeType: 'application/octet-stream', buffer: Buffer.from('export default 1;') },
+        { name: '.env.local', mimeType: 'application/octet-stream', buffer: Buffer.from('A=B') },
+        { name: 'server.log', mimeType: 'application/octet-stream', buffer: Buffer.from('ready') },
+        { name: 'cert.pem', mimeType: 'application/octet-stream', buffer: Buffer.from('-----BEGIN CERTIFICATE-----') },
+        { name: 'diagram.svg', mimeType: 'application/octet-stream', buffer: Buffer.from('<svg></svg>') },
+      ]);
+      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize these files');
+      await page.click('button[aria-label="Send message"]');
+
+      await expect.poll(() => captured.length).toBeGreaterThan(0);
+      expect(captured[0].attachments).toHaveLength(5);
+      expect(captured[0].attachments.map((attachment: any) => [attachment.name, attachment.mimeType])).toEqual([
+        ['test.mjs', 'text/javascript'],
+        ['.env.local', 'text/plain'],
+        ['server.log', 'text/plain'],
+        ['cert.pem', 'application/x-pem-file'],
+        ['diagram.svg', 'image/svg+xml'],
+      ]);
+    });
   });
 
   test('should display agent in sidebar', async ({ page }) => {

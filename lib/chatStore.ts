@@ -11,6 +11,15 @@ import Database from 'better-sqlite3';
 const DATA_DIR = path.join(process.cwd(), '.data');
 const DB_PATH = path.join(DATA_DIR, 'chats.db');
 
+export type StoredAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+  kind: 'image' | 'file';
+};
+
 export type StoredMessage = {
   id: string;
   type: 'user' | 'agent' | 'system';
@@ -22,6 +31,7 @@ export type StoredMessage = {
   summary?: boolean;
   parts?: unknown[];
   userRequest?: unknown;
+  attachments?: StoredAttachment[];
   sendStatus?: 'failed';
   sendError?: string;
   resendAgentIds?: string[];

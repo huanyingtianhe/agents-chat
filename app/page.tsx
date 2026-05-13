@@ -1728,7 +1728,18 @@ export default function Page() {
             className={mode === 'composer' ? 'attachmentChip' : 'messageAttachment'}
             title={mode === 'composer' ? `${attachment.name} · ${getAttachmentTypeLabel(attachment)} · ${formatBytes(attachment.size)}` : undefined}
           >
-            {attachment.kind === 'image' ? (
+            {attachment.kind === 'image' && mode === 'message' ? (
+              <span className="messageAttachmentImageWrap" tabIndex={0} aria-label={`Preview ${attachment.name}`}>
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="messageAttachmentImage"
+                />
+                <span className="messageAttachmentPreview" aria-hidden="true">
+                  <img src={attachment.dataUrl} alt="" className="messageAttachmentPreviewImage" />
+                </span>
+              </span>
+            ) : attachment.kind === 'image' ? (
               <img
                 src={attachment.dataUrl}
                 alt={attachment.name}
@@ -7219,7 +7230,9 @@ export default function Page() {
           background: color-mix(in srgb, var(--panel-strong) 88%, var(--accent-soft));
         }
         :global(.messageAttachment) {
+          position: relative;
           padding: 6px 8px;
+          overflow: visible;
         }
         :global(.attachmentThumb) {
           width: 16px;
@@ -7238,6 +7251,58 @@ export default function Page() {
           border: 1px solid var(--border);
           background: var(--panel-soft);
           flex: 0 0 auto;
+        }
+        :global(.messageAttachmentImageWrap) {
+          position: relative;
+          display: inline-flex;
+          flex: 0 0 auto;
+          outline: none;
+        }
+        :global(.messageAttachmentImageWrap:focus-visible .messageAttachmentImage) {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
+        }
+        :global(.messageAttachmentPreview) {
+          position: absolute;
+          left: 0;
+          bottom: calc(100% + 10px);
+          z-index: 40;
+          display: block;
+          max-width: min(72vw, 560px);
+          max-height: min(70vh, 520px);
+          padding: 8px;
+          border: 1px solid var(--border-strong);
+          border-radius: 8px;
+          background: var(--panel-strong);
+          box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transform: translateY(4px) scale(0.985);
+          transform-origin: bottom left;
+          transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+        }
+        .message.user :global(.messageAttachmentPreview) {
+          right: 0;
+          left: auto;
+          transform-origin: bottom right;
+        }
+        :global(.messageAttachmentImageWrap:hover .messageAttachmentPreview),
+        :global(.messageAttachmentImageWrap:focus-visible .messageAttachmentPreview),
+        :global(.messageAttachmentImageWrap:focus-within .messageAttachmentPreview) {
+          opacity: 1;
+          visibility: visible;
+          transform: translateY(0) scale(1);
+        }
+        :global(.messageAttachmentPreviewImage) {
+          display: block;
+          width: auto;
+          height: auto;
+          max-width: calc(min(72vw, 560px) - 16px);
+          max-height: calc(min(70vh, 520px) - 16px);
+          object-fit: contain;
+          border-radius: 6px;
+          background: var(--panel-soft);
         }
         :global(.attachmentFileIcon) {
           width: 16px;

@@ -205,7 +205,12 @@ test.describe('Chat UI', () => {
       await page.fill('textarea[placeholder="Message Agents Chat"]', 'please inspect this image');
       await page.click('button[aria-label="Send message"]');
 
-      await expect(page.locator('.message.user .messageAttachments', { hasText: 'tiny.png' })).toBeVisible();
+      const sentAttachment = page.locator('.message.user .messageAttachment', { hasText: 'tiny.png' });
+      await expect(sentAttachment).toBeVisible();
+      await expect(sentAttachment.locator('.messageAttachmentImage')).toBeVisible();
+      await expect(sentAttachment.locator('.messageAttachmentPreview')).toBeHidden();
+      await sentAttachment.locator('.messageAttachmentImageWrap').hover();
+      await expect(sentAttachment.locator('.messageAttachmentPreview')).toBeVisible();
       await expect.poll(() => captured.length).toBeGreaterThan(0);
       expect(captured[0].text).toBe('please inspect this image');
       expect(captured[0].attachments).toHaveLength(1);

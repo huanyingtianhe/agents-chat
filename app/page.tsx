@@ -1005,6 +1005,7 @@ export default function Page() {
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [runVersion, setRunVersion] = useState(0);
   const [chatName, setChatName] = useState('New Chat');
@@ -1238,6 +1239,7 @@ export default function Page() {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (lightboxImage) { setLightboxImage(null); return; }
       if (agentFilterOverflowOpen) { setAgentFilterOverflowOpen(false); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
       if (showAddAgent) { setShowAddAgent(false); return; }
@@ -1248,7 +1250,7 @@ export default function Page() {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
+  }, [lightboxImage, agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
 
   // Close agent filter overflow menu when clicking outside
   useEffect(() => {
@@ -1729,7 +1731,10 @@ export default function Page() {
             title={mode === 'composer' ? `${attachment.name} · ${getAttachmentTypeLabel(attachment)} · ${formatBytes(attachment.size)}` : undefined}
           >
             {attachment.kind === 'image' && mode === 'message' ? (
-              <span className="messageAttachmentImageWrap" tabIndex={0} aria-label={`Preview ${attachment.name}`}>
+              <span className="messageAttachmentImageWrap" tabIndex={0} aria-label={`Preview ${attachment.name}`}
+                onClick={() => { setLightboxImage(attachment.dataUrl); }}
+                style={{ cursor: 'pointer' }}
+              >
                 <img
                   src={attachment.dataUrl}
                   alt={attachment.name}
@@ -5948,6 +5953,13 @@ export default function Page() {
         </div>
       )}
 
+      {lightboxImage && (
+        <div className="lightboxOverlay" onClick={() => setLightboxImage(null)}>
+          <img src={lightboxImage} className="lightboxImg" alt="Full size preview" onClick={(e) => e.stopPropagation()} />
+          <button className="lightboxClose" onClick={() => setLightboxImage(null)} aria-label="Close">×</button>
+        </div>
+      )}
+
       <style jsx>{`
         .page {
           height: 100vh;
@@ -8736,6 +8748,40 @@ export default function Page() {
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
         .addCommentFloatingBtn:hover { opacity: 0.85; }
+        .lightboxOverlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.85);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10000;
+          cursor: pointer;
+        }
+        .lightboxImg {
+          max-width: 90vw;
+          max-height: 90vh;
+          border-radius: 8px;
+          box-shadow: 0 4px 32px rgba(0,0,0,0.5);
+          cursor: default;
+        }
+        .lightboxClose {
+          position: fixed;
+          top: 16px;
+          right: 24px;
+          background: rgba(255,255,255,0.15);
+          border: none;
+          color: #fff;
+          font-size: 28px;
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .lightboxClose:hover { background: rgba(255,255,255,0.3); }
       `}</style>
     </main>
   );

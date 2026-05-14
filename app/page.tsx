@@ -128,6 +128,8 @@ const COMMENT_SIDEBAR_CARD_PADDING = 120;
 const COMMENT_SIDEBAR_CARD_GAP = 8;
 const COMMENT_SIDEBAR_COLLAPSED_CARD_HEIGHT = 54;
 const COMMENT_SIDEBAR_EXPANDED_CARD_HEIGHT = 118;
+const CHAT_ACTION_MENU_WIDTH = 132;
+const CHAT_ACTION_MENU_HEIGHT = 124;
 
 type FileWorkspaceState = {
   tab: LeftSidebarTab;
@@ -566,35 +568,66 @@ const THEMES = {
       '--comment-user-color': '#58a6ff',
     },
   },
-  forest: {
-    label: 'Forest',
-    emoji: '🌲',
+  vsCodeDark: {
+    label: 'VS Code Dark',
+    emoji: '▣',
     values: {
-      '--bg': '#081410',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(16,185,129,0.2), transparent 28%), radial-gradient(circle at bottom right, rgba(132,204,22,0.16), transparent 24%), linear-gradient(180deg, #0a1611 0%, #07110d 100%)',
-      '--header-bg': 'rgba(8, 19, 15, 0.88)',
-      '--panel-bg': 'rgba(10, 22, 17, 0.8)',
-      '--panel-strong': '#11271d',
-      '--panel-soft': '#173126',
-      '--border': 'rgba(74, 222, 128, 0.14)',
-      '--border-strong': 'rgba(52, 211, 153, 0.28)',
-      '--text': '#ecfff4',
-      '--text-soft': '#b5d9c4',
-      '--muted': '#7ca191',
-      '--accent': '#34d399',
-      '--accent-2': '#84cc16',
-      '--accent-soft': 'rgba(52, 211, 153, 0.11)',
-      '--accent-strong': 'rgba(132, 204, 22, 0.18)',
-      '--message-user': 'linear-gradient(135deg, rgba(52,211,153,0.13), rgba(132,204,22,0.13))',
-      '--message-agent': 'rgba(10, 22, 17, 0.9)',
-      '--summary-glow': 'rgba(52,211,153,0.16)',
-      '--input-bg': '#173126',
-      '--code-bg': '#0d1b14',
-      '--success': '#bbf7d0',
-      '--danger': '#f87171',
-      '--shadow': '0 20px 60px rgba(3, 10, 7, 0.48)',
+      '--bg': '#1e1e1e',
+      '--bg-accent': 'linear-gradient(180deg, #1f1f1f 0%, #1e1e1e 52%, #181818 100%)',
+      '--header-bg': 'rgba(37, 37, 38, 0.94)',
+      '--panel-bg': 'rgba(37, 37, 38, 0.88)',
+      '--panel-strong': '#252526',
+      '--panel-soft': '#2d2d30',
+      '--border': 'rgba(128, 128, 128, 0.18)',
+      '--border-strong': 'rgba(0, 122, 204, 0.42)',
+      '--text': '#cccccc',
+      '--text-soft': '#b3b3b3',
+      '--muted': '#858585',
+      '--accent': '#3794ff',
+      '--accent-2': '#007acc',
+      '--accent-soft': 'rgba(55, 148, 255, 0.13)',
+      '--accent-strong': 'rgba(0, 122, 204, 0.24)',
+      '--message-user': 'linear-gradient(135deg, rgba(55,148,255,0.12), rgba(0,122,204,0.10))',
+      '--message-agent': 'rgba(37, 37, 38, 0.94)',
+      '--summary-glow': 'rgba(55,148,255,0.14)',
+      '--input-bg': '#3c3c3c',
+      '--code-bg': '#1e1e1e',
+      '--success': '#89d185',
+      '--danger': '#f48771',
+      '--shadow': '0 22px 58px rgba(0, 0, 0, 0.42)',
       '--comment-agent-color': '#f0c040',
       '--comment-user-color': '#58a6ff',
+    },
+  },
+  claude: {
+    label: 'Claude',
+    emoji: '✦',
+    values: {
+      '--bg': '#f7f2e8',
+      '--bg-accent': 'radial-gradient(circle at top left, rgba(196, 95, 65, 0.14), transparent 30%), radial-gradient(circle at bottom right, rgba(83, 102, 121, 0.08), transparent 26%), linear-gradient(180deg, #fbf7ef 0%, #f1e8dc 100%)',
+      '--header-bg': 'rgba(250, 246, 238, 0.9)',
+      '--panel-bg': 'rgba(255, 251, 243, 0.78)',
+      '--panel-strong': '#fffaf2',
+      '--panel-soft': '#f1e8dc',
+      '--border': 'rgba(88, 70, 60, 0.13)',
+      '--border-strong': 'rgba(196, 95, 65, 0.28)',
+      '--text': '#2f2722',
+      '--text-soft': '#6f625a',
+      '--muted': '#97897d',
+      '--accent': '#c45f41',
+      '--accent-2': '#536679',
+      '--accent-soft': 'rgba(196, 95, 65, 0.12)',
+      '--accent-strong': 'rgba(83, 102, 121, 0.14)',
+      '--message-user': 'linear-gradient(135deg, rgba(196,95,65,0.11), rgba(83,102,121,0.09))',
+      '--message-agent': 'rgba(255, 250, 242, 0.9)',
+      '--summary-glow': 'rgba(196, 95, 65, 0.12)',
+      '--input-bg': '#fffaf2',
+      '--code-bg': '#eee3d6',
+      '--success': '#218a54',
+      '--danger': '#c2413b',
+      '--shadow': '0 22px 58px rgba(75, 54, 43, 0.16)',
+      '--comment-agent-color': '#a35d00',
+      '--comment-user-color': '#2f6f9f',
     },
   },
   pearl: {
@@ -628,40 +661,21 @@ const THEMES = {
       '--comment-user-color': '#58a6ff',
     },
   },
-  velvet: {
-    label: 'Velvet',
-    emoji: '🪄',
-    values: {
-      '--bg': '#120b1d',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(217,70,239,0.22), transparent 30%), radial-gradient(circle at bottom right, rgba(59,130,246,0.16), transparent 26%), linear-gradient(180deg, #160d23 0%, #0f0918 100%)',
-      '--header-bg': 'rgba(18, 10, 30, 0.9)',
-      '--panel-bg': 'rgba(19, 11, 31, 0.82)',
-      '--panel-strong': '#1a102b',
-      '--panel-soft': '#23153a',
-      '--border': 'rgba(217, 70, 239, 0.16)',
-      '--border-strong': 'rgba(96, 165, 250, 0.22)',
-      '--text': '#f7ecff',
-      '--text-soft': '#cbb9df',
-      '--muted': '#8d7aa6',
-      '--accent': '#d946ef',
-      '--accent-2': '#60a5fa',
-      '--accent-soft': 'rgba(217, 70, 239, 0.12)',
-      '--accent-strong': 'rgba(96, 165, 250, 0.14)',
-      '--message-user': 'linear-gradient(135deg, rgba(217,70,239,0.14), rgba(96,165,250,0.12))',
-      '--message-agent': 'rgba(20, 11, 31, 0.92)',
-      '--summary-glow': 'rgba(217,70,239,0.14)',
-      '--input-bg': '#23153a',
-      '--code-bg': '#150e24',
-      '--success': '#86efac',
-      '--danger': '#fb7185',
-      '--shadow': '0 24px 64px rgba(10, 6, 18, 0.5)',
-      '--comment-agent-color': '#f0c040',
-      '--comment-user-color': '#58a6ff',
-    },
-  },
 } as const;
 
 type ThemeId = keyof typeof THEMES;
+const DEFAULT_THEME_ID: ThemeId = 'aurora';
+const LEGACY_THEME_ID_MAP: Record<string, ThemeId> = {
+  oneDark: 'vsCodeDark',
+  forest: DEFAULT_THEME_ID,
+  velvet: DEFAULT_THEME_ID,
+};
+
+function normalizeThemeId(value: unknown): ThemeId {
+  if (typeof value !== 'string') return DEFAULT_THEME_ID;
+  if (value in THEMES) return value as ThemeId;
+  return LEGACY_THEME_ID_MAP[value] || DEFAULT_THEME_ID;
+}
 
 /* ────────── Helpers ────────── */
 
@@ -1020,11 +1034,10 @@ export default function Page() {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  const chatMenuButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
-  const [agentFilterOverflowOpen, setAgentFilterOverflowOpen] = useState(false);
-  const [maxVisibleAgents, setMaxVisibleAgents] = useState(4);
   function switchAgentFilter(agentId: string | null) {
     if (agentId === chatAgentFilter) return;
     // Save current chat before switching
@@ -1143,8 +1156,6 @@ export default function Page() {
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
-  const filterRowRef = useRef<HTMLDivElement | null>(null);
-  const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
   const sidebarDragRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1164,6 +1175,8 @@ export default function Page() {
     return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q)));
   }, [input, agents]);
 
+  const chatFilterAgents = useMemo(() => agents.filter((agent) => agent.id !== SCHEDULER_AGENT_ID), [agents]);
+
   const mentionedAgentIds = useMemo(() => getMentionedAgentIds(input, agents), [input, agents]);
   const orchestrationEnabled = mentionedAgentIds.length > 1;
 
@@ -1174,7 +1187,8 @@ export default function Page() {
     });
   }, [agents, messages]);
 
-  const activeTheme = THEMES[themeId];
+  const normalizedThemeId = normalizeThemeId(themeId);
+  const activeTheme = THEMES[normalizedThemeId];
   const themeStyle = activeTheme.values as React.CSSProperties;
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
   const isCurrentChatSending = useMemo(() => isChatRunning(currentChatId), [currentChatId, runVersion]);
@@ -1240,7 +1254,6 @@ export default function Page() {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (lightboxImage) { setLightboxImage(null); return; }
-      if (agentFilterOverflowOpen) { setAgentFilterOverflowOpen(false); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
       if (showAddAgent) { setShowAddAgent(false); return; }
       if (showAddRelayAgent) { setShowAddRelayAgent(false); return; }
@@ -1250,27 +1263,13 @@ export default function Page() {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [lightboxImage, agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
-
-  // Close agent filter overflow menu when clicking outside
-  useEffect(() => {
-    if (!agentFilterOverflowOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // Menu is portaled to body, so check both the trigger and the menu itself
-      if (!target.closest('.chatAgentFilterOverflow') && !target.closest('.chatAgentFilterOverflowMenu')) {
-        setAgentFilterOverflowOpen(false);
-      }
-    };
-    document.addEventListener('click', handleClick, true);
-    return () => document.removeEventListener('click', handleClick, true);
-  }, [agentFilterOverflowOpen]);
+  }, [lightboxImage, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
 
   // Sidebar resize drag handler
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!sidebarDragRef.current) return;
-      const newWidth = Math.max(200, Math.min(600, e.clientX));
+      const newWidth = Math.max(260, Math.min(600, e.clientX));
       setSidebarWidth(newWidth);
     };
     const onMouseUp = () => {
@@ -1285,33 +1284,13 @@ export default function Page() {
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
   }, []);
 
-  // Dynamically compute how many agent filter tabs fit in the row
   useEffect(() => {
-    const row = filterRowRef.current;
-    if (!row || agents.length === 0) return;
-    const computeMax = () => {
-      const rowWidth = row.clientWidth;
-      const gap = 4;
-      const moreBtnWidth = 38; // "···" button
-      const allBtnWidth = 34; // "All" button
-      // Estimate each agent button width from name length: ~6.5px per char + 22px padding/border
-      const agentWidths = agents.map(a => Math.ceil((a.name || a.id).length * 6.5) + 22);
-      let used = allBtnWidth + gap;
-      let fits = 0;
-      for (let i = 0; i < agentWidths.length; i++) {
-        const remaining = agents.length - i - 1;
-        const reserveMore = remaining > 0 ? moreBtnWidth + gap : 0;
-        if (used + agentWidths[i] + gap + reserveMore > rowWidth) break;
-        used += agentWidths[i] + gap;
-        fits++;
-      }
-      setMaxVisibleAgents(Math.max(1, fits));
-    };
-    const observer = new ResizeObserver(computeMax);
-    observer.observe(row);
-    computeMax();
-    return () => observer.disconnect();
-  }, [agents]);
+    if (chatFilterAgents.length === 0) return; // agents not loaded yet — don't clobber saved filter
+    if (chatAgentFilter && !chatFilterAgents.some((agent) => agent.id === chatAgentFilter)) {
+      setChatAgentFilter(null);
+      try { window.localStorage.removeItem(STORAGE_AGENT_FILTER); } catch { /* ignore */ }
+    }
+  }, [chatAgentFilter, chatFilterAgents]);
 
   useEffect(() => {
     const activeRequestIds = new Set<string>();
@@ -1390,7 +1369,11 @@ export default function Page() {
     } catch { /* ignore */ }
     try {
       const savedTheme = window.localStorage.getItem(STORAGE_THEME);
-      if (savedTheme && savedTheme in THEMES) setThemeId(savedTheme as ThemeId);
+      if (savedTheme) {
+        const nextThemeId = normalizeThemeId(savedTheme);
+        setThemeId(nextThemeId);
+        if (nextThemeId !== savedTheme) window.localStorage.setItem(STORAGE_THEME, nextThemeId);
+      }
     } catch { /* ignore */ }
     void loadAgents();
   }, []);
@@ -1504,7 +1487,12 @@ export default function Page() {
 
   useEffect(() => {
     if (!mounted) return;
-    window.localStorage.setItem(STORAGE_THEME, themeId);
+    const nextThemeId = normalizeThemeId(themeId);
+    if (nextThemeId !== themeId) {
+      setThemeId(nextThemeId);
+      return;
+    }
+    window.localStorage.setItem(STORAGE_THEME, nextThemeId);
   }, [themeId, mounted]);
 
   useEffect(() => {
@@ -1522,7 +1510,7 @@ export default function Page() {
     if (!openChatMenuId) return;
     function handlePointerDown(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
-      if (!target?.closest('.chatActionsWrap')) {
+      if (!target?.closest('.chatActionsWrap') && !target?.closest('.chatActionsMenu')) {
         setOpenChatMenuId(null);
       }
     }
@@ -4471,7 +4459,7 @@ export default function Page() {
   /* ────────── Render ────────── */
 
   return (
-    <main className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
+    <main className="page" style={themeStyle} data-theme={normalizedThemeId} suppressHydrationWarning>
       <header className="header">
         <div className="headerLeft">
           <h1>🤖 Agents Chat</h1>
@@ -4496,8 +4484,8 @@ export default function Page() {
                     key={id}
                     type="button"
                     role="menuitemradio"
-                    aria-checked={themeId === id}
-                    className={`themeOption ${themeId === id ? 'activeThemeOption' : ''}`}
+                    aria-checked={normalizedThemeId === id}
+                    className={`themeOption ${normalizedThemeId === id ? 'activeThemeOption' : ''}`}
                     onClick={() => {
                       setThemeId(id as ThemeId);
                       setShowThemeMenu(false);
@@ -4507,7 +4495,7 @@ export default function Page() {
                       <span className="themeChipEmoji">{theme.emoji}</span>
                       <span>{theme.label}</span>
                     </span>
-                    {themeId === id ? <span className="themeCheck">✓</span> : null}
+                    {normalizedThemeId === id ? <span className="themeCheck">✓</span> : null}
                   </button>
                 ))}
               </div>
@@ -4553,46 +4541,21 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
-              {(() => {
-                const visibleAgents = agents.slice(0, maxVisibleAgents);
-                const overflowAgents = agents.slice(maxVisibleAgents);
-                // If the active filter is in overflow, swap it into visible
-                const activeInOverflow = chatAgentFilter && overflowAgents.some(a => a.id === chatAgentFilter);
-                const displayVisible = activeInOverflow
-                  ? [...visibleAgents.slice(0, maxVisibleAgents - 1), agents.find(a => a.id === chatAgentFilter)!]
-                  : visibleAgents;
-                const displayOverflow = activeInOverflow
-                  ? [visibleAgents[maxVisibleAgents - 1], ...overflowAgents.filter(a => a.id !== chatAgentFilter)]
-                  : overflowAgents;
-
-                return (
-                  <div className="chatAgentFilterRow" ref={filterRowRef}>
-                    <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => { switchAgentFilter(null); setAgentFilterOverflowOpen(false); }}>All</button>
-                    {displayVisible.map(a => (
-                      <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
-                    ))}
-                    {displayOverflow.length > 0 && (
-                      <div className="chatAgentFilterOverflow">
-                        <button ref={overflowBtnRef} className={`chatAgentFilterBtn chatAgentFilterMoreBtn ${agentFilterOverflowOpen ? 'active' : ''}`} onClick={() => setAgentFilterOverflowOpen(v => !v)}>···</button>
-                        {agentFilterOverflowOpen && (() => {
-                          const rect = overflowBtnRef.current?.getBoundingClientRect();
-                          if (!rect) return null;
-                          return createPortal(
-                            <div className="chatAgentFilterOverflowMenu" style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, zIndex: 9999 }}>
-                              {displayOverflow.map(a => (
-                                <button key={a.id} className={`chatAgentFilterOverflowItem ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
-                              ))}
-                            </div>,
-                            document.body
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              <div className="chatAgentFilterRow" aria-label="Filter chats by primary agent">
+                <select
+                  className="chatAgentFilterSelect"
+                  value={chatAgentFilter ?? ''}
+                  onChange={(e) => switchAgentFilter(e.target.value ? e.target.value : null)}
+                  aria-label="Filter chats by primary agent"
+                >
+                  <option value="">All agents</option>
+                  {chatFilterAgents.map(a => (
+                    <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                  ))}
+                </select>
+              </div>
               <div className="newChatRow">
-                <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
+                <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${chatFilterAgents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
               </div>
               {(() => {
                 const allChats = (currentChatId && !chatHistory.some(c => c.id === currentChatId))
@@ -4640,6 +4603,10 @@ export default function Page() {
                       <div className="chatActionsWrap">
                         <button
                           type="button"
+                          ref={(node) => {
+                            if (node) chatMenuButtonRefs.current.set(chat.id, node);
+                            else chatMenuButtonRefs.current.delete(chat.id);
+                          }}
                           className={`chatMoreBtn ${openChatMenuId === chat.id ? 'active' : ''}`}
                           title="Chat actions"
                           aria-haspopup="menu"
@@ -4651,8 +4618,13 @@ export default function Page() {
                         >
                           ...
                         </button>
-                        {openChatMenuId === chat.id ? (
-                          <div className="chatActionsMenu" role="menu">
+                        {openChatMenuId === chat.id ? (() => {
+                          const rect = chatMenuButtonRefs.current.get(chat.id)?.getBoundingClientRect();
+                          if (!rect) return null;
+                          const left = Math.max(8, Math.min(rect.right - CHAT_ACTION_MENU_WIDTH, window.innerWidth - CHAT_ACTION_MENU_WIDTH - 8));
+                          const top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - CHAT_ACTION_MENU_HEIGHT - 8));
+                          return createPortal(
+                            <div className="chatActionsMenu" role="menu" style={{ ...themeStyle, position: 'fixed', top, left, right: 'auto', width: CHAT_ACTION_MENU_WIDTH, zIndex: 9999 }}>
                             <button
                               type="button"
                               className="chatActionItem"
@@ -4689,8 +4661,10 @@ export default function Page() {
                               >
                                 Delete
                               </button>
-                          </div>
-                        ) : null}
+                              </div>,
+                              document.body
+                            );
+                          })() : null}
                       </div>
                     </div>
                   );
@@ -4788,6 +4762,7 @@ export default function Page() {
             className="sidebarResizeHandle"
             onMouseDown={(e) => {
               e.preventDefault();
+              setOpenChatMenuId(null);
               sidebarDragRef.current = true;
               document.body.style.cursor = 'col-resize';
               document.body.style.userSelect = 'none';
@@ -5250,7 +5225,7 @@ export default function Page() {
               <h2 className="emptyHomepageTitle">Agents Chat</h2>
               <p className="emptyHomepageSubtitle">Start a new conversation with your agents</p>
               <button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>
-                + New Chat{chatAgentFilter ? ` with ${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter}` : ''}
+                + New Chat{chatAgentFilter ? ` with ${chatFilterAgents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter}` : ''}
               </button>
             </div>
           </div>
@@ -6314,7 +6289,9 @@ export default function Page() {
         }
         .participantsList {
           display: grid;
+          grid-template-columns: minmax(0, 1fr);
           gap: 8px;
+          min-width: 0;
         }
         .chatAgentFilterRow {
           display: flex;
@@ -6323,34 +6300,24 @@ export default function Page() {
           align-items: center;
           flex-shrink: 0;
         }
-        .chatAgentFilterBtn {
-          padding: 4px 10px;
+        .chatAgentFilterSelect {
+          flex: 1 1 auto;
+          min-width: 0;
+          padding: 6px 10px;
           border-radius: 8px;
           border: 1px solid var(--border);
-          background: transparent;
-          color: var(--text-soft);
-          font-size: 11px;
-          cursor: pointer;
-          transition: all 0.15s;
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-        .chatAgentFilterBtn:hover {
+          background: var(--panel-soft);
           color: var(--text);
+          font-size: 12px;
+          cursor: pointer;
+          outline: none;
+          transition: border-color 0.15s, background 0.15s;
+        }
+        .chatAgentFilterSelect:hover {
           border-color: var(--border-strong);
         }
-        .chatAgentFilterBtn.active {
-          background: var(--accent-soft);
-          color: var(--accent);
+        .chatAgentFilterSelect:focus {
           border-color: var(--accent);
-          font-weight: 600;
-        }
-        .chatAgentFilterOverflow {
-          position: relative;
-        }
-        .chatAgentFilterMoreBtn {
-          font-weight: 900;
-          letter-spacing: 1px;
         }
         .newChatRow {
           display: flex;
@@ -6410,7 +6377,7 @@ export default function Page() {
         }
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; word-break: break-word; }
+        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
         .chatHistoryMetaRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         .chatHistoryMeta { font-size: 11px; color: var(--muted); }
         .chatStatusBadge {
@@ -6436,6 +6403,7 @@ export default function Page() {
           border-radius: 14px;
           border: 1px solid transparent;
           position: relative;
+          min-width: 0;
           transition: all 0.12s ease;
         }
         .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
@@ -6470,11 +6438,13 @@ export default function Page() {
           justify-content: center;
           transition: all 0.12s ease;
           opacity: 0;
+          pointer-events: none;
         }
         .chatHistoryRow:hover .chatMoreBtn,
         .chatHistoryRow:focus-within .chatMoreBtn,
         .chatMoreBtn.active {
           opacity: 1;
+          pointer-events: auto;
         }
         .chatMoreBtn:hover,
         .chatMoreBtn.active {
@@ -8208,6 +8178,7 @@ export default function Page() {
           }
           .chatMoreBtn {
             opacity: 1;
+            pointer-events: auto;
           }
           .participantsHeader,
           .agentsSidebarHeader {

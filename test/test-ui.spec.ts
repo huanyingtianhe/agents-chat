@@ -3738,6 +3738,48 @@ test.describe('Chat Rename', () => {
     await expect(page.locator('.chatHistoryRow').first().locator('.chatHistoryItem')).toContainText('My Renamed Chat');
   });
 
+  test('should keep chat actions usable after sidebar resize', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    const resizeHandle = page.locator('.sidebarResizeHandle');
+    await expect(resizeHandle).toBeVisible();
+    const handleBox = await resizeHandle.boundingBox();
+    expect(handleBox).not.toBeNull();
+
+    const dragY = handleBox!.y + 120;
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, dragY);
+    await page.mouse.down();
+    await page.mouse.move(80, dragY, { steps: 8 });
+    await page.mouse.up();
+
+    // Sidebar should be clamped to its minimum width (>= 260px) regardless of drag target.
+    const sidebarBox = await page.locator('.participantsSidebar').boundingBox();
+    expect(sidebarBox).not.toBeNull();
+    expect(sidebarBox!.width).toBeGreaterThanOrEqual(260);
+
+    const row = page.locator('.chatHistoryRow').first();
+    await row.hover();
+
+    // The chat name and the action button should not overlap horizontally.
+    const nameBox = await row.locator('.chatHistoryName').first().boundingBox();
+    const moreBtnBox = await row.locator('.chatMoreBtn').boundingBox();
+    expect(nameBox).not.toBeNull();
+    expect(moreBtnBox).not.toBeNull();
+    expect(nameBox!.x + nameBox!.width).toBeLessThanOrEqual(moreBtnBox!.x + 1);
+
+    await row.locator('.chatMoreBtn').click();
+
+    const menu = page.locator('.chatActionsMenu');
+    await expect(menu).toBeVisible();
+    const menuBox = await menu.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x - 1);
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width + 1);
+
+    await menu.locator('.chatActionItem', { hasText: 'Rename' }).click();
+    await expect(page.locator('.chatRenameInput')).toBeVisible();
+  });
+
   test('should preserve renamed chat name after creating new chat', async ({ page }) => {
     // Rename the first chat
     await page.locator('.chatHistoryRow').first().hover();
@@ -3766,50 +3808,84 @@ test.describe('Agent Filter Tabs', () => {
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
-  test('should show agent filter tabs in sidebar', async ({ page }) => {
-    // "All" tab should be visible and active
-    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toBeVisible();
-    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toHaveClass(/active/);
+  test('should show agent filter dropdown in sidebar', async ({ page }) => {
+    const select = page.locator('select.chatAgentFilterSelect');
+    await expect(select).toBeVisible();
+    // Default selection is "All" (empty value)
+    await expect(select).toHaveValue('');
+    await expect(select.locator('option').first()).toHaveText(/All/);
+  });
+
+  test('should hide scheduler from agent filter dropdown', async ({ page }) => {
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.evaluate(() => window.localStorage.setItem('acp_agent_filter_v1', 'scheduler'));
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+
+    const select = page.locator('select.chatAgentFilterSelect');
+    await expect(select).toHaveValue('');
+    await expect(select.locator('option', { hasText: 'Alpha Agent' })).toHaveCount(1);
+    await expect(select.locator('option', { hasText: 'Scheduler' })).toHaveCount(0);
   });
 
   test('should switch agent filter and show empty homepage', async ({ page }) => {
-    // Create a chat under "All" tab
+    // Create a chat under "All"
     await page.click('button.emptyHomepageNewChat');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
-    // Click a different agent tab (skip "All", click the second tab)
-    const tabs = page.locator('.chatAgentFilterBtn');
-    const tabCount = await tabs.count();
-    if (tabCount > 1) {
-      await tabs.nth(1).click();
-      await page.waitForTimeout(500);
+    const select = page.locator('select.chatAgentFilterSelect');
+    const options = await select.locator('option').all();
+    if (options.length > 1) {
+      const value = await options[1].getAttribute('value');
+      if (value) {
+        await select.selectOption(value);
+        await page.waitForTimeout(500);
 
-      // Should show empty homepage since there are no chats for that agent
-      await expect(page.locator('.emptyHomepage')).toBeVisible();
+        // Should show empty homepage since there are no chats for that agent
+        await expect(page.locator('.emptyHomepage')).toBeVisible();
 
-      // Switch back to All — should show the chat we created
-      await page.locator('.chatAgentFilterBtn:has-text("All")').click();
-      await page.waitForTimeout(500);
-      await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+        // Switch back to All — should show the chat we created
+        await select.selectOption('');
+        await page.waitForTimeout(500);
+        await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+      }
     }
   });
 
-  test('should persist agent filter tab after reload', async ({ page }) => {
-    // Click a non-All agent tab
-    const tabs = page.locator('.chatAgentFilterBtn');
-    const tabCount = await tabs.count();
-    if (tabCount > 1) {
-      const tabName = await tabs.nth(1).textContent();
-      await tabs.nth(1).click();
-      await page.waitForTimeout(500);
-      await expect(tabs.nth(1)).toHaveClass(/active/);
+  test('should persist agent filter selection after reload', async ({ page }) => {
+    const select = page.locator('select.chatAgentFilterSelect');
+    const options = await select.locator('option').all();
+    if (options.length > 1) {
+      const value = await options[1].getAttribute('value');
+      if (value) {
+        await select.selectOption(value);
+        await page.waitForTimeout(500);
+        await expect(select).toHaveValue(value);
 
-      // Reload
-      await page.reload();
-      await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+        // Reload
+        await page.reload();
+        await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
-      // The same tab should still be active
-      await expect(page.locator(`.chatAgentFilterBtn:has-text("${tabName}")`)).toHaveClass(/active/);
+        // The same agent should still be selected
+        await expect(page.locator('select.chatAgentFilterSelect')).toHaveValue(value);
+      }
     }
   });
 });
@@ -3864,5 +3940,27 @@ test.describe('Theme', () => {
     await page.click('button.themeMenuButton');
     // Theme dropdown should appear
     await expect(page.locator('[role="menu"][aria-label="Theme list"]')).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'VS Code Dark' })).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'Claude' })).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'One Dark' })).toHaveCount(0);
+    await expect(page.locator('.themeOption', { hasText: 'Forest' })).toHaveCount(0);
+    await expect(page.locator('.themeOption', { hasText: 'Velvet' })).toHaveCount(0);
+  });
+
+  test('should recover from removed saved theme ids', async ({ page }) => {
+    const cases = [
+      { saved: 'oneDark', expectedTitle: 'Theme: VS Code Dark', expectedStored: 'vsCodeDark' },
+      { saved: 'forest', expectedTitle: 'Theme: Aurora', expectedStored: 'aurora' },
+      { saved: 'velvet', expectedTitle: 'Theme: Aurora', expectedStored: 'aurora' },
+    ];
+
+    for (const themeCase of cases) {
+      await page.evaluate((savedTheme) => window.localStorage.setItem('acp_chat_theme_v1', savedTheme), themeCase.saved);
+      await page.reload();
+      await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+
+      await expect(page.locator('button.themeMenuButton')).toHaveAttribute('title', themeCase.expectedTitle);
+      await expect.poll(() => page.evaluate(() => window.localStorage.getItem('acp_chat_theme_v1'))).toBe(themeCase.expectedStored);
+    }
   });
 });

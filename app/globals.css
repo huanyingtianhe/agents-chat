@@ -41,7 +41,7 @@ a {
 
 /* Agent filter overflow menu (rendered via portal to document.body) */
 .chatAgentFilterOverflowMenu {
-  background: var(--panel, #151b2e);
+  background: var(--panel-strong, var(--panel-bg, #151b2e));
   border: 1px solid var(--border-strong, #2a3550);
   border-radius: 10px;
   padding: 4px;
@@ -51,7 +51,7 @@ a {
   min-width: 170px;
   max-height: 240px;
   overflow-y: auto;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  box-shadow: var(--shadow, 0 8px 24px rgba(0,0,0,0.45));
 }
 .chatAgentFilterOverflowItem {
   padding: 6px 12px;

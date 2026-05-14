@@ -1352,7 +1352,10 @@ export default function Page() {
           .then(chatData => {
             if (chatData.ok && chatData.chat) {
               const agentSessions = chatData.chat.agentSessions || {};
-              const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions);
+              const isReviewChat = typeof lastChatId === 'string' && lastChatId.startsWith('comment-review:');
+              const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions, {
+                inferLatestUserFailure: !isReviewChat,
+              });
               const msgs = migration.messages;
               currentAgentSessionsRef.current = agentSessions;
               setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
@@ -1585,7 +1588,9 @@ export default function Page() {
   function migrateFailedSendWarnings(
     chatMessages: ChatMessage[],
     agentSessions?: Record<string, string>,
+    options?: { inferLatestUserFailure?: boolean },
   ): { messages: ChatMessage[]; changed: boolean } {
+    const inferLatestUserFailure = options?.inferLatestUserFailure !== false;
     const migrated: ChatMessage[] = [];
     let changed = false;
     for (const message of chatMessages) {
@@ -1607,7 +1612,7 @@ export default function Page() {
       }
       migrated.push(message);
     }
-    if (!hasPersistedAgentSession(agentSessions)) {
+    if (inferLatestUserFailure && !hasPersistedAgentSession(agentSessions)) {
       const userIndex = getLatestUserWithoutSavedResponseIndex(migrated);
       const userMessage = userIndex >= 0 ? migrated[userIndex] : null;
       if (userMessage?.type === 'user' && userMessage.sendStatus !== 'failed') {
@@ -1655,7 +1660,13 @@ export default function Page() {
       const data = await res.json();
       if (data.ok && data.chat) {
         const agentSessions = data.chat.agentSessions || {};
-        const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+        // Comment-review chats dispatch the agent immediately after approval; the
+        // "no agent response yet" state is expected and should not be inferred
+        // as a send failure.
+        const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
+        const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions, {
+          inferLatestUserFailure: !isReviewChat,
+        });
         setMessagesForChat(chatId, migration.messages);
         if (migration.changed) {
           void persistLoadedChatMigration(chatId, data.chat.name || chatId, data.chat.ts || Date.now(), migration.messages, agentSessions);
@@ -1915,18 +1926,20 @@ export default function Page() {
     const error = message.sendError || 'Failed to send prompt to agent';
     return (
       <div className="userSendFailure">
-        <span className="userSendFailureStatus" title={error} aria-label={`Failed: ${error}`}>
-          Failed
+        <span className="userSendFailurePill">
+          <span className="userSendFailureStatus" title={error} aria-label={`Failed: ${error}`}>
+            Failed
+          </span>
+          <button
+            type="button"
+            className="userSendFailureButton"
+            disabled={resendDisabled}
+            title={waitingForAgents ? 'Waiting for agents to load' : 'Retry sending this message'}
+            onClick={() => void resendFailedUserMessage(message)}
+          >
+            Resend
+          </button>
         </span>
-        <button
-          type="button"
-          className="messageCopyButton userSendFailureButton"
-          disabled={resendDisabled}
-          title={waitingForAgents ? 'Waiting for agents to load' : undefined}
-          onClick={() => void resendFailedUserMessage(message)}
-        >
-          Resend
-        </button>
       </div>
     );
   }
@@ -4253,7 +4266,10 @@ export default function Page() {
         if (cachedMessages) {
           targetMessages = cachedMessages;
         } else {
-          const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+          const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
+          const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions, {
+            inferLatestUserFailure: !isReviewChat,
+          });
           targetMessages = migration.messages;
           migratedFailedSendState = migration.changed;
         }
@@ -6980,37 +6996,72 @@ export default function Page() {
         .messageContent.pending { opacity: 0.78; }
         :global(.userSendFailure) {
           display: flex;
-          align-items: center;
-          justify-content: flex-start;
-          gap: 8px;
+          justify-content: flex-end;
           margin-top: 8px;
-          color: #fca5a5;
-          font-size: 12px;
+        }
+        :global(.userSendFailurePill) {
+          display: inline-flex;
+          align-items: stretch;
+          border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+          background: color-mix(in srgb, var(--danger) 10%, var(--panel-soft));
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
         }
         :global(.userSendFailureStatus) {
           display: inline-flex;
           align-items: center;
-          justify-content: center;
-          min-height: 30px;
-          border: 1px solid rgba(252, 165, 165, 0.45);
-          background: rgba(252, 165, 165, 0.1);
-          color: #fecaca;
-          border-radius: 10px;
+          gap: 6px;
           padding: 0 10px;
           font-size: 12px;
+          font-weight: 600;
           line-height: 1;
+          color: var(--danger);
+          letter-spacing: 0.01em;
           cursor: help;
+          user-select: none;
+        }
+        :global(.userSendFailureStatus::before) {
+          content: '⚠';
+          font-size: 13px;
+          line-height: 1;
         }
         :global(.userSendFailureButton) {
-          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-height: 30px;
+          padding: 0 12px;
+          border: none;
+          border-left: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+          border-radius: 0;
+          background: transparent;
+          color: var(--danger);
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 1;
+          cursor: pointer;
+          transition: background 160ms ease, color 160ms ease;
+        }
+        :global(.userSendFailureButton::before) {
+          content: '↻';
+          font-size: 14px;
+          line-height: 1;
+          display: inline-block;
+        }
+        :global(.userSendFailureButton:hover) {
+          background: color-mix(in srgb, var(--danger) 18%, transparent);
+        }
+        :global(.userSendFailureButton:focus-visible) {
+          outline: 2px solid var(--danger);
+          outline-offset: -2px;
         }
         :global(.userSendFailureButton:disabled) {
-          opacity: 0.55;
+          opacity: 0.5;
           cursor: not-allowed;
         }
         :global(.userSendFailureButton:disabled:hover) {
-          border-color: var(--border);
-          background: var(--panel-soft);
+          background: transparent;
         }
         .partsStream { display: flex; flex-direction: column; gap: 6px; }
         .partsStream.collapsed { max-height: 300px; overflow: hidden; position: relative; }

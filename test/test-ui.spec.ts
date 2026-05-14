@@ -3964,3 +3964,58 @@ test.describe('Theme', () => {
     }
   });
 });
+
+test.describe('Comment Review Chat', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should not mark approved comment user message as failed before agent responds', async ({ page }) => {
+    const chatId = `comment-review:${encodeURIComponent('test/dummy.md')}-${Date.now()}`;
+    const messageText = `Review comment on test/dummy.md (line 1)\n\n"please change the word"`;
+
+    await page.evaluate(async ({ chatId, messageText }) => {
+      const chat = {
+        id: chatId,
+        name: 'Review: test/dummy.md',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: messageText, ts: Date.now() },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, messageText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 15000 });
+
+    const userMessage = page.locator('.message.user', { hasText: 'please change the word' });
+    await expect(userMessage).toBeVisible({ timeout: 10000 });
+    await expect(userMessage.getByRole('button', { name: 'Resend' })).toHaveCount(0);
+    await expect(userMessage.locator('.userSendFailureStatus')).toHaveCount(0);
+
+    // The stored chat must not have been silently re-saved with sendStatus 'failed'
+    const stored = await page.evaluate(async (id) => {
+      const r = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+      const data = await r.json();
+      return data.chat?.messages?.[0]?.sendStatus || null;
+    }, chatId);
+    expect(stored).toBeNull();
+  });
+});
+
+
+

@@ -36,7 +36,12 @@ a {
 }
 
 ::selection {
-  background: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--accent, #5b8cff) 35%, transparent);
+  color: inherit;
+}
+::-moz-selection {
+  background: color-mix(in srgb, var(--accent, #5b8cff) 35%, transparent);
+  color: inherit;
 }
 
 /* Agent filter overflow menu (rendered via portal to document.body) */

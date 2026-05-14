@@ -137,6 +137,7 @@ type FileWorkspaceState = {
   filePath: string | null;
   diffOnly: boolean;
   editorMode: MdEditorMode;
+  scrollTop?: number;
 };
 
 type FileComment = {
@@ -217,12 +218,16 @@ function parseFileWorkspaceState(raw: string | null): FileWorkspaceState | null 
     const parsed = JSON.parse(raw) as Partial<FileWorkspaceState>;
     const filePath = typeof parsed.filePath === 'string' && parsed.filePath ? parsed.filePath : null;
     const editorMode = isMdEditorMode(parsed.editorMode) ? parsed.editorMode : 'live';
+    const scrollTop = typeof parsed.scrollTop === 'number' && Number.isFinite(parsed.scrollTop) && parsed.scrollTop >= 0
+      ? parsed.scrollTop
+      : undefined;
     return {
       tab: isLeftSidebarTab(parsed.tab) ? parsed.tab : 'chats',
       agentId: typeof parsed.agentId === 'string' && parsed.agentId ? parsed.agentId : null,
       filePath,
       diffOnly: parsed.diffOnly === true,
       editorMode: normalizeFileEditorMode(editorMode, filePath),
+      scrollTop,
     };
   } catch {
     return null;
@@ -1138,6 +1143,11 @@ export default function Page() {
   const pendingLiveEditSelectedTextRef = useRef<string | null>(null);
   const liveSelectionDraftRangeRef = useRef<Range | null>(null);
   const liveSelectionDraftTextRef = useRef<string | null>(null);
+  // Maps a newly-created comment id to the editor-content y where it should
+  // appear in the sidebar until a real live-edit marker is computed for it.
+  // Prevents the card from being mispositioned by the (lineNumber * 20px)
+  // fallback when DOM text matching fails (e.g. multi-line selections).
+  const recentLiveCommentAnchorsRef = useRef<Map<string, number>>(new Map());
   const fileWorkspaceRestoreRef = useRef<FileWorkspaceState | null>(null);
   const fileWorkspaceRestoredRef = useRef(false);
 
@@ -1398,8 +1408,9 @@ export default function Page() {
       filePath: mdSelectedFile,
       diffOnly: mdDiffOnly,
       editorMode: mdEditorMode,
+      scrollTop: commentSourceScrollTop,
     } satisfies FileWorkspaceState));
-  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, mounted]);
+  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, commentSourceScrollTop, mounted]);
 
   useEffect(() => {
     const el = chatContainerRef.current;
@@ -2010,7 +2021,7 @@ export default function Page() {
     } catch { /* ignore */ }
   }
 
-  async function openMdFileForAgent(agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode }) {
+  async function openMdFileForAgent(agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number }) {
     if (!options?.skipDirtyConfirm && mdDirty) {
       if (!confirm('You have unsaved changes. Discard?')) return;
     }
@@ -2025,10 +2036,21 @@ export default function Page() {
         setMdDirty(false);
         setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
         setMdEditorMode(current => normalizeFileEditorMode(options?.editorMode ?? current, filePath));
-        setCommentSourceScrollTop(0);
+        const restoreScrollTop = options?.restoreScrollTop ?? 0;
+        setCommentSourceScrollTop(restoreScrollTop);
+        const applyScroll = () => {
+          mdLiveContainerRef.current?.scrollTo({ top: restoreScrollTop });
+          fileContentRef.current?.scrollTo({ top: restoreScrollTop });
+        };
+        // The rendered DOM grows over the next few frames as live HTML and
+        // images settle. Apply the saved scroll a few times so we land on the
+        // correct position even after late layout.
         window.requestAnimationFrame(() => {
-          mdLiveContainerRef.current?.scrollTo({ top: 0 });
-          fileContentRef.current?.scrollTo({ top: 0 });
+          applyScroll();
+          window.requestAnimationFrame(() => {
+            applyScroll();
+            window.setTimeout(applyScroll, 120);
+          });
         });
         setMdEditorOpen(true);
         setFileComments([]);
@@ -2075,6 +2097,7 @@ export default function Page() {
         await openMdFileForAgent(agentId, workspace.filePath, {
           skipDirtyConfirm: true,
           editorMode: workspace.editorMode,
+          restoreScrollTop: workspace.scrollTop,
         });
       }
     })();
@@ -2100,12 +2123,20 @@ export default function Page() {
       });
       const data = await res.json();
       if (data.ok) {
+        // Remember where the user just submitted from so the new comment card
+        // can land at the visible selection even if the marker text-matcher
+        // can't find the (possibly multi-line) selection in the rendered DOM.
+        const submitAnchorTop = liveSelectionDraftAnchor?.rects?.[0]?.top;
+        if (typeof data.id === 'string' && submitAnchorTop != null) {
+          recentLiveCommentAnchorsRef.current.set(data.id, submitAnchorTop);
+        }
         setCommentInput('');
         setShowCommentInput(false);
         setCommentAddRange(null);
         clearLiveSelectionDraft();
-        void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+        await loadFileComments(mdSelectedAgentId, mdSelectedFile);
         if (!commentSidebarOpen) setCommentSidebarOpen(true);
+        if (typeof data.id === 'string') setSelectedCommentId(data.id);
       }
     } catch { /* ignore */ }
   }
@@ -2322,6 +2353,11 @@ export default function Page() {
 
   function getCommentDisplayTop(comment: FileComment): number {
     if (mdEditorMode === 'live' && mdSelectedFile && isMarkdownFile(mdSelectedFile)) {
+      // A recent submit anchor is the exact y of the user's actual selection;
+      // prefer it over the computed live marker, which goes through a text
+      // matcher that can land on the wrong occurrence of the same phrase.
+      const recent = recentLiveCommentAnchorsRef.current.get(comment.id);
+      if (recent != null) return recent;
       const marker = liveCommentMarkers.find(m => m.commentIds.includes(comment.id));
       if (marker) return marker.top;
     }
@@ -2554,24 +2590,144 @@ export default function Page() {
     button.style.display = 'none';
   }
 
-  function findLiveEditTextRange(selectedText: string): Range | null {
+  function findLiveEditTextRange(selectedText: string, occurrenceIndex = 0): Range | null {
     if (!mdLiveRef.current) return null;
     const searchText = selectedText.trim();
     if (!searchText) return null;
+    const skip = Math.max(0, occurrenceIndex);
 
+    // First pass: try to find the text inside a single text node (fast path).
     const walker = document.createTreeWalker(mdLiveRef.current, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
     let node: Node | null;
+    let singleNodeRemaining = skip;
     while ((node = walker.nextNode())) {
       const text = node.textContent || '';
-      const index = text.indexOf(searchText);
-      if (index >= 0) {
-        const range = document.createRange();
-        range.setStart(node, index);
-        range.setEnd(node, index + searchText.length);
-        return range;
+      let from = 0;
+      while (from <= text.length) {
+        const index = text.indexOf(searchText, from);
+        if (index < 0) break;
+        if (singleNodeRemaining === 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + searchText.length);
+          return range;
+        }
+        singleNodeRemaining--;
+        from = index + searchText.length;
+      }
+      nodes.push(node as Text);
+    }
+
+    // Second pass: search across consecutive text nodes. Build a concatenated
+    // string with an offset map so we can recover the start/end text nodes
+    // and intra-node offsets for any match.
+    if (nodes.length === 0) return null;
+    let joined = '';
+    const offsets: number[] = []; // joined-string offset where each node begins
+    for (const n of nodes) {
+      offsets.push(joined.length);
+      joined += n.textContent || '';
+    }
+    const findOffsetNode = (offset: number): { node: Text; localOffset: number } | null => {
+      let lo = 0;
+      let hi = nodes.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (offsets[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      const n = nodes[lo];
+      const localOffset = offset - offsets[lo];
+      const len = (n.textContent || '').length;
+      if (localOffset < 0 || localOffset > len) return null;
+      return { node: n, localOffset };
+    };
+
+    const buildRangeAt = (rawStart: number, rawEnd: number): Range | null => {
+      const start = findOffsetNode(rawStart);
+      const end = findOffsetNode(rawEnd);
+      if (!start || !end) return null;
+      const range = document.createRange();
+      range.setStart(start.node, start.localOffset);
+      range.setEnd(end.node, end.localOffset);
+      return range;
+    };
+
+    const candidates = [searchText, searchText.replace(/\s+/g, ' ')];
+    const normalizedJoined = joined.replace(/\s+/g, ' ');
+    for (const candidate of candidates) {
+      // Direct match in the literal joined text — skip earlier occurrences.
+      let remaining = skip;
+      let from = 0;
+      while (from <= joined.length) {
+        const direct = joined.indexOf(candidate, from);
+        if (direct < 0) break;
+        if (remaining === 0) {
+          const range = buildRangeAt(direct, direct + candidate.length);
+          if (range) return range;
+        }
+        remaining--;
+        from = direct + candidate.length;
+      }
+      // Whitespace-normalized fallback for selections whose whitespace differs.
+      const normIdx = normalizedJoined.indexOf(candidate);
+      if (normIdx >= 0) {
+        // Map normalized index back to a raw index by walking joined and
+        // counting collapsed whitespace.
+        let rawStart = -1;
+        let rawEnd = -1;
+        let raw = 0;
+        let norm = 0;
+        let prevWasSpace = false;
+        while (raw < joined.length) {
+          if (rawStart < 0 && norm === normIdx) rawStart = raw;
+          if (norm === normIdx + candidate.length) { rawEnd = raw; break; }
+          const ch = joined[raw];
+          if (/\s/.test(ch)) {
+            if (!prevWasSpace) norm++;
+            prevWasSpace = true;
+          } else {
+            norm++;
+            prevWasSpace = false;
+          }
+          raw++;
+        }
+        if (rawStart < 0 && norm >= normIdx) rawStart = raw;
+        if (rawEnd < 0) rawEnd = joined.length;
+        const range = buildRangeAt(rawStart, rawEnd);
+        if (range) return range;
       }
     }
     return null;
+  }
+
+  // Count how many times `searchText` appears in `mdEditContent` strictly
+  // before the given source position (line is 1-based; char is the start char
+  // within that line). Used to find the matching occurrence in the rendered
+  // DOM so we don't always land on the first match in the document.
+  function countSourceOccurrencesBefore(searchText: string, line: number | null | undefined, char: number | null | undefined): number {
+    if (!searchText) return 0;
+    const trimmed = searchText.trim();
+    if (!trimmed) return 0;
+    const lines = mdEditContent.split('\n');
+    const targetLine = Math.max(1, line ?? 1) - 1;
+    const targetChar = Math.max(0, char ?? 0);
+    let absolute = 0;
+    for (let i = 0; i < targetLine && i < lines.length; i++) {
+      absolute += lines[i].length + 1; // +1 for newline
+    }
+    if (targetLine < lines.length) absolute += Math.min(targetChar, lines[targetLine].length);
+
+    let count = 0;
+    let from = 0;
+    while (from < absolute) {
+      const idx = mdEditContent.indexOf(trimmed, from);
+      if (idx < 0 || idx >= absolute) break;
+      count++;
+      from = idx + trimmed.length;
+    }
+    return count;
   }
 
   function getCommentSourceText(comment: FileComment): string | null {
@@ -2613,7 +2769,15 @@ export default function Page() {
       .trim();
     const candidates = Array.from(new Set([selectedText.trim(), renderedText].filter(Boolean)));
     for (const candidate of candidates) {
-      const range = findLiveEditTextRange(candidate);
+      const occurrenceIndex = countSourceOccurrencesBefore(
+        candidate,
+        comment.rangeStartLine,
+        comment.rangeStartChar,
+      );
+      const range = findLiveEditTextRange(candidate, occurrenceIndex)
+        // Fallback to first match if the indexed lookup misses (e.g. rendered
+        // DOM normalizes whitespace and the count is off by one).
+        || findLiveEditTextRange(candidate, 0);
       if (range) return range;
     }
     return null;
@@ -2650,7 +2814,13 @@ export default function Page() {
 
       const range = getLiveEditRangeForComment(markerComment);
       let top = getCommentLineTop(markerComment) + 1;
-      if (range) {
+      const recentAnchor = recentLiveCommentAnchorsRef.current.get(markerComment.id);
+      if (recentAnchor != null) {
+        // Prefer the exact submit-time y for freshly created comments — the
+        // text matcher used below can land on the wrong occurrence of the
+        // same phrase in large files.
+        top = Math.max(8, recentAnchor);
+      } else if (range) {
         const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
         const rect = rects[0] || range.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
@@ -2716,30 +2886,68 @@ export default function Page() {
       return;
     }
 
-    // Find the selected text in source markdown to determine line range
+    // Find the selected text in source markdown to determine line range.
+    // Use a single linear scan: normalize each line once, build a joined
+    // document, indexOf the search, then map character offsets back to line
+    // numbers. This avoids the previous O(N²·L) sliding-window approach
+    // that froze the UI on large markdown files.
     const lines = mdEditContent.split('\n');
     const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').toLowerCase();
     const searchNorm = normalizeSelectionText(selectedText);
+    if (!searchNorm) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    const SEP = ' ';
+    const normLines = new Array<string>(lines.length);
+    // lineEnd[i] = exclusive end offset (in the joined string) of line i,
+    // i.e. the index immediately past its last normalized char (before the
+    // trailing separator that follows it, if any).
+    const lineEnd = new Int32Array(lines.length);
+    let cursor = 0;
+    let joined = '';
+    for (let i = 0; i < lines.length; i++) {
+      const n = normalizeSelectionText(lines[i]);
+      normLines[i] = n;
+      if (i > 0) {
+        joined += SEP;
+        cursor += SEP.length;
+      }
+      joined += n;
+      cursor += n.length;
+      lineEnd[i] = cursor;
+    }
+
+    const matchStart = joined.indexOf(searchNorm);
     let startLine = -1;
     let endLine = -1;
     let startChar: number | undefined;
     let endChar: number | undefined;
-    let bestSpan = Number.POSITIVE_INFINITY;
 
-    for (let i = 0; i < lines.length; i++) {
-      for (let j = i; j < lines.length; j++) {
-        const chunk = normalizeSelectionText(lines.slice(i, j + 1).join(' '));
-        if (chunk.includes(searchNorm)) {
-          const span = j - i;
-          const rawIndex = i === j ? lines[i].toLowerCase().indexOf(selectedText.toLowerCase()) : -1;
-          if (span < bestSpan) {
-            startLine = i + 1;
-            endLine = j + 1;
-            startChar = rawIndex >= 0 ? rawIndex : undefined;
-            endChar = rawIndex >= 0 ? rawIndex + selectedText.length : undefined;
-            bestSpan = span;
-          }
-          break;
+    if (matchStart >= 0) {
+      const matchEnd = matchStart + searchNorm.length - 1;
+      // Binary search for the line containing matchStart / matchEnd.
+      const findLine = (offset: number): number => {
+        let lo = 0;
+        let hi = lineEnd.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (lineEnd[mid] <= offset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      const si = findLine(matchStart);
+      const ei = findLine(matchEnd);
+      startLine = si + 1;
+      endLine = ei + 1;
+
+      if (si === ei) {
+        const rawIndex = lines[si].toLowerCase().indexOf(selectedText.toLowerCase());
+        if (rawIndex >= 0) {
+          startChar = rawIndex;
+          endChar = rawIndex + selectedText.length;
         }
       }
     }
@@ -2779,11 +2987,30 @@ export default function Page() {
     }
 
     let frameId = 0;
+    let trailingFrameId = 0;
+    let trailingTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const computeMarkers = () => {
+      const markers = getLiveCommentMarkersForEditor();
+      setLiveCommentMarkers(markers);
+    };
     frameId = window.requestAnimationFrame(() => {
-      setLiveCommentMarkers(getLiveCommentMarkersForEditor());
+      computeMarkers();
+      // Layout can shift after this frame when the comments sidebar is in the
+      // middle of opening (clientWidth narrows, the right-edge marker would
+      // otherwise be left under the new sidebar). Recompute once more after
+      // the next frame plus a short timeout so markers land on the final
+      // right edge.
+      trailingFrameId = window.requestAnimationFrame(() => {
+        computeMarkers();
+        trailingTimeoutId = setTimeout(computeMarkers, 120);
+      });
     });
 
-    return () => window.cancelAnimationFrame(frameId);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(trailingFrameId);
+      if (trailingTimeoutId != null) clearTimeout(trailingTimeoutId);
+    };
   }, [fileComments, mdEditorMode, mdSelectedFile, mdEditContent, mdLiveHtml, selectedCommentId, commentSidebarOpen]);
 
   useEffect(() => {
@@ -2794,9 +3021,22 @@ export default function Page() {
     outerFrameId = window.requestAnimationFrame(() => {
       innerFrameId = window.requestAnimationFrame(() => {
         const range = liveSelectionDraftRangeRef.current;
-        const rebuiltRange = liveSelectionDraftTextRef.current ? findLiveEditTextRange(liveSelectionDraftTextRef.current) : null;
-        const activeRange = rebuiltRange || range;
-        if (!activeRange || !mdLiveRef.current) return;
+        if (!mdLiveRef.current) return;
+
+        // Prefer the cloned DOM Range from the user's actual selection: Range
+        // objects track their nodes through reflow, so getClientRects() is
+        // always up to date. Only fall back to text matching when the original
+        // range has been detached from the live DOM (e.g. mdLiveHtml was
+        // regenerated), otherwise findLiveEditTextRange would return the FIRST
+        // occurrence of the text in the document — wrong for any word that
+        // appears more than once in a large file.
+        const originalAttached = range
+          && mdLiveRef.current.contains(range.startContainer)
+          && mdLiveRef.current.contains(range.endContainer);
+        const activeRange = originalAttached
+          ? range
+          : (liveSelectionDraftTextRef.current ? findLiveEditTextRange(liveSelectionDraftTextRef.current) : null);
+        if (!activeRange) return;
         if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
 
         liveSelectionDraftRangeRef.current = activeRange.cloneRange();
@@ -5018,13 +5258,34 @@ export default function Page() {
                         const domRange = pendingLiveEditDomRangeRef.current;
                         const selectedText = pendingLiveEditSelectedTextRef.current;
                         if (!range) return;
+                        const willOpenSidebar = !commentSidebarOpen;
                         setCommentAddRange(range);
                         liveSelectionDraftRangeRef.current = domRange ? domRange.cloneRange() : null;
                         liveSelectionDraftTextRef.current = selectedText;
                         setLiveSelectionDraftAnchor(anchor);
                         setShowCommentInput(true);
-                        if (!commentSidebarOpen) setCommentSidebarOpen(true);
+                        if (willOpenSidebar) setCommentSidebarOpen(true);
                         hideLiveEditCommentButton();
+                        // Opening the sidebar narrows the editor and reflows the
+                        // rendered markdown, so the anchor captured before the
+                        // click is in stale layout coordinates. Recompute after
+                        // layout settles so the new comment form lands at the
+                        // visible selection.
+                        if (willOpenSidebar) {
+                          const refreshAnchor = () => {
+                            const liveRange = liveSelectionDraftRangeRef.current;
+                            if (!liveRange || !mdLiveRef.current) return;
+                            if (!mdLiveRef.current.contains(liveRange.startContainer) || !mdLiveRef.current.contains(liveRange.endContainer)) return;
+                            const next = getLiveSelectionDraftAnchor(liveRange);
+                            if (next) setLiveSelectionDraftAnchor(next);
+                          };
+                          window.requestAnimationFrame(() => {
+                            window.requestAnimationFrame(() => {
+                              refreshAnchor();
+                              window.setTimeout(refreshAnchor, 80);
+                            });
+                          });
+                        }
                       }}
                     >
                       💬 Add Comment
@@ -5197,11 +5458,21 @@ export default function Page() {
                                 </div>
                               );
                             })}
-                            {showCommentInput && commentAddRange && (
+                            {showCommentInput && commentAddRange && (() => {
+                              // In live-edit mode, source lines map to variable-height
+                              // rendered blocks, so the line-based estimate of
+                              // (startLine - 1) * 20px can land far from the actual
+                              // selection on large files. Prefer the captured DOM
+                              // anchor rect when available.
+                              const anchorTop = liveSelectionDraftAnchor?.rects?.[0]?.top;
+                              const top = anchorTop != null
+                                ? anchorTop - commentSourceScrollTop
+                                : (commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT - commentSourceScrollTop;
+                              return (
                               <div
                                 className="commentAddForm aligned"
                                 ref={commentAddFormRef}
-                                style={{ top: `${(commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT - commentSourceScrollTop}px` }}
+                                style={{ top: `${top}px` }}
                               >
                                 <div className="commentAddLabel">New comment on L{commentAddRange.startLine}{commentAddRange.endLine !== commentAddRange.startLine ? `-${commentAddRange.endLine}` : ''}</div>
                                 <textarea
@@ -5216,7 +5487,8 @@ export default function Page() {
                                  <button className="commentActionBtn approve" onClick={() => void handleCreateComment()} disabled={!commentInput.trim()}>Submit</button>
                                 </div>
                               </div>
-                            )}
+                              );
+                            })()}
                           </div>
                           {visibleComments.length === 0 && !showCommentInput && (
                             <div className="muted" style={{ padding: 20, textAlign: 'center', fontSize: 13 }}>

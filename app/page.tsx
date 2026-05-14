@@ -523,6 +523,7 @@ const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 const STORAGE_AGENT_FILTER = 'acp_agent_filter_v1';
 const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
+const STORAGE_REMEMBERED_CHAT_AGENTS = 'acp_remembered_chat_agents_v1';
 
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -653,6 +654,10 @@ const THEMES = {
       '--comment-user-color': '#2f6f9f',
       '--avatar-bg': 'linear-gradient(135deg, #d97757, #c45f41)',
       '--avatar-text': '#fff',
+      '--send-button-bg': 'linear-gradient(135deg, #d98267 0%, #c96a4b 100%)',
+      '--send-button-border': 'rgba(196, 95, 65, 0.34)',
+      '--send-button-color': '#fffaf2',
+      '--send-button-shadow': '0 8px 18px rgba(196, 95, 65, 0.18), inset 0 1px 0 rgba(255,255,255,0.30)',
     },
   },
   chatgpt: {
@@ -990,13 +995,21 @@ function getMentionedAgentIds(text: string, agents: Agent[]) {
   return selected;
 }
 
+function getDefaultAgentId(agents: Agent[]): string | null {
+  return (agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || null)?.id || null;
+}
+
+function getExistingAgentId(agentId: string | null | undefined, agents: Agent[]): string | null {
+  if (!agentId) return null;
+  return agents.some((agent) => agent.id === agentId) ? agentId : null;
+}
+
 function parseAgents(text: string, agents: Agent[], preferredAgentId?: string | null) {
   const agentIds = getMentionedAgentIds(text, agents);
   if (agentIds.length === 0) {
     // Use preferred agent (from chat's agentId) if available, otherwise fall back to first non-scheduler
-    const preferred = preferredAgentId ? agents.find(a => a.id === preferredAgentId) : null;
-    const fallback = preferred || agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
-    return { agentIds: [fallback.id], message: text };
+    const fallbackId = getExistingAgentId(preferredAgentId, agents) || getDefaultAgentId(agents) || 'main';
+    return { agentIds: [fallbackId], message: text };
   }
   const message = text.replace(/(?:^|\s)@(\S+)/g, '').trim();
   return { agentIds, message: message || text };
@@ -1066,6 +1079,7 @@ export default function Page() {
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
+  const [rememberedChatAgents, setRememberedChatAgents] = useState<Record<string, string>>({});
   function switchAgentFilter(agentId: string | null) {
     if (agentId === chatAgentFilter) return;
     // Save current chat before switching
@@ -1233,8 +1247,39 @@ export default function Page() {
   const themeStyle = activeTheme.values as React.CSSProperties;
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
   const isCurrentChatSending = useMemo(() => isChatRunning(currentChatId), [currentChatId, runVersion]);
+  const currentChatPrimaryAgentId = useMemo(() => {
+    return chatHistory.find((chat) => chat.id === currentChatId)?.agentId || null;
+  }, [chatHistory, currentChatId]);
+  const rememberedComposerAgentId = getExistingAgentId(
+    currentChatId ? rememberedChatAgents[currentChatId] : null,
+    agents,
+  );
+  const effectiveComposerAgentId = mentionedAgentIds.length === 0
+    ? rememberedComposerAgentId
+      || getExistingAgentId(currentChatPrimaryAgentId, agents)
+      || getDefaultAgentId(agents)
+    : null;
 
   const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
+
+  function persistRememberedChatAgents(next: Record<string, string>) {
+    setRememberedChatAgents(next);
+    try {
+      window.localStorage.setItem(STORAGE_REMEMBERED_CHAT_AGENTS, JSON.stringify(next));
+    } catch { /* ignore */ }
+  }
+
+  function rememberChatAgent(chatId: string, agentId: string) {
+    if (!chatId || !getExistingAgentId(agentId, agents)) return;
+    persistRememberedChatAgents({ ...rememberedChatAgents, [chatId]: agentId });
+  }
+
+  function clearRememberedChatAgent(chatId: string) {
+    if (!chatId || !rememberedChatAgents[chatId]) return;
+    const next = { ...rememberedChatAgents };
+    delete next[chatId];
+    persistRememberedChatAgents(next);
+  }
 
   function toggleMdDir(dirPath: string) {
     setMdExpandedDirs(prev => {
@@ -1372,6 +1417,17 @@ export default function Page() {
     try {
       const savedFilter = window.localStorage.getItem(STORAGE_AGENT_FILTER);
       if (savedFilter) setChatAgentFilter(savedFilter);
+    } catch { /* ignore */ }
+    try {
+      const savedRememberedAgents = window.localStorage.getItem(STORAGE_REMEMBERED_CHAT_AGENTS);
+      if (savedRememberedAgents) {
+        const parsed = JSON.parse(savedRememberedAgents) as Record<string, unknown>;
+        const next: Record<string, string> = {};
+        for (const [chatId, agentId] of Object.entries(parsed)) {
+          if (chatId && typeof agentId === 'string' && agentId) next[chatId] = agentId;
+        }
+        setRememberedChatAgents(next);
+      }
     } catch { /* ignore */ }
 
     // Load chat history + last active chat from server (SQLite is source of truth)
@@ -4272,8 +4328,15 @@ export default function Page() {
       await createNewChat();
     }
 
-    const currentChatAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId;
-    const { agentIds, message } = parseAgents(textForAgent, agents, currentChatAgentId);
+    const sendChatPrimaryAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId || null;
+    const sendFallbackAgentId = getExistingAgentId(rememberedChatAgents[currentChatIdRef.current], agents)
+      || getExistingAgentId(sendChatPrimaryAgentId, agents)
+      || getDefaultAgentId(agents);
+    const { agentIds, message } = parseAgents(textForAgent, agents, sendFallbackAgentId);
+    const explicitlyMentionedAgentIds = getMentionedAgentIds(textForAgent, agents);
+    if (explicitlyMentionedAgentIds.length > 0) {
+      rememberChatAgent(currentChatIdRef.current, explicitlyMentionedAgentIds[0]);
+    }
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
 
@@ -5913,6 +5976,21 @@ export default function Page() {
                           )}
                         </>
                       )}
+                    </div>
+                  ) : effectiveComposerAgentId ? (
+                    <div className="targetPills">
+                      <span className="targetPill rememberedAgentPill">
+                        <span>@{effectiveComposerAgentId}</span>
+                        {rememberedComposerAgentId ? (
+                          <button
+                            type="button"
+                            className="rememberedAgentRemove"
+                            aria-label={`Remove remembered agent ${effectiveComposerAgentId}`}
+                            title="Use the chat primary/default agent instead"
+                            onClick={() => clearRememberedChatAgent(currentChatId)}
+                          />
+                        ) : null}
+                      </span>
                     </div>
                   ) : null}
                   {renderAttachmentsList(attachments, 'composer')}
@@ -8077,6 +8155,40 @@ export default function Page() {
           line-height: 1;
           font-weight: 700;
         }
+        .rememberedAgentPill {
+          gap: 6px;
+          border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+          background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel-soft));
+        }
+        .rememberedAgentRemove {
+          width: 16px;
+          height: 16px;
+          padding: 0;
+          border: 0;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--accent) 14%, transparent);
+          color: var(--accent);
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          line-height: 1;
+          opacity: 0;
+          transform: scale(0.9);
+          transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
+        }
+        .rememberedAgentRemove::before {
+          content: 'x';
+        }
+        .rememberedAgentPill:hover .rememberedAgentRemove,
+        .rememberedAgentRemove:focus-visible {
+          opacity: 1;
+          transform: scale(1);
+        }
+        .rememberedAgentRemove:hover {
+          background: color-mix(in srgb, var(--accent) 24%, transparent);
+        }
         .composerHint {
           display: none;
         }
@@ -8109,10 +8221,10 @@ export default function Page() {
           height: 38px;
           padding: 0 !important;
           border-radius: 999px !important;
-          border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent) !important;
-          background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important;
-          color: white !important;
-          box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.22);
+          border: 1px solid var(--send-button-border, color-mix(in srgb, var(--accent) 30%, transparent)) !important;
+          background: var(--send-button-bg, linear-gradient(135deg, var(--accent), var(--accent-2))) !important;
+          color: var(--send-button-color, white) !important;
+          box-shadow: var(--send-button-shadow, 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.22));
           font-weight: 700;
           display: inline-flex;
           align-items: center;

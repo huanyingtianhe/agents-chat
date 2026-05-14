@@ -61,6 +61,53 @@ async function expectCompactFailedSendStatus(message: Locator, error = 'Failed t
   await expect(message.locator('.userSendFailure')).not.toContainText(error);
 }
 
+async function mockTwoAgentsAcp(page: Page, sent: any[]) {
+  await page.route('**/api/acp', async (route) => {
+    const body = route.request().postDataJSON() as any;
+    if (body?.action === 'list-agents') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          agents: [
+            { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+            { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+          ],
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'send') {
+      sent.push(body);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${body.agentId}`, turn: { id: `turn-${body.agentId}` } }),
+      });
+      return;
+    }
+    if (body?.action === 'poll') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          phase: 'idle',
+          ready: true,
+          booting: false,
+          activeTurn: {
+            id: `turn-${body.agentId}`,
+            fullText: `reply from ${body.agentId}`,
+            done: true,
+            phase: 'done',
+            events: [{ type: 'text_chunk', ts: Date.now(), text: `reply from ${body.agentId}` }],
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+}
+
 test.describe('Login', () => {
   test('should show login page', async ({ page }) => {
     await page.goto(`${BASE}/login`);
@@ -102,6 +149,166 @@ test.describe('Chat UI', () => {
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
+  });
+
+  test('Claude theme keeps the send button warm and readable', async ({ page }) => {
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(() => window.localStorage.setItem('acp_chat_theme_v1', 'claude'));
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+    await ensureActiveChat(page);
+
+    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('hello claude theme');
+    const sendButton = page.locator('button[aria-label="Send message"]');
+    await expect(sendButton).toBeEnabled();
+
+    const styles = await sendButton.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        backgroundImage: style.backgroundImage,
+        color: style.color,
+      };
+    });
+
+    expect(styles.backgroundImage).toContain('rgb(217, 130, 103)');
+    expect(styles.backgroundImage).toContain('rgb(201, 106, 75)');
+    expect(styles.backgroundImage).not.toContain('rgb(83, 102, 121)');
+    expect(styles.color).toBe('rgb(255, 250, 242)');
+  });
+
+  test('remembers the first mentioned agent as the next composer target for the same chat', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    await textarea.fill('@beta @alpha first routed message');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@beta/);
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    await textarea.fill('next message without mention');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'next message without mention').map((request) => request.agentId)).toEqual(['beta']);
+  });
+
+  test('uses primary agent fallback, then default agent when no remembered target exists', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(async () => {
+      const chat = {
+        id: 'primary-agent-chat',
+        name: 'Primary agent chat',
+        ts: Date.now(),
+        agentId: 'beta',
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@beta/);
+
+    await textarea.fill('message using primary fallback');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message using primary fallback').map((request) => request.agentId)).toEqual(['beta']);
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    await page.evaluate(async () => {
+      await fetch('/api/chats?id=primary-agent-chat', { method: 'DELETE' });
+      const chat = {
+        id: 'default-agent-chat',
+        name: 'Default agent chat',
+        ts: Date.now(),
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@alpha/);
+
+    await textarea.fill('message using default fallback');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message using default fallback').map((request) => request.agentId)).toEqual(['alpha']);
+  });
+
+  test('clears remembered composer target with hover remove button', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(async () => {
+      const chat = {
+        id: 'remembered-remove-chat',
+        name: 'Remembered remove chat',
+        ts: Date.now(),
+        agentId: 'alpha',
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    await textarea.fill('@beta remember beta');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    const pill = page.locator('.rememberedAgentPill');
+    const removeButton = page.locator('button[aria-label="Remove remembered agent beta"]');
+    await expect(pill).toHaveText('@beta');
+    await expect(removeButton).toHaveCSS('opacity', '0');
+
+    await pill.hover();
+    await expect(removeButton).toHaveCSS('opacity', '1');
+    await removeButton.click();
+
+    await expect(page.locator('.rememberedAgentPill')).toHaveText('@alpha');
+    await expect(removeButton).toHaveCount(0);
+
+    await textarea.fill('message after clearing remembered target');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message after clearing remembered target').map((request) => request.agentId)).toEqual(['alpha']);
   });
 
   test('should copy only answer text from the below-message copy button', async ({ page }) => {
@@ -4439,4 +4646,3 @@ test.describe('Comment Review Chat', () => {
     expect(stored).toBeNull();
   });
 });
-

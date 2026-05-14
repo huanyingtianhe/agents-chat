@@ -628,37 +628,41 @@ const THEMES = {
       '--shadow': '0 22px 58px rgba(75, 54, 43, 0.16)',
       '--comment-agent-color': '#a35d00',
       '--comment-user-color': '#2f6f9f',
+      '--avatar-bg': 'linear-gradient(135deg, #d97757, #c45f41)',
+      '--avatar-text': '#fff',
     },
   },
-  pearl: {
-    label: 'Pearl',
-    emoji: '☁️',
+  chatgpt: {
+    label: 'ChatGPT',
+    emoji: '◉',
     values: {
-      '--bg': '#eef2f8',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(59,130,246,0.12), transparent 28%), radial-gradient(circle at top right, rgba(236,72,153,0.08), transparent 24%), linear-gradient(180deg, #f8fbff 0%, #edf2f8 100%)',
-      '--header-bg': 'rgba(255, 255, 255, 0.86)',
-      '--panel-bg': 'rgba(255, 255, 255, 0.72)',
+      '--bg': '#ffffff',
+      '--bg-accent': 'linear-gradient(180deg, #ffffff 0%, #fbfbfa 100%)',
+      '--header-bg': 'rgba(255, 255, 255, 0.94)',
+      '--panel-bg': 'rgba(249, 249, 248, 0.92)',
       '--panel-strong': '#ffffff',
-      '--panel-soft': '#f4f7fb',
-      '--border': 'rgba(15, 23, 42, 0.08)',
-      '--border-strong': 'rgba(59, 130, 246, 0.2)',
-      '--text': '#132238',
-      '--text-soft': '#52627a',
-      '--muted': '#748196',
-      '--accent': '#2563eb',
-      '--accent-2': '#ec4899',
-      '--accent-soft': 'rgba(37, 99, 235, 0.08)',
-      '--accent-strong': 'rgba(236, 72, 153, 0.12)',
-      '--message-user': 'linear-gradient(135deg, rgba(37,99,235,0.08), rgba(236,72,153,0.08))',
-      '--message-agent': 'rgba(255,255,255,0.86)',
-      '--summary-glow': 'rgba(37,99,235,0.12)',
+      '--panel-soft': '#f4f4f3',
+      '--border': 'rgba(13, 13, 13, 0.08)',
+      '--border-strong': 'rgba(13, 13, 13, 0.16)',
+      '--text': '#0d0d0d',
+      '--text-soft': '#3f3f3f',
+      '--muted': '#737373',
+      '--accent': '#ff5e1a',
+      '--accent-2': '#0d0d0d',
+      '--accent-soft': 'rgba(255, 94, 26, 0.10)',
+      '--accent-strong': 'rgba(255, 94, 26, 0.18)',
+      '--message-user': 'linear-gradient(135deg, rgba(255,94,26,0.08), rgba(13,13,13,0.04))',
+      '--message-agent': '#ffffff',
+      '--summary-glow': 'rgba(255, 94, 26, 0.10)',
       '--input-bg': '#ffffff',
-      '--code-bg': '#f3f6fb',
+      '--code-bg': '#f4f4f3',
       '--success': '#16a34a',
       '--danger': '#dc2626',
-      '--shadow': '0 20px 50px rgba(148, 163, 184, 0.18)',
-      '--comment-agent-color': '#f0c040',
-      '--comment-user-color': '#58a6ff',
+      '--shadow': '0 18px 48px rgba(13, 13, 13, 0.08)',
+      '--comment-agent-color': '#c2520a',
+      '--comment-user-color': '#2f6f9f',
+      '--avatar-bg': 'linear-gradient(135deg, #ff8a4a, #ff5e1a)',
+      '--avatar-text': '#fff',
     },
   },
 } as const;
@@ -669,6 +673,7 @@ const LEGACY_THEME_ID_MAP: Record<string, ThemeId> = {
   oneDark: 'vsCodeDark',
   forest: DEFAULT_THEME_ID,
   velvet: DEFAULT_THEME_ID,
+  pearl: 'chatgpt',
 };
 
 function normalizeThemeId(value: unknown): ThemeId {
@@ -6564,8 +6569,8 @@ export default function Page() {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          background: linear-gradient(135deg, var(--accent), var(--accent-2));
-          color: #fff;
+          background: var(--avatar-bg, linear-gradient(135deg, var(--accent), var(--accent-2)));
+          color: var(--avatar-text, #fff);
           font-weight: 700;
           font-size: 13px;
           flex: 0 0 auto;
@@ -6576,7 +6581,7 @@ export default function Page() {
         .agentListId { font-size: 11px; color: var(--muted); }
         .agentListStatus { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
         .agentListStatus.running { color: var(--success); }
-        .nodeAvatar[data-online] { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+        .nodeAvatar[data-online] { background: var(--avatar-bg, linear-gradient(135deg, var(--accent), var(--accent-2))); }
         .nodeAvatar:not([data-online]) { background: linear-gradient(135deg, #718096, #4a5568) !important; }
         .nodeRemoveBtn {
           font-size: 11px;

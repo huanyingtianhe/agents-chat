@@ -236,6 +236,30 @@ test.describe('Chat UI', () => {
       await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toHaveValue('');
     });
 
+    test('paste screenshot queues one attachment when exposed as both file and item', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.focus('textarea[placeholder="Message Agents Chat"]');
+      await page.evaluate(async () => {
+        const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+        const fileFromFiles = new File([bytes], 'pasted.png', { type: 'image/png', lastModified: 1 });
+        const fileFromItems = new File([bytes], 'pasted.png', { type: 'image/png', lastModified: 2 });
+        const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(pasteEvent, 'clipboardData', {
+          value: {
+            files: [fileFromFiles],
+            items: [{ kind: 'file', getAsFile: () => fileFromItems }],
+          },
+        });
+        const textarea = document.querySelector('textarea[placeholder="Message Agents Chat"]') as HTMLTextAreaElement;
+        textarea.dispatchEvent(pasteEvent);
+      });
+
+      await expect(page.locator('.attachmentChip')).toHaveCount(1);
+      await expect(page.locator('.attachmentChip', { hasText: 'pasted.png' })).toBeVisible();
+    });
+
     test('file attachment chip has compact icon and remove control', async ({ page }) => {
       const captured: any[] = [];
       await mockAcpForAttachments(page, captured);
@@ -818,6 +842,79 @@ test.describe('Chat UI', () => {
     });
     expect(alignment.statusLeft).toBe(alignment.rowLeft);
     expect(alignment.resendLeft).toBeGreaterThan(alignment.statusRight);
+  });
+
+  test('should align failed send controls with the collapse action row', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const failedText = `failed long message action row check ${'long content '.repeat(60)}`;
+    const chatId = `ui-failed-action-row-${Date.now()}`;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, failedText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: 'UI failed action row',
+        ts: now,
+        messages: [
+          {
+            id: 'u1',
+            type: 'user',
+            content: failedText,
+            sendStatus: 'failed',
+            sendError: 'Failed to send prompt to agent',
+            resendAgentIds: ['alpha'],
+            resendMessage: failedText,
+            ts: now,
+          },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, failedText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: 'failed long message action row check' });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect(failedUserMessage.getByRole('button', { name: 'Collapse' })).toBeVisible();
+    await expect(failedUserMessage.locator('.userSendFailure')).toBeVisible();
+
+    const verticalAlignment = await failedUserMessage.evaluate((message) => {
+      const collapse = message.querySelector('.collapseToggle') as HTMLElement | null;
+      const failure = message.querySelector('.userSendFailure') as HTMLElement | null;
+      if (!collapse || !failure) throw new Error('Expected collapse and failed-send controls');
+      const collapseRect = collapse.getBoundingClientRect();
+      const failureRect = failure.getBoundingClientRect();
+      return Math.abs(
+        collapseRect.top + collapseRect.height / 2 -
+        (failureRect.top + failureRect.height / 2),
+      );
+    });
+    expect(verticalAlignment).toBeLessThanOrEqual(2);
   });
 
   test('should keep failed send status on the original chat when user switches before failure returns', async ({ page }) => {
@@ -3947,6 +4044,161 @@ test.describe('Theme', () => {
     await expect(page.locator('.themeOption', { hasText: 'Velvet' })).toHaveCount(0);
   });
 
+  test('should use the same selected text colors in Claude chat and file editors', async ({ page }) => {
+    const expectedSelectionStyle = { backgroundColor: 'rgb(237, 194, 178)', color: 'rgb(47, 39, 34)' };
+    const getSelectionStyle = (selector: string) =>
+      page.locator(selector).first().evaluate((element) => {
+        const style = getComputedStyle(element, '::selection');
+        return {
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+        };
+      });
+
+    await page.route('**/api/acp', async (route) => {
+      const request = route.request();
+      if (request.method() !== 'POST') return route.fallback();
+      const body = request.postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          json: {
+            ok: true,
+            agents: [{ id: 'selection-agent', name: 'Selection Agent', cwd: 'Q:\\Repos\\Agents-Chat', canTalk: true }],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/markdown**', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const filePath = url.searchParams.get('path');
+      if (request.method() === 'GET' && !filePath) {
+        await route.fulfill({
+          json: {
+            files: [
+              { path: 'selection.md', name: 'selection.md', mtime: '2026-01-01T00:00:00.000Z' },
+              { path: 'selection.txt', name: 'selection.txt', mtime: '2026-01-01T00:00:00.000Z' },
+            ],
+          },
+        });
+        return;
+      }
+      if (request.method() === 'GET' && filePath === 'selection.md') {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: '# Selection sample\n\nClaude file editor selected text.',
+            kind: 'markdown',
+            mtime: '2026-01-01T00:00:00.000Z',
+          },
+        });
+        return;
+      }
+      if (request.method() === 'GET' && filePath === 'selection.txt') {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: 'Claude plain file selected text.',
+            kind: 'text',
+            mtime: '2026-01-01T00:00:00.000Z',
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/comments**', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ json: { ok: true, comments: [] } });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.evaluate(() => {
+      window.localStorage.setItem('acp_chat_theme_v1', 'claude');
+      window.localStorage.removeItem('acp_file_workspace_v1');
+    });
+
+    const seedResult = await page.evaluate(async () => {
+      const chatId = 'claude-selection-chat';
+      const now = Date.now();
+      const saveResponse = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat: {
+            id: chatId,
+            name: 'Claude selection chat',
+            ts: now,
+            messages: [
+              { id: 'claude-selection-user', type: 'user', content: 'Claude selection sample from the user.', ts: now },
+              { id: 'claude-selection-agent', type: 'agent', agentId: 'alpha', content: 'Claude selection sample from the agent.', ts: now + 1 },
+            ],
+            agentSessions: {},
+          },
+        }),
+      });
+      const lastChatResponse = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+      return { saveOk: saveResponse.ok, lastChatOk: lastChatResponse.ok };
+    });
+    expect(seedResult).toEqual({ saveOk: true, lastChatOk: true });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await expect(page.locator('.messageContent p')).toHaveCount(2);
+
+    const chatSelectionStyles = await page.locator('.messageContent p').evaluateAll((paragraphs) =>
+      paragraphs.map((paragraph) => {
+        const style = getComputedStyle(paragraph, '::selection');
+        return {
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+        };
+      })
+    );
+
+    expect(chatSelectionStyles).toEqual([
+      expectedSelectionStyle,
+      expectedSelectionStyle,
+    ]);
+
+    await page.getByRole('button', { name: /Files/ }).click();
+    await page.locator('select.remoteAgentSelect').selectOption('selection-agent');
+    await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
+    await expect(page.locator('.mdLiveEditable')).toBeVisible();
+
+    const liveEditorSelectionStyle = await getSelectionStyle('.mdLiveEditable p');
+    await page.getByRole('button', { name: 'Split' }).click();
+    await expect(page.locator('textarea.mdEditorTextarea')).toBeVisible();
+
+    const splitTextareaSelectionStyle = await getSelectionStyle('textarea.mdEditorTextarea');
+    const splitPreviewSelectionStyle = await getSelectionStyle('.mdEditorPreviewPane p');
+    await page.locator('.mdTreeFile', { hasText: 'selection.txt' }).click();
+    await expect(page.locator('.fileContentWithLines')).toBeVisible();
+
+    const plainFileSelectionStyle = await getSelectionStyle('.fileLineText');
+    expect({
+      liveEditorSelectionStyle,
+      splitTextareaSelectionStyle,
+      splitPreviewSelectionStyle,
+      plainFileSelectionStyle,
+    }).toEqual({
+      liveEditorSelectionStyle: expectedSelectionStyle,
+      splitTextareaSelectionStyle: expectedSelectionStyle,
+      splitPreviewSelectionStyle: expectedSelectionStyle,
+      plainFileSelectionStyle: expectedSelectionStyle,
+    });
+  });
+
   test('should recover from removed saved theme ids', async ({ page }) => {
     const cases = [
       { saved: 'oneDark', expectedTitle: 'Theme: VS Code Dark', expectedStored: 'vsCodeDark' },
@@ -4016,6 +4268,5 @@ test.describe('Comment Review Chat', () => {
     expect(stored).toBeNull();
   });
 });
-
 
 

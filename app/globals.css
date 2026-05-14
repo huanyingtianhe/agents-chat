@@ -44,6 +44,34 @@ a {
   color: inherit;
 }
 
+.page[data-theme="claude"] .message::selection,
+.page[data-theme="claude"] .message ::selection,
+.page[data-theme="claude"] .mdLiveEditable::selection,
+.page[data-theme="claude"] .mdLiveEditable ::selection,
+.page[data-theme="claude"] .mdEditorTextarea::selection,
+.page[data-theme="claude"] .mdEditorPreviewPane::selection,
+.page[data-theme="claude"] .mdEditorPreviewPane ::selection,
+.page[data-theme="claude"] .fileContentWithLines::selection,
+.page[data-theme="claude"] .fileContentWithLines ::selection {
+  background: #edc2b2;
+  color: #2f2722;
+  text-shadow: none;
+}
+
+.page[data-theme="claude"] .message::-moz-selection,
+.page[data-theme="claude"] .message ::-moz-selection,
+.page[data-theme="claude"] .mdLiveEditable::-moz-selection,
+.page[data-theme="claude"] .mdLiveEditable ::-moz-selection,
+.page[data-theme="claude"] .mdEditorTextarea::-moz-selection,
+.page[data-theme="claude"] .mdEditorPreviewPane::-moz-selection,
+.page[data-theme="claude"] .mdEditorPreviewPane ::-moz-selection,
+.page[data-theme="claude"] .fileContentWithLines::-moz-selection,
+.page[data-theme="claude"] .fileContentWithLines ::-moz-selection {
+  background: #edc2b2;
+  color: #2f2722;
+  text-shadow: none;
+}
+
 /* Agent filter overflow menu (rendered via portal to document.body) */
 .chatAgentFilterOverflowMenu {
   background: var(--panel-strong, var(--panel-bg, #151b2e));
@@ -139,4 +167,3 @@ code::-webkit-scrollbar {
 .chatActionsMenu::-webkit-scrollbar-thumb {
   border-width: 1px;
 }
-

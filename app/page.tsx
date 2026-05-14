@@ -3997,12 +3997,13 @@ export default function Page() {
     const seen = new Set<string>();
     const addFile = (file: File | null) => {
       if (!file) return;
-      const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+      const key = `${file.name.trim().toLowerCase()}:${file.size}:${file.type.trim().toLowerCase()}`;
       if (seen.has(key)) return;
       seen.add(key);
       files.push(file);
     };
     Array.from(event.clipboardData.files || []).forEach(addFile);
+    if (files.length > 0) return files;
     Array.from(event.clipboardData.items || []).forEach((item) => {
       if (item.kind === 'file') addFile(item.getAsFile());
     });
@@ -5544,6 +5545,8 @@ export default function Page() {
                   const hasParts = message.parts && message.parts.length > 0;
                   const isLong = (message.content || '').length > 400 || (message.content || '').split('\n').length > 12;
                   const isCollapsed = expandedMessages[message.id] === false;
+                  const userSendFailure = renderUserSendFailure(message);
+                  const messageActionsClassName = `messageActions ${userSendFailure ? 'messageActionsWithFailure' : ''}`;
                   return (
                     <>
                       {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{getStatusDisplayText(message.statusText, 'Generating')}</div> : null}
@@ -5597,12 +5600,13 @@ export default function Page() {
                         </div>
                         {renderAttachmentsList(message.attachments)}
                         {renderAgentUserRequest(message)}
-                        <div className="messageActions">
+                        <div className={messageActionsClassName}>
                           {partsLong && !message.pending && (
                             <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
                               {isCollapsed ? 'Expand' : 'Collapse'}
                             </button>
                           )}
+                          {userSendFailure}
                           {message.type !== 'user' && (
                             <button
                               type="button"
@@ -5622,7 +5626,6 @@ export default function Page() {
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
                           </div>
                           {renderAttachmentsList(message.attachments)}
-                          {renderUserSendFailure(message)}
                           {message.pending && message.content && (
                             <div className="streamingIndicator">
                               <span className="streamingPulse" />
@@ -5630,12 +5633,13 @@ export default function Page() {
                             </div>
                           )}
                           {renderAgentUserRequest(message)}
-                          <div className="messageActions">
+                          <div className={messageActionsClassName}>
                             {isLong && (
                               <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
                                 {isCollapsed ? 'Expand' : 'Collapse'}
                               </button>
                             )}
+                            {userSendFailure}
                             {message.type !== 'user' && (
                               <button
                                 type="button"
@@ -7112,6 +7116,9 @@ export default function Page() {
           gap: 8px;
           margin-top: 10px;
         }
+        .messageActionsWithFailure {
+          justify-content: space-between;
+        }
         .messageCopyButton,
         :global(.userSendFailureButton) {
           display: inline-flex;
@@ -7269,7 +7276,7 @@ export default function Page() {
         :global(.userSendFailure) {
           display: flex;
           justify-content: flex-end;
-          margin-top: 8px;
+          margin-top: 0;
         }
         :global(.userSendFailurePill) {
           display: inline-flex;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
@@ -17,6 +17,19 @@ import rehypeStringify from 'rehype-stringify';
 const mdProcessor = remark().use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true }).use(rehypeStringify, { allowDangerousHtml: true });
 function markdownToHtml(md: string): string {
   return String(mdProcessor.processSync(md));
+}
+
+function stripMarkdownSyntaxForSearch(text: string): string {
+  return text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 }
 
 // Detect file paths ending in .html/.htm in text and wrap them with report links
@@ -169,6 +182,11 @@ type FileCommentReply = {
 
 type LiveSelectionDraftAnchor = {
   rects: { left: number; top: number; width: number; height: number }[];
+};
+
+type LiveEditorSelectionSnapshot = {
+  start: number;
+  end: number;
 };
 
 type LiveCommentMarker = {
@@ -1109,6 +1127,11 @@ export default function Page() {
   const [mdExpandedDirs, setMdExpandedDirs] = useState<Set<string>>(new Set());
   const [mdDiffOnly, setMdDiffOnly] = useState(false);
   const mdLiveRef = useRef<HTMLDivElement>(null);
+  const [mdLiveElementVersion, setMdLiveElementVersion] = useState(0);
+  const setMdLiveElementRef = useCallback((node: HTMLDivElement | null) => {
+    mdLiveRef.current = node;
+    if (node) setMdLiveElementVersion((version) => version + 1);
+  }, []);
   const turndownRef = useRef<TurndownService | null>(null);
   if (!turndownRef.current) {
     const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', emDelimiter: '*' });
@@ -1141,6 +1164,8 @@ export default function Page() {
   const pendingLiveEditCommentAnchorRef = useRef<LiveSelectionDraftAnchor | null>(null);
   const pendingLiveEditDomRangeRef = useRef<Range | null>(null);
   const pendingLiveEditSelectedTextRef = useRef<string | null>(null);
+  const preserveLiveEditCommentButtonOnCollapseRef = useRef(false);
+  const pendingLiveEditorSelectionRef = useRef<LiveEditorSelectionSnapshot | null>(null);
   const liveSelectionDraftRangeRef = useRef<Range | null>(null);
   const liveSelectionDraftTextRef = useRef<string | null>(null);
   // Maps a newly-created comment id to the editor-content y where it should
@@ -1170,9 +1195,10 @@ export default function Page() {
   chatNameRef.current = chatName;
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
-  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLElement | null>(null);
   const sidebarDragRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
+  const lastChatScrollTopRef = useRef(0);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1414,16 +1440,25 @@ export default function Page() {
 
   useEffect(() => {
     const el = chatContainerRef.current;
-    if (el && shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    if (el && shouldStickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      lastChatScrollTopRef.current = el.scrollTop;
+    }
   }, [messages]);
+
+  function updateChatStickiness(container: HTMLElement) {
+    const previousScrollTop = lastChatScrollTopRef.current;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldStickToBottomRef.current = container.scrollTop < previousScrollTop - 1 ? false : distanceFromBottom <= 4;
+    lastChatScrollTopRef.current = container.scrollTop;
+  }
 
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     const container = el;
     function handleScroll() {
-      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom < 80;
+      updateChatStickiness(container);
     }
     handleScroll();
     container.addEventListener('scroll', handleScroll, { passive: true });
@@ -2555,6 +2590,67 @@ export default function Page() {
     handleCommentSourceScroll(mdLiveContainerRef.current);
   }
 
+  function getTextOffsetInRoot(root: Node, container: Node, offset: number): number | null {
+    try {
+      const range = document.createRange();
+      range.setStart(root, 0);
+      range.setEnd(container, offset);
+      return range.toString().length;
+    } catch {
+      return null;
+    }
+  }
+
+  function captureLiveEditorSelection(): LiveEditorSelectionSnapshot | null {
+    const root = mdLiveRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0) return null;
+
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+
+    const start = getTextOffsetInRoot(root, range.startContainer, range.startOffset);
+    const end = getTextOffsetInRoot(root, range.endContainer, range.endOffset);
+    return start == null || end == null ? null : { start, end };
+  }
+
+  function getTextPositionInRoot(root: Node, textOffset: number): { node: Node; offset: number } {
+    const target = Math.max(0, textOffset);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let remaining = target;
+    let node: Node | null;
+    let lastTextNode: Text | null = null;
+
+    while ((node = walker.nextNode())) {
+      const textNode = node as Text;
+      const length = textNode.textContent?.length ?? 0;
+      lastTextNode = textNode;
+      if (remaining <= length) return { node: textNode, offset: remaining };
+      remaining -= length;
+    }
+
+    if (lastTextNode) {
+      return { node: lastTextNode, offset: lastTextNode.textContent?.length ?? 0 };
+    }
+    return { node: root, offset: 0 };
+  }
+
+  function restoreLiveEditorSelection(snapshot: LiveEditorSelectionSnapshot) {
+    const root = mdLiveRef.current;
+    if (!root) return;
+
+    const start = getTextPositionInRoot(root, snapshot.start);
+    const end = getTextPositionInRoot(root, snapshot.end);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
   function handleTextSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !fileContentRef.current) return;
@@ -2581,6 +2677,7 @@ export default function Page() {
   }
 
   function hideLiveEditCommentButton() {
+    preserveLiveEditCommentButtonOnCollapseRef.current = false;
     pendingLiveEditCommentRangeRef.current = null;
     pendingLiveEditCommentAnchorRef.current = null;
     pendingLiveEditDomRangeRef.current = null;
@@ -2756,17 +2853,7 @@ export default function Page() {
   function getLiveEditRangeForComment(comment: FileComment): Range | null {
     const selectedText = getCommentSourceText(comment);
     if (!selectedText) return null;
-    const renderedText = selectedText
-      .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-      .replace(/^\s{0,3}>\s?/gm, '')
-      .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/__([^_]+)__/g, '$1')
-      .replace(/_([^_]+)_/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .trim();
+    const renderedText = stripMarkdownSyntaxForSearch(selectedText).trim();
     const candidates = Array.from(new Set([selectedText.trim(), renderedText].filter(Boolean)));
     for (const candidate of candidates) {
       const occurrenceIndex = countSourceOccurrencesBefore(
@@ -2869,7 +2956,22 @@ export default function Page() {
 
   function handleLiveEditSelection() {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !mdLiveRef.current) {
+    if (!mdLiveRef.current) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    if (!sel || sel.isCollapsed) {
+      const button = liveEditCommentBtnRef.current;
+      if (
+        preserveLiveEditCommentButtonOnCollapseRef.current &&
+        pendingLiveEditCommentRangeRef.current &&
+        button &&
+        button.style.display !== 'none'
+      ) {
+        preserveLiveEditCommentButtonOnCollapseRef.current = false;
+        return;
+      }
       hideLiveEditCommentButton();
       return;
     }
@@ -2892,40 +2994,53 @@ export default function Page() {
     // numbers. This avoids the previous O(N²·L) sliding-window approach
     // that froze the UI on large markdown files.
     const lines = mdEditContent.split('\n');
-    const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').toLowerCase();
+    const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
     const searchNorm = normalizeSelectionText(selectedText);
     if (!searchNorm) {
       hideLiveEditCommentButton();
       return;
     }
 
-    const SEP = ' ';
-    const normLines = new Array<string>(lines.length);
-    // lineEnd[i] = exclusive end offset (in the joined string) of line i,
-    // i.e. the index immediately past its last normalized char (before the
-    // trailing separator that follows it, if any).
-    const lineEnd = new Int32Array(lines.length);
-    let cursor = 0;
-    let joined = '';
-    for (let i = 0; i < lines.length; i++) {
-      const n = normalizeSelectionText(lines[i]);
-      normLines[i] = n;
-      if (i > 0) {
-        joined += SEP;
-        cursor += SEP.length;
-      }
-      joined += n;
-      cursor += n.length;
-      lineEnd[i] = cursor;
-    }
+    // lineEnd[i] = exclusive end offset (in the joined string) of line i.
+    // Empty Markdown separator lines should not create extra spaces because
+    // rendered browser selection text collapses them to a single boundary.
+    const buildSearchIndex = (lineTexts: string[]) => {
+      const lineEnd = new Int32Array(lines.length);
+      let cursor = 0;
+      let joined = '';
+      let hasContent = false;
 
-    const matchStart = joined.indexOf(searchNorm);
+      for (let i = 0; i < lines.length; i++) {
+        const n = lineTexts[i];
+        if (n) {
+          if (hasContent) {
+            joined += ' ';
+            cursor += 1;
+          }
+          joined += n;
+          cursor += n.length;
+          hasContent = true;
+        }
+        lineEnd[i] = cursor;
+      }
+
+      return { joined, lineEnd };
+    };
+
     let startLine = -1;
     let endLine = -1;
     let startChar: number | undefined;
     let endChar: number | undefined;
 
-    if (matchStart >= 0) {
+    const searchIndexes = [
+      buildSearchIndex(lines.map(normalizeSelectionText)),
+      buildSearchIndex(lines.map(line => normalizeSelectionText(stripMarkdownSyntaxForSearch(line)))),
+    ];
+
+    for (const { joined, lineEnd } of searchIndexes) {
+      const matchStart = joined.indexOf(searchNorm);
+      if (matchStart < 0) continue;
+
       const matchEnd = matchStart + searchNorm.length - 1;
       // Binary search for the line containing matchStart / matchEnd.
       const findLine = (offset: number): number => {
@@ -2950,6 +3065,7 @@ export default function Page() {
           endChar = rawIndex + selectedText.length;
         }
       }
+      break;
     }
 
     if (startLine > 0 && endLine > 0) {
@@ -2957,6 +3073,7 @@ export default function Page() {
       pendingLiveEditCommentAnchorRef.current = getLiveSelectionDraftAnchor(range);
       pendingLiveEditDomRangeRef.current = range.cloneRange();
       pendingLiveEditSelectedTextRef.current = selectedText;
+      preserveLiveEditCommentButtonOnCollapseRef.current = true;
       positionLiveEditCommentButton(range);
     } else {
       hideLiveEditCommentButton();
@@ -3023,19 +3140,23 @@ export default function Page() {
         const range = liveSelectionDraftRangeRef.current;
         if (!mdLiveRef.current) return;
 
-        // Prefer the cloned DOM Range from the user's actual selection: Range
-        // objects track their nodes through reflow, so getClientRects() is
-        // always up to date. Only fall back to text matching when the original
-        // range has been detached from the live DOM (e.g. mdLiveHtml was
-        // regenerated), otherwise findLiveEditTextRange would return the FIRST
-        // occurrence of the text in the document — wrong for any word that
-        // appears more than once in a large file.
+        // Recompute from text first so the draft anchor follows layout changes
+        // after the comment sidebar opens. Use the source range to avoid
+        // landing on an earlier duplicate when the selected text repeats.
         const originalAttached = range
           && mdLiveRef.current.contains(range.startContainer)
           && mdLiveRef.current.contains(range.endContainer);
-        const activeRange = originalAttached
-          ? range
-          : (liveSelectionDraftTextRef.current ? findLiveEditTextRange(liveSelectionDraftTextRef.current) : null);
+        const textRange = liveSelectionDraftTextRef.current && commentAddRange
+          ? findLiveEditTextRange(
+            liveSelectionDraftTextRef.current,
+            countSourceOccurrencesBefore(
+              liveSelectionDraftTextRef.current,
+              commentAddRange.startLine,
+              commentAddRange.startChar,
+            ),
+          )
+          : null;
+        const activeRange = textRange || (originalAttached ? range : null);
         if (!activeRange) return;
         if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
 
@@ -3049,7 +3170,21 @@ export default function Page() {
       window.cancelAnimationFrame(outerFrameId);
       window.cancelAnimationFrame(innerFrameId);
     };
-  }, [showCommentInput, commentSidebarOpen]);
+  }, [showCommentInput, commentSidebarOpen, commentAddRange]);
+
+  useLayoutEffect(() => {
+    if (mdEditorMode !== 'live' || !mdLiveRef.current) return;
+    if (mdLiveRef.current.innerHTML !== mdLiveHtml) {
+      mdLiveRef.current.innerHTML = mdLiveHtml;
+    }
+  }, [mdLiveHtml, mdEditorMode, mdSelectedFile, mdLiveElementVersion]);
+
+  useLayoutEffect(() => {
+    const snapshot = pendingLiveEditorSelectionRef.current;
+    if (!snapshot || mdEditorMode !== 'live') return;
+    pendingLiveEditorSelectionRef.current = null;
+    restoreLiveEditorSelection(snapshot);
+  }, [mdLiveHtml, mdEditorMode]);
 
   useEffect(() => {
     if (showCommentInput) return;
@@ -5190,22 +5325,50 @@ export default function Page() {
                 ) : (
                   <div className="mdEditorLive" ref={mdLiveContainerRef} onScroll={handleLiveEditorScroll}>
                     <div
-                      ref={mdLiveRef}
+                      ref={setMdLiveElementRef}
                       className="mdLiveEditable markdownBody"
                       contentEditable
                       suppressContentEditableWarning
-                      dangerouslySetInnerHTML={{ __html: mdLiveHtml }}
                       onMouseDown={() => {
                         hideLiveEditCommentButton();
                         clearLiveSelectionDraft();
                       }}
+                      onMouseUp={(e) => {
+                        if (e.detail >= 2) {
+                          liveEditSelectionRef.current();
+                        }
+                      }}
+                      onBeforeInput={(e) => {
+                        const snapshot = captureLiveEditorSelection();
+                        if (!snapshot) return;
+
+                        const inputEvent = e.nativeEvent as InputEvent;
+                        if (inputEvent.inputType === 'deleteContentBackward' && snapshot.start === snapshot.end) {
+                          const nextOffset = Math.max(0, snapshot.start - 1);
+                          pendingLiveEditorSelectionRef.current = { start: nextOffset, end: nextOffset };
+                          return;
+                        }
+
+                        if (inputEvent.inputType === 'insertText' && typeof inputEvent.data === 'string') {
+                          const nextOffset = snapshot.start + inputEvent.data.length;
+                          pendingLiveEditorSelectionRef.current = { start: nextOffset, end: nextOffset };
+                          return;
+                        }
+
+                        pendingLiveEditorSelectionRef.current = { start: snapshot.start, end: snapshot.start };
+                      }}
                       onInput={() => {
                         if (mdLiveRef.current) {
+                          const selectionSnapshot = pendingLiveEditorSelectionRef.current || captureLiveEditorSelection();
+                          pendingLiveEditorSelectionRef.current = selectionSnapshot;
                           const html = mdLiveRef.current.innerHTML;
                           const md = turndownRef.current!.turndown(html);
                           setMdLiveHtml(html);
                           setMdEditContent(md);
                           setMdDirty(md !== mdFileContent);
+                          if (selectionSnapshot) {
+                            window.requestAnimationFrame(() => restoreLiveEditorSelection(selectionSnapshot));
+                          }
                         }
                       }}
                     />
@@ -5275,9 +5438,19 @@ export default function Page() {
                         if (willOpenSidebar) {
                           const refreshAnchor = () => {
                             const liveRange = liveSelectionDraftRangeRef.current;
-                            if (!liveRange || !mdLiveRef.current) return;
-                            if (!mdLiveRef.current.contains(liveRange.startContainer) || !mdLiveRef.current.contains(liveRange.endContainer)) return;
-                            const next = getLiveSelectionDraftAnchor(liveRange);
+                            const selectedText = liveSelectionDraftTextRef.current;
+                            if (!mdLiveRef.current) return;
+                            const textRange = selectedText
+                              ? findLiveEditTextRange(
+                                selectedText,
+                                countSourceOccurrencesBefore(selectedText, range.startLine, range.startChar),
+                              )
+                              : null;
+                            const activeRange = textRange || liveRange;
+                            if (!activeRange) return;
+                            if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
+                            liveSelectionDraftRangeRef.current = activeRange.cloneRange();
+                            const next = getLiveSelectionDraftAnchor(activeRange);
                             if (next) setLiveSelectionDraftAnchor(next);
                           };
                           window.requestAnimationFrame(() => {
@@ -5525,9 +5698,16 @@ export default function Page() {
           </div>
           ) : (
           <>
-          <section className="chatContainer" ref={chatContainerRef}>
+          <section
+            className="chatContainer"
+            ref={chatContainerRef}
+            onScroll={(e) => updateChatStickiness(e.currentTarget)}
+            onWheel={(e) => {
+              if (e.deltaY < 0) shouldStickToBottomRef.current = false;
+            }}
+          >
             {visibleMessages.map((message) => (
-              <div key={message.id} className={`message ${message.type} ${message.summary ? 'summaryCard' : ''}`}>
+              <div key={message.id} className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
                 {message.type !== 'user' && (
                   <div className="messageHeader">
                     <span className="agentName">{message.type === 'system' ? 'System' : (agents.find((a) => a.id === message.agentId)?.name || message.agentId || 'agent')}</span>
@@ -7044,6 +7224,7 @@ export default function Page() {
           min-height: 0;
           overflow-y: auto;
           overflow-x: hidden;
+          overflow-anchor: none;
           padding: 24px;
           display: flex;
           flex-direction: column;
@@ -7150,6 +7331,10 @@ export default function Page() {
           align-self: flex-start;
           background: var(--message-agent);
           border-left: 3px solid var(--accent);
+        }
+        .message.agent.streamingMessage {
+          box-sizing: border-box;
+          width: 80%;
         }
         .message.summaryCard {
           border-left: 3px solid var(--accent-2);

@@ -3154,6 +3154,177 @@ test.describe('Chat UI', () => {
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });
 
+  test('should not force-scroll to bottom after user scrolls up during streaming', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = 'stream without forcing scroll';
+    const newChunk = 'new streamed chunk after manual scroll';
+    let streamedText = 'Initial streaming answer.';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-scroll-lock' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'busy',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-scroll-lock',
+              fullText: streamedText,
+              done: false,
+              phase: 'responding',
+              statusText: 'Generating',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: streamedText }],
+              totalEvents: 1,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async () => {
+      const now = Date.now();
+      const fillerMessages = Array.from({ length: 18 }, (_, index) => ({
+        id: `filler-${index}`,
+        type: index % 2 === 0 ? 'user' : 'agent',
+        agentId: index % 2 === 0 ? undefined : 'alpha',
+        content: `Scrollable history row ${index} `.repeat(20),
+        ts: now + index,
+      }));
+      const chat = {
+        id: 'stream-scroll-lock-chat',
+        name: 'Stream scroll lock chat',
+        ts: now,
+        messages: fillerMessages,
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator('.message.agent', { hasText: streamedText })).toBeVisible({ timeout: 15000 });
+
+    const manualDistanceFromBottom = await chatArea.evaluate((el) => {
+      const maxScrollTop = el.scrollHeight - el.clientHeight;
+      if (maxScrollTop < 160) throw new Error(`Expected scrollable chat, got ${maxScrollTop}`);
+      el.scrollTop = maxScrollTop - 40;
+      el.dispatchEvent(new Event('scroll', { bubbles: true }));
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    expect(manualDistanceFromBottom).toBeGreaterThan(30);
+    expect(manualDistanceFromBottom).toBeLessThan(80);
+
+    streamedText = `${streamedText}\n\n${newChunk}\n${'more generated text '.repeat(80)}`;
+    await expect(chatArea.locator('.message.agent', { hasText: newChunk })).toBeVisible({ timeout: 15000 });
+
+    await expect.poll(async () => chatArea.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(20);
+  });
+
+  test('should keep pending agent bubble width stable while streaming response grows', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = 'stream without bubble shake';
+    const initialText = 'Short answer.';
+    const longChunk = 'additional streamed response text';
+    let streamedText = initialText;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-width-lock' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'busy',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-width-lock',
+              fullText: streamedText,
+              done: false,
+              phase: 'responding',
+              statusText: 'Generating',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: streamedText }],
+              totalEvents: 1,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    const agentMessage = chatArea.locator('.message.agent').last();
+    await expect(agentMessage).toContainText(initialText, { timeout: 15000 });
+
+    const initialBox = await agentMessage.boundingBox();
+    expect(initialBox).not.toBeNull();
+
+    streamedText = `${initialText} ${Array(35).fill(longChunk).join(' ')}`;
+    await expect(agentMessage).toContainText(longChunk, { timeout: 15000 });
+    const grownBox = await agentMessage.boundingBox();
+    expect(grownBox).not.toBeNull();
+
+    expect(Math.abs(grownBox!.width - initialBox!.width)).toBeLessThanOrEqual(2);
+  });
+
   test('chat-scoped active turns: same chat rejects second send while another chat can keep its own active turn', async ({ page }) => {
     const agentId = 'alpha';
     const activeTurns = new Map<string, { id: string; messageId: string; text: string }>();
@@ -4268,5 +4439,4 @@ test.describe('Comment Review Chat', () => {
     expect(stored).toBeNull();
   });
 });
-
 

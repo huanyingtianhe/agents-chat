@@ -1322,7 +1322,7 @@ export default function Page() {
     }
     const lastAgent = [...chatMessages].reverse().find((m) => m.type === 'agent');
     if (!lastAgent) return null;
-    if ((lastAgent.content || '').trim().startsWith('⚠️')) return { label: 'Error', kind: 'error' };
+    if (getMessageCopyText(lastAgent).trim().startsWith('⚠️')) return { label: 'Error', kind: 'error' };
     return { label: 'Done', kind: 'done' };
   }, [currentChatId, messages, runVersion]);
 

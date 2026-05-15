@@ -478,6 +478,42 @@ assert.match(
 
 assert.match(
   routeSource,
+  /function\s+logSessionLoadFallback\([\s\S]*?console\.log\(\s*`\[ACP:\$\{agentId\}\]\s+session\/load fallback:[\s\S]*?chat=\$\{chatId\s*\|\|\s*['"]\(none\)['"]\}[\s\S]*?savedSession=\$\{savedSessionId\}[\s\S]*?reason=\$\{reason\};\s+falling back to session\/new/,
+  'route.ts should log chat/session/reason to stdout whenever session/load falls back to session/new',
+);
+
+assert.match(
+  routeSource,
+  /catch\s*\(loadErr:[\s\S]*?const\s+alreadyLoaded[\s\S]*?if\s*\(alreadyLoaded\)[\s\S]*?return\s+NextResponse\.json[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId,[\s\S]*?errStr[\s\S]*?\);[\s\S]*?\}[\s\S]*?else\s*\{[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId,\s*['"]agent does not support loadSession['"]\);/,
+  'resume-session should log both failed session/load and unsupported loadSession fallback paths',
+);
+
+assert.match(
+  routeSource,
+  /function\s+getLastStoredSessionId\([\s\S]*?Array\.isArray\(value\)[\s\S]*?for\s*\(let\s+i\s*=\s*value\.length\s*-\s*1[\s\S]*?typeof\s+item\s*===\s*['"]string['"][\s\S]*?return\s+item/,
+  'route.ts should read the latest session id from either legacy string or append-only session arrays',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+getStoredChatAgentSessionId\([\s\S]*?await\s+getChat\(userId,\s*chatId\)[\s\S]*?getLastStoredSessionId\(chat\?\.agentSessions\?\.\[agentId\]\)/,
+  'route.ts should be able to read a saved chat agent session from SQLite before sending',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+loadSavedChatSessionForSend\([\s\S]*?proc\.knownSessions\.has\(savedSessionId\)[\s\S]*?proc\.supportsLoadSession[\s\S]*?await\s+proc\.rpc!\.send\('session\/load',\s*\{\s*sessionId:\s*savedSessionId[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId/,
+  'send should load a saved chat session before falling back to session/new',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]send['"][\s\S]*?const\s+chatSessionId\s*=\s*getChatSession\(sess,\s*chatId\);[\s\S]*?const\s+savedSessionId\s*=\s*await\s+getStoredChatAgentSessionId\(userId,\s*chatId,\s*agentId\);[\s\S]*?if\s*\(savedSessionId\)\s*\{[\s\S]*?await\s+loadSavedChatSessionForSend\(proc,\s*sess,\s*agentId,\s*userId,\s*chatId,\s*savedSessionId,\s*isAdmin\)[\s\S]*?await\s+ensureUserSession\(proc,\s*sess,\s*agentId,\s*userId,\s*isAdmin\)/,
+  'send should try the saved SQLite session for this chat before ensureUserSession creates a new session',
+);
+
+assert.match(
+  routeSource,
   /const\s+alreadyLoaded\s*=[\s\S]*?if\s*\(alreadyLoaded\)\s*\{[\s\S]*?const\s+activeTurn\s*=\s*getActiveTurnForResume\(chatTurn,\s*savedSessionId\)[\s\S]*?return\s+NextResponse\.json\(\{\s*ok:\s*true,\s*sessionId:\s*savedSessionId,\s*loaded:\s*true,\s*activeTurn:\s*serializeTurn\(activeTurn\)\s*\}\)/,
   'already-loaded resume should return the matching active turn even when sess.sessionId was stale',
 );

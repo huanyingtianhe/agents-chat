@@ -775,6 +775,66 @@ test.describe('Chat UI', () => {
     await expect(statusBadge).not.toHaveText('.');
   });
 
+  test('should not show sidebar error when the visible agent message is successful', async ({ page }) => {
+    const chatId = `ui-sidebar-visible-success-${Date.now()}`;
+    const chatName = 'Sidebar visible success';
+    const visibleAnswer = 'Successful answer visible to the user.';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, chatName, visibleAnswer }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: chatName,
+        ts: now,
+        messages: [
+          { id: 'u1', type: 'user', content: 'show a normal answer', ts: now },
+          {
+            id: 'a1',
+            type: 'agent',
+            agentId: 'alpha',
+            content: '⚠️ stale hidden transport warning',
+            parts: [{ kind: 'text', text: visibleAnswer }],
+            ts: now + 1,
+          },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, chatName, visibleAnswer });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const chatRow = page.locator('.chatHistoryRow', { hasText: chatName }).first();
+    await expect(chatRow).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.message.agent .messageContent', { hasText: visibleAnswer })).toBeVisible();
+    await expect(chatRow.locator('.chatStatusBadge.error')).toHaveCount(0);
+    await expect(chatRow.locator('.chatStatusBadge.done')).toHaveText('Done');
+  });
+
   test('should not show punctuation-only ongoing message status', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const chatId = `ui-message-punctuation-status-${Date.now()}`;

@@ -1287,6 +1287,79 @@ async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise
   return params;
 }
 
+function logSessionLoadFallback(agentId: string, userId: string, chatId: string | undefined, savedSessionId: string, reason: string): void {
+  console.log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
+}
+
+function getLastStoredSessionId(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i--) {
+      const item = value[i];
+      if (typeof item === 'string' && item.trim()) return item.trim();
+    }
+  }
+  return null;
+}
+
+async function getStoredChatAgentSessionId(userId: string, chatId: string, agentId: string): Promise<string | null> {
+  const chat = await getChat(userId, chatId);
+  return getLastStoredSessionId(chat?.agentSessions?.[agentId]);
+}
+
+async function loadSavedChatSessionForSend(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  chatId: string,
+  savedSessionId: string,
+  isAdmin: boolean,
+): Promise<boolean> {
+  if (!proc.rpc) throw new Error('Agent process not ready');
+  if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
+    sess.sessionId = savedSessionId;
+    pushChatSession(sess, chatId, savedSessionId);
+    sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
+    console.log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    return true;
+  }
+  if (!proc.supportsLoadSession) {
+    logSessionLoadFallback(agentId, userId, chatId, savedSessionId, 'agent does not support loadSession');
+    return false;
+  }
+
+  const replayBuffers = getReplayBuffers();
+  replayBuffers.set(savedSessionId, []);
+  try {
+    const sessionParams = await buildSessionParams(proc, isAdmin);
+    await proc.rpc.send('session/load', { sessionId: savedSessionId, ...sessionParams });
+    replayBuffers.delete(savedSessionId);
+    sess.sessionId = savedSessionId;
+    pushChatSession(sess, chatId, savedSessionId);
+    if (sess.activeTurns.size === 0) sess.phase = 'idle';
+    proc.knownSessions.add(savedSessionId);
+    console.log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    return true;
+  } catch (loadErr: any) {
+    replayBuffers.delete(savedSessionId);
+    const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
+    let code = loadErr?.data?.code ?? loadErr?.code;
+    if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
+    const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
+    if (alreadyLoaded) {
+      sess.sessionId = savedSessionId;
+      pushChatSession(sess, chatId, savedSessionId);
+      sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
+      proc.knownSessions.add(savedSessionId);
+      console.log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
+      return true;
+    }
+    logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
+    return false;
+  }
+}
+
 async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId: string, userId: string, isAdmin: boolean): Promise<void> {
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
@@ -2410,8 +2483,14 @@ export async function POST(req: NextRequest) {
             // Don't null activeTurns — other chats may have active turns
           }
         } else {
-          // New chat with no prior session — clear so ensureUserSession creates a fresh one
-          sess.sessionId = null;
+          const savedSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+          if (savedSessionId) {
+            const loadedSavedSession = await loadSavedChatSessionForSend(proc, sess, agentId, userId, chatId, savedSessionId, isAdmin);
+            if (!loadedSavedSession) sess.sessionId = null;
+          } else {
+            // New chat with no prior session — clear so ensureUserSession creates a fresh one
+            sess.sessionId = null;
+          }
         }
       }
 
@@ -2669,10 +2748,10 @@ export async function POST(req: NextRequest) {
             console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
             return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
           }
-          console.log(`[ACP:${agentId}] session/load failed for ${savedSessionId}: ${errStr}, falling back to session/new`);
+          logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
         }
       } else {
-        console.log(`[ACP:${agentId}] Agent does not support loadSession, falling back to session/new`);
+        logSessionLoadFallback(agentId, userId, chatId, savedSessionId, 'agent does not support loadSession');
       }
       // Fall back to creating a new session — the frontend will inject chat history on first turn
       try {

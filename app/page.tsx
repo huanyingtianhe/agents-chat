@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition, type ClipboardEvent, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
@@ -494,7 +494,7 @@ class PromptSendFailedError extends Error {
 
 const STORAGE_CHAT_INPUT = 'acp_chat_input_v1';
 const STORAGE_SIDEBAR_COLLAPSED = 'acp_chat_sidebar_collapsed_v1';
-const STORAGE_INPUT_HISTORY = 'acp_input_history_v1';
+const STORAGE_INPUT_HISTORY = 'acp_input_history_v2';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 const STORAGE_AGENT_FILTER = 'acp_agent_filter_v1';
 const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
@@ -995,6 +995,23 @@ export default function Page() {
     { id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target one or more agents.', ts: 0 },
   ]);
   const [input, setInput] = useState('');
+  const inputRef = useRef('');
+  const inputDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // For programmatic updates (clear, history, mention select) — sync DOM + state immediately
+  const setInputProgrammatic = useCallback((value: string) => {
+    inputRef.current = value;
+    if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
+    setInput(value);
+    if (composerRef.current) {
+      composerRef.current.value = value;
+      const el = composerRef.current;
+      el.style.height = '0px';
+      el.style.overflowY = 'hidden';
+      const next = Math.min(Math.max(el.scrollHeight, 28), 300);
+      el.style.height = `${next}px`;
+      if (el.scrollHeight > 300) el.style.overflowY = 'auto';
+    }
+  }, []);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false);
@@ -1150,7 +1167,7 @@ export default function Page() {
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const inputHistoryRef = useRef<string[]>([]);
+  const inputHistoryRef = useRef<Record<string, string[]>>({});
   const inputHistoryIndexRef = useRef(-1);
   const inputDraftRef = useRef('');
   const needsContextRestoreRef = useRef(false);
@@ -1293,9 +1310,16 @@ export default function Page() {
       const rowWidth = row.clientWidth;
       const gap = 4;
       const moreBtnWidth = 38; // "···" button
-      const allBtnWidth = 34; // "All" button
-      // Estimate each agent button width from name length: ~6.5px per char + 22px padding/border
-      const agentWidths = agents.map(a => Math.ceil((a.name || a.id).length * 6.5) + 22);
+      // Measure actual button widths from the DOM
+      const buttons = Array.from(row.querySelectorAll('.chatAgentFilterBtn:not(.chatAgentFilterMoreBtn)'));
+      const allBtn = buttons[0]; // "All" button is always first
+      const allBtnWidth = allBtn ? allBtn.getBoundingClientRect().width : 34;
+      const agentButtons = buttons.slice(1);
+      // If we have fewer buttons than agents (some are in overflow), estimate the rest
+      const agentWidths = agents.map((a, i) => {
+        if (i < agentButtons.length) return agentButtons[i].getBoundingClientRect().width;
+        return Math.ceil((a.name || a.id).length * 6.5) + 22;
+      });
       let used = allBtnWidth + gap;
       let fits = 0;
       for (let i = 0; i < agentWidths.length; i++) {
@@ -1307,10 +1331,11 @@ export default function Page() {
       }
       setMaxVisibleAgents(Math.max(1, fits));
     };
+    // Run after a frame to ensure buttons are rendered with correct widths
+    const frameId = requestAnimationFrame(computeMax);
     const observer = new ResizeObserver(computeMax);
     observer.observe(row);
-    computeMax();
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(frameId); observer.disconnect(); };
   }, [agents]);
 
   useEffect(() => {
@@ -1336,7 +1361,7 @@ export default function Page() {
     const savedInput = window.localStorage.getItem(STORAGE_CHAT_INPUT);
     const savedCollapsed = window.localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
 
-    if (savedInput) setInput(savedInput);
+    if (savedInput) setInputProgrammatic(savedInput);
     if (savedCollapsed != null) setSidebarCollapsed(savedCollapsed === '1');
     const savedCommentSidebar = window.localStorage.getItem('commentSidebarOpen');
     if (savedCommentSidebar != null) setCommentSidebarOpen(savedCommentSidebar === 'true');
@@ -1386,7 +1411,7 @@ export default function Page() {
 
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
-      if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || [];
+      if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || {};
     } catch { /* ignore */ }
     try {
       const savedTheme = window.localStorage.getItem(STORAGE_THEME);
@@ -1428,17 +1453,22 @@ export default function Page() {
     return () => container.removeEventListener('scroll', handleScroll);
   }, []);
 
-  useEffect(() => {
+  // Native auto-resize + input sync — bypasses React synthetic events entirely
+  const composerInputHandler = useCallback(() => {
     const el = composerRef.current;
     if (!el) return;
-    const singleLineHeight = 28;
-    const maxHeight = 180;
-
-    el.style.height = `${singleLineHeight}px`;
-    const nextHeight = Math.min(Math.max(el.scrollHeight, singleLineHeight), maxHeight);
-    el.style.height = `${nextHeight}px`;
-    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [input]);
+    inputRef.current = el.value;
+    // Reset to min then expand to content (max 300px before scrolling)
+    el.style.height = '0px';
+    el.style.overflowY = 'hidden';
+    const next = Math.min(Math.max(el.scrollHeight, 28), 300);
+    el.style.height = `${next}px`;
+    if (el.scrollHeight > 300) el.style.overflowY = 'auto';
+    if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
+    inputDebounceRef.current = setTimeout(() => {
+      startTransition(() => setInput(composerRef.current?.value || ''));
+    }, 300);
+  }, []);
 
   // Resume agent sessions once after auth state is determined
   const sessionResumedChatIdRef = useRef<string | null>(null);
@@ -3756,10 +3786,15 @@ export default function Page() {
       seen.add(key);
       files.push(file);
     };
-    Array.from(event.clipboardData.files || []).forEach(addFile);
-    Array.from(event.clipboardData.items || []).forEach((item) => {
-      if (item.kind === 'file') addFile(item.getAsFile());
-    });
+    // Prefer clipboardData.files; only fall back to items if no files found
+    const clipFiles = Array.from(event.clipboardData.files || []);
+    if (clipFiles.length > 0) {
+      clipFiles.forEach(addFile);
+    } else {
+      Array.from(event.clipboardData.items || []).forEach((item) => {
+        if (item.kind === 'file') addFile(item.getAsFile());
+      });
+    }
     return files;
   }
 
@@ -3880,7 +3915,7 @@ export default function Page() {
   }
 
   async function handleSend() {
-    const text = input.trim();
+    const text = (inputRef.current || composerRef.current?.value || '').trim();
     const sendAttachments = attachments;
     if ((!text && sendAttachments.length === 0) || agents.length === 0) return;
 
@@ -3897,19 +3932,19 @@ export default function Page() {
 
     shouldStickToBottomRef.current = true;
     const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
-    setInput('');
+    setInputProgrammatic('');
     clearAttachments();
-
-    // Persist user message to SQLite immediately (don't wait for agent response)
     void saveChatToHistory(sendChatId);
 
-    // Save to input history
-    const hist = inputHistoryRef.current;
-    if (text && hist[hist.length - 1] !== text) hist.push(text);
-    if (hist.length > 100) hist.splice(0, hist.length - 100);
+    // Save to input history (per-chat)
+    const allHist = inputHistoryRef.current;
+    if (!allHist[sendChatId]) allHist[sendChatId] = [];
+    const chatHist = allHist[sendChatId];
+    if (text && chatHist[chatHist.length - 1] !== text) chatHist.push(text);
+    if (chatHist.length > 100) chatHist.splice(0, chatHist.length - 100);
     inputHistoryIndexRef.current = -1;
     inputDraftRef.current = '';
-    try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(hist)); } catch { /* ignore */ }
+    try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
 
     try {
       await dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
@@ -4224,7 +4259,7 @@ export default function Page() {
     const initial: ChatMessage[] = [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }];
     setMessagesForChat(currentChatIdRef.current, initial);
     setExpandedMessages({});
-    setInput('');
+    setInputProgrammatic('');
     setSelectedAgentFilter(null);
   }
 
@@ -4283,7 +4318,7 @@ export default function Page() {
     setChatName(targetName);
     setCurrentChatId(chatId);
     setExpandedMessages({});
-    setInput('');
+    setInputProgrammatic('');
     setSelectedAgentFilter(null);
     if (migratedFailedSendState) {
       void persistLoadedChatMigration(chatId, targetName, targetTs, targetMessages, agentSessions);
@@ -4463,8 +4498,9 @@ export default function Page() {
   }
 
   function selectMention(agentId: string) {
-    const atIndex = input.lastIndexOf('@');
-    setInput(`${input.slice(0, atIndex)}@${agentId} `);
+    const currentInput = inputRef.current;
+    const atIndex = currentInput.lastIndexOf('@');
+    setInputProgrammatic(`${currentInput.slice(0, atIndex)}@${agentId} `);
     setMentionSelectedIndex(0);
   }
 
@@ -5478,8 +5514,7 @@ export default function Page() {
                     <textarea
                       ref={composerRef}
                       className="composerTextarea"
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
+                      defaultValue={input}
                       onPaste={handleAttachmentPaste}
                       onKeyDown={(e) => {
                         if (filteredAgents.length > 0) {
@@ -5491,34 +5526,35 @@ export default function Page() {
                             if (sel) selectMention(sel.id);
                             return;
                           }
-                          if (e.key === 'Escape') { e.preventDefault(); setInput((p) => p.replace(/@(\S*)$/, '')); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); setInputProgrammatic(inputRef.current.replace(/@(\S*)$/, '')); return; }
                         }
                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (isCurrentChatSending) { void handleStop(); } else { void handleSend(); } }
                         if (filteredAgents.length === 0) {
                           const caretStart = e.currentTarget.selectionStart ?? 0;
                           const caretEnd = e.currentTarget.selectionEnd ?? 0;
-                          const singleLine = !input.includes('\n');
+                          const currentVal = e.currentTarget.value;
+                          const singleLine = !currentVal.includes('\n');
                           if (e.key === 'ArrowUp' && singleLine && caretStart === 0 && caretEnd === 0) {
                             e.preventDefault();
-                            const hist = inputHistoryRef.current;
+                            const hist = inputHistoryRef.current[currentChatIdRef.current] || [];
                             if (hist.length === 0) return;
-                            if (inputHistoryIndexRef.current === -1) inputDraftRef.current = input;
+                            if (inputHistoryIndexRef.current === -1) inputDraftRef.current = currentVal;
                             const newIdx = inputHistoryIndexRef.current === -1 ? hist.length - 1 : Math.max(0, inputHistoryIndexRef.current - 1);
                             inputHistoryIndexRef.current = newIdx;
-                            setInput(hist[newIdx]);
+                            setInputProgrammatic(hist[newIdx]);
                             return;
                           }
-                          if (e.key === 'ArrowDown' && singleLine && caretStart === input.length && caretEnd === input.length) {
+                          if (e.key === 'ArrowDown' && singleLine && caretStart === currentVal.length && caretEnd === currentVal.length) {
                             e.preventDefault();
-                            const hist = inputHistoryRef.current;
+                            const hist = inputHistoryRef.current[currentChatIdRef.current] || [];
                             if (inputHistoryIndexRef.current === -1) return;
                             const newIdx = inputHistoryIndexRef.current + 1;
                             if (newIdx >= hist.length) {
                               inputHistoryIndexRef.current = -1;
-                              setInput(inputDraftRef.current);
+                              setInputProgrammatic(inputDraftRef.current);
                             } else {
                               inputHistoryIndexRef.current = newIdx;
-                              setInput(hist[newIdx]);
+                              setInputProgrammatic(hist[newIdx]);
                             }
                             return;
                           }
@@ -5527,11 +5563,12 @@ export default function Page() {
                       placeholder="Message Agents Chat"
                       rows={1}
                       spellCheck={false}
+                      onInput={composerInputHandler}
                     />
                     <div className="composerActions composerInlineActions">
                       {isCurrentChatSending
                         ? <button className="sendButton stopButton" onClick={() => void handleStop()} aria-label="Stop generation">⏹</button>
-                        : <button className="sendButton" onClick={() => void handleSend()} disabled={agents.length === 0 || (!input.trim() && attachments.length === 0)} aria-label="Send message">
+                        : <button className="sendButton" onClick={() => void handleSend()} disabled={agents.length === 0} aria-label="Send message">
                             <span className="sendButtonIcon">↑</span>
                           </button>
                       }
@@ -7544,7 +7581,7 @@ export default function Page() {
           flex: 1;
           width: 100%;
           min-height: 24px;
-          max-height: 180px;
+          max-height: 300px;
           resize: none;
           overflow-y: hidden;
           padding: 8px 0 7px;

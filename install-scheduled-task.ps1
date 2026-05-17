@@ -1,13 +1,27 @@
-# Installs Agents-Chat as a boot Scheduled Task running as the wulei user.
+# Installs Agents-Chat as a Scheduled Task running as the wulei user.
 # This uses the service-watchdog.ps1 wrapper, so start.ps1 is restarted if it exits.
 
 param(
     [string]$TaskName = 'Agents-Chat-Startup',
     [string]$ProjectDir = 'Q:\repos\Agents-Chat',
-    [string]$UserId = 'FAREAST\wulei'
+    [string]$UserId = 'FAREAST\wulei',
+    [ValidateSet('Interactive', 'S4U')]
+    [string]$LogonType = 'Interactive',
+    [ValidateSet('AtLogOn', 'AtStartup')]
+    [string]$TriggerType = 'AtLogOn'
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdministrator)) {
+    throw "install-scheduled-task.ps1 registers a highest-privilege Scheduled Task and must be run from an elevated PowerShell session. Run PowerShell as Administrator and try again."
+}
 
 $WatchdogScript = Join-Path $ProjectDir 'service-watchdog.ps1'
 if (-not (Test-Path $WatchdogScript)) {
@@ -22,11 +36,15 @@ $Action = New-ScheduledTaskAction `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$WatchdogScript`"" `
     -WorkingDirectory $ProjectDir
 
-$Trigger = New-ScheduledTaskTrigger -AtStartup
+$Trigger = if ($TriggerType -eq 'AtStartup') {
+    New-ScheduledTaskTrigger -AtStartup
+} else {
+    New-ScheduledTaskTrigger -AtLogOn -User $UserId
+}
 
-# S4U = runs under this user whether or not the user is interactively logged in,
-# without prompting/storing the account password. It is suitable for local resources.
-$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType S4U -RunLevel Highest
+# Interactive runs on demand without storing a password when the user is logged in.
+# S4U can run without an interactive login, but may not start reliably for Entra-backed users.
+$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType $LogonType -RunLevel Highest
 
 $Settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
@@ -43,7 +61,7 @@ Register-ScheduledTask `
     -Trigger $Trigger `
     -Principal $Principal `
     -Settings $Settings `
-    -Description 'Start Agents-Chat at Windows boot as wulei and watchdog start.ps1.' `
+    -Description 'Start Agents-Chat as wulei and watchdog start.ps1.' `
     -Force | Out-Null
 
 $Task = Get-ScheduledTask -TaskName $TaskName
@@ -54,7 +72,7 @@ $Info = Get-ScheduledTaskInfo -TaskName $TaskName
     UserId = $Task.Principal.UserId
     LogonType = $Task.Principal.LogonType.ToString()
     RunLevel = $Task.Principal.RunLevel.ToString()
-    Trigger = 'AtStartup'
+    Trigger = $TriggerType
     Execute = $Task.Actions[0].Execute
     Arguments = $Task.Actions[0].Arguments
     WorkingDirectory = $Task.Actions[0].WorkingDirectory

@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 certificates/
 setup-files/logs/*
 logs/*
+server.log
+server-error.log

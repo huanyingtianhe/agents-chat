@@ -14,6 +14,12 @@ const NODES_JSON_PATH = path.join(process.cwd(), 'nodes.json');
 
 // ─── Types ───
 
+export type AgentModel = {
+  modelId: string;
+  name?: string;
+  description?: string;
+};
+
 export type AgentRecord = {
   id: string;
   name: string;
@@ -25,6 +31,8 @@ export type AgentRecord = {
   relay: boolean;
   relayConnectionName: string;
   public: boolean;
+  models: AgentModel[];
+  defaultModelId: string;
   owner: string;
   createdAt: string;
   updatedAt: string;
@@ -63,6 +71,8 @@ function getDb(): ReturnType<typeof Database> {
       relay INTEGER NOT NULL DEFAULT 0,
       relay_connection_name TEXT NOT NULL DEFAULT '',
       public INTEGER NOT NULL DEFAULT 0,
+      models TEXT NOT NULL DEFAULT '[]',
+      default_model_id TEXT NOT NULL DEFAULT '',
       owner TEXT NOT NULL DEFAULT 'system',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -102,12 +112,13 @@ function runMigrations(): void {
       const defaultOwner = getDefaultOwner();
 
       const insert = db.prepare(`
-        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, owner)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, owner)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const tx = db.transaction(() => {
         for (const a of agents) {
+          const models = normalizeAgentModels(a.models);
           insert.run(
             a.id,
             a.name || a.id,
@@ -119,6 +130,8 @@ function runMigrations(): void {
             a.relay ? 1 : 0,
             a.relayConnectionName || '',
             a.id === 'copilot' ? 1 : 0,
+            JSON.stringify(models),
+            normalizeDefaultModelId(a.defaultModelId, models),
             defaultOwner,
           );
         }
@@ -172,6 +185,59 @@ function runMigrations(): void {
     db.prepare("UPDATE agents SET public = 1 WHERE id = 'copilot'").run();
     db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('add_public_column');
   }
+
+  const modelColsMigrated = db.prepare('SELECT 1 FROM migrations WHERE key = ?').get('add_agent_model_columns');
+  if (!modelColsMigrated) {
+    try {
+      db.exec(`ALTER TABLE agents ADD COLUMN models TEXT NOT NULL DEFAULT '[]'`);
+    } catch {
+      // Column already exists if DB was created fresh with the new schema
+    }
+    try {
+      db.exec(`ALTER TABLE agents ADD COLUMN default_model_id TEXT NOT NULL DEFAULT ''`);
+    } catch {
+      // Column already exists if DB was created fresh with the new schema
+    }
+    db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('add_agent_model_columns');
+  }
+}
+
+function normalizeAgentModels(input: unknown): AgentModel[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const models: AgentModel[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : '';
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+    models.push({
+      modelId,
+      ...(name ? { name } : {}),
+      ...(description ? { description } : {}),
+    });
+  }
+  return models;
+}
+
+function parseAgentModels(raw: unknown): AgentModel[] {
+  if (Array.isArray(raw)) return normalizeAgentModels(raw);
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    return normalizeAgentModels(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeDefaultModelId(input: unknown, models: AgentModel[]): string {
+  const modelId = typeof input === 'string' ? input.trim() : '';
+  if (!modelId) return '';
+  if (models.length > 0 && !models.some(model => model.modelId === modelId)) return '';
+  return modelId;
 }
 
 function getDefaultOwner(): string {
@@ -185,6 +251,7 @@ function getDefaultOwner(): string {
 // ─── Agent CRUD ───
 
 function rowToAgent(row: any): AgentRecord {
+  const models = parseAgentModels(row.models);
   return {
     id: row.id,
     name: row.name,
@@ -196,6 +263,8 @@ function rowToAgent(row: any): AgentRecord {
     relay: !!row.relay,
     relayConnectionName: row.relay_connection_name,
     public: !!row.public,
+    models,
+    defaultModelId: normalizeDefaultModelId(row.default_model_id, models),
     owner: row.owner,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -225,12 +294,16 @@ export function createAgent(agent: {
   relay?: boolean;
   relayConnectionName?: string;
   public?: boolean;
+  models?: AgentModel[];
+  defaultModelId?: string;
   owner: string;
 }): AgentRecord {
   const db = getDb();
+  const models = normalizeAgentModels(agent.models);
+  const defaultModelId = normalizeDefaultModelId(agent.defaultModelId, models);
   db.prepare(`
-    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, owner)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, owner)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agent.id,
     agent.name || agent.id,
@@ -242,6 +315,8 @@ export function createAgent(agent: {
     agent.relay ? 1 : 0,
     agent.relayConnectionName || '',
     agent.public ? 1 : 0,
+    JSON.stringify(models),
+    defaultModelId,
     agent.owner,
   );
   return getAgentById(agent.id)!;
@@ -257,6 +332,8 @@ export function updateAgent(agentId: string, updates: Partial<{
   relay: boolean;
   relayConnectionName: string;
   public: boolean;
+  models: AgentModel[];
+  defaultModelId: string;
 }>): AgentRecord | null {
   const db = getDb();
   const existing = getAgentById(agentId);
@@ -274,6 +351,20 @@ export function updateAgent(agentId: string, updates: Partial<{
   if (updates.relay !== undefined) { fields.push('relay = ?'); values.push(updates.relay ? 1 : 0); }
   if (updates.relayConnectionName !== undefined) { fields.push('relay_connection_name = ?'); values.push(updates.relayConnectionName); }
   if (updates.public !== undefined) { fields.push('public = ?'); values.push(updates.public ? 1 : 0); }
+  if (updates.models !== undefined) {
+    const models = normalizeAgentModels(updates.models);
+    fields.push('models = ?');
+    values.push(JSON.stringify(models));
+    if (updates.defaultModelId === undefined) {
+      fields.push('default_model_id = ?');
+      values.push(normalizeDefaultModelId(existing.defaultModelId, models));
+    }
+  }
+  if (updates.defaultModelId !== undefined) {
+    const models = updates.models !== undefined ? normalizeAgentModels(updates.models) : existing.models;
+    fields.push('default_model_id = ?');
+    values.push(normalizeDefaultModelId(updates.defaultModelId, models));
+  }
 
   if (fields.length === 0) return existing;
 

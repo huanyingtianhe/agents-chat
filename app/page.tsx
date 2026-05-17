@@ -87,6 +87,12 @@ const mdComponents = {
 
 /* ────────── Types ────────── */
 
+type AgentModel = {
+  modelId: string;
+  name?: string;
+  description?: string;
+};
+
 type Agent = {
   id: string;
   name: string;
@@ -101,6 +107,8 @@ type Agent = {
   canModify?: boolean;
   canTalk?: boolean;
   public?: boolean;
+  models?: AgentModel[];
+  defaultModelId?: string;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -1056,6 +1064,8 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
+  const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
+  const [ensuringAgentModels, setEnsuringAgentModels] = useState<Record<string, boolean>>({});
   const [discussionRounds, setDiscussionRounds] = useState(2);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1073,6 +1083,8 @@ export default function Page() {
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [themeId, setThemeId] = useState<ThemeId>('aurora');
   const [showThemeMenu, setShowThemeMenu] = useState(false);
+  const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
+  const [openModelMenuAgentId, setOpenModelMenuAgentId] = useState<string | null>(null);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
   const chatMenuButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
@@ -1214,6 +1226,8 @@ export default function Page() {
   const shouldStickToBottomRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerOverflowRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map());
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputHistoryRef = useRef<string[]>([]);
@@ -1259,6 +1273,133 @@ export default function Page() {
       || getExistingAgentId(currentChatPrimaryAgentId, agents)
       || getDefaultAgentId(agents)
     : null;
+
+  const composerTargetAgentIds = mentionedAgentIds.length > 0
+    ? mentionedAgentIds
+    : effectiveComposerAgentId ? [effectiveComposerAgentId] : [];
+
+  function getAgentModels(agentId: string): AgentModel[] {
+    return agents.find((agent) => agent.id === agentId)?.models || [];
+  }
+
+  function getSelectedModelIdForAgent(agentId: string): string {
+    const agent = agents.find((item) => item.id === agentId);
+    const models = agent?.models || [];
+    const selected = selectedAgentModels[agentId];
+    if (selected && models.some((model) => model.modelId === selected)) return selected;
+    if (agent?.defaultModelId && models.some((model) => model.modelId === agent.defaultModelId)) return agent.defaultModelId;
+    return models[0]?.modelId || '';
+  }
+
+  async function setSelectedModelForAgent(agentId: string, modelId: string) {
+    setSelectedAgentModels((prev) => ({ ...prev, [agentId]: modelId }));
+    const agent = agents.find((item) => item.id === agentId);
+    if (!agent || agent.defaultModelId === modelId) return;
+    setAgents((current) => current.map((item) => item.id === agentId ? { ...item, defaultModelId: modelId } : item));
+    try {
+      const data = await acp({
+        action: 'update-agent-config',
+        agentId,
+        updates: { defaultModelId: modelId },
+      });
+      if (!data.ok) throw new Error(data.error || 'unknown_error');
+    } catch (err) {
+      setAgents((current) => current.map((item) => item.id === agentId ? { ...item, defaultModelId: agent.defaultModelId } : item));
+      setSelectedAgentModels((prev) => {
+        const next = { ...prev };
+        if (agent.defaultModelId) next[agentId] = agent.defaultModelId;
+        else delete next[agentId];
+        return next;
+      });
+      addMessage({ type: 'system', content: `❌ Failed to save model for ${agentId}: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }
+
+  async function ensureAgentModels(agentId: string) {
+    if (!currentChatIdRef.current || ensuringAgentModels[agentId] || getAgentModels(agentId).length > 0) return;
+    setEnsuringAgentModels((prev) => ({ ...prev, [agentId]: true }));
+    try {
+      const data = await acp({ action: 'ensure-agent-models', agentId, chatId: currentChatIdRef.current });
+      if (data.ok) {
+        const models = Array.isArray(data.models) ? data.models : [];
+        const defaultModelId = typeof data.defaultModelId === 'string' ? data.defaultModelId : '';
+        setAgents((current) => current.map((agent) => agent.id === agentId ? { ...agent, models, defaultModelId } : agent));
+        if (data.sessionId) {
+          currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: String(data.sessionId) };
+          setChatHistory((current) => current.map((chat) => chat.id === currentChatIdRef.current
+            ? { ...chat, agentSessions: { ...(chat.agentSessions || {}), [agentId]: String(data.sessionId) } }
+            : chat));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to ensure agent models', err);
+    } finally {
+      setEnsuringAgentModels((prev) => ({ ...prev, [agentId]: false }));
+    }
+  }
+
+  function renderAgentModelSelect(agentId: string) {
+    const models = getAgentModels(agentId);
+    if (models.length === 0) return null;
+    const selectedModelId = getSelectedModelIdForAgent(agentId);
+    const selectedModel = models.find((model) => model.modelId === selectedModelId) || models[0];
+    const selectedModelLabel = selectedModel?.name || selectedModel?.modelId || '';
+    const isOpen = openModelMenuAgentId === agentId;
+    return (
+      <span
+        className="agentModelSelectWrap"
+        ref={(el) => { modelMenuRefs.current.set(agentId, el); }}
+      >
+        <button
+          type="button"
+          className={`agentModelSelect ${isOpen ? 'agentModelSelectOpen' : ''}`}
+          data-testid="agent-model-select"
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          aria-label={`Model for ${agentId}`}
+          title={`Model for @${agentId}`}
+          onClick={() => setOpenModelMenuAgentId(isOpen ? null : agentId)}
+        >
+          <span className="agentModelSelectLabel">{selectedModelLabel}</span>
+          <span className="agentModelSelectCaret" aria-hidden="true">▾</span>
+        </button>
+        {isOpen && (
+          <div className="agentModelDropdown" role="listbox" aria-label={`Model for ${agentId}`}>
+            {models.map((model) => {
+              const isSelected = model.modelId === selectedModelId;
+              return (
+                <button
+                  key={model.modelId}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={`agentModelOption ${isSelected ? 'agentModelOptionActive' : ''}`}
+                  title={model.description || model.modelId}
+                  onClick={() => {
+                    void setSelectedModelForAgent(agentId, model.modelId);
+                    setOpenModelMenuAgentId(null);
+                  }}
+                >
+                  <span className="agentModelOptionLabel">{model.name || model.modelId}</span>
+                  {isSelected ? <span className="agentModelOptionCheck">✓</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </span>
+    );
+  }
+
+  useEffect(() => {
+    if (!mounted || !currentChatId) return;
+    for (const agentId of composerTargetAgentIds) {
+      if (getAgentModels(agentId).length === 0 && !ensuringAgentModels[agentId]) {
+        void ensureAgentModels(agentId);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, currentChatId, composerTargetAgentIds.join('|'), agents]);
 
   const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
 
@@ -1615,6 +1756,36 @@ export default function Page() {
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [showThemeMenu]);
+
+  useEffect(() => {
+    if (!showHeaderOverflow) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (!headerOverflowRef.current?.contains(event.target as Node)) {
+        setShowHeaderOverflow(false);
+      }
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [showHeaderOverflow]);
+
+  useEffect(() => {
+    if (!openModelMenuAgentId) return;
+    function handlePointerDown(event: MouseEvent) {
+      const wrap = modelMenuRefs.current.get(openModelMenuAgentId!);
+      if (wrap && !wrap.contains(event.target as Node)) {
+        setOpenModelMenuAgentId(null);
+      }
+    }
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpenModelMenuAgentId(null);
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [openModelMenuAgentId]);
 
   useEffect(() => {
     if (!openChatMenuId) return;
@@ -3559,6 +3730,7 @@ export default function Page() {
     // using this chat even if the user switches chats while the turn is active.
     const sendChatId = run.chatId;
     const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: sendChatId, messageId: pendingId };
+    sendBody.modelId = getSelectedModelIdForAgent(agentId);
     if (promptAttachments.length > 0) sendBody.attachments = promptAttachments;
     if (needsContextRestoreRef.current) {
       const historyMessages = chatMessagesRef.current[sendChatId] || (sendChatId === currentChatIdRef.current ? messagesRef.current : []);
@@ -4925,44 +5097,106 @@ export default function Page() {
           <h1>🤖 Agents Chat</h1>
         </div>
         <div className="headerRight">
-          <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
-          <div className="themeMenuWrap" ref={themeMenuRef}>
+          <div className="headerInlineActions">
+            <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
+            <div className="themeMenuWrap" ref={themeMenuRef}>
+              <button
+                type="button"
+                className={`ghostButton themeMenuButton ${showThemeMenu ? 'activeGhost' : ''}`}
+                onClick={() => setShowThemeMenu((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={showThemeMenu}
+                title={`Theme: ${activeTheme.label}`}
+              >
+                <span>{activeTheme.emoji}</span>
+              </button>
+              {showThemeMenu && (
+                <div className="themeDropdown" role="menu" aria-label="Theme list">
+                  {Object.entries(THEMES).map(([id, theme]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={normalizedThemeId === id}
+                      className={`themeOption ${normalizedThemeId === id ? 'activeThemeOption' : ''}`}
+                      onClick={() => {
+                        setThemeId(id as ThemeId);
+                        setShowThemeMenu(false);
+                      }}
+                    >
+                      <span className="themeOptionMain">
+                        <span className="themeChipEmoji">{theme.emoji}</span>
+                        <span>{theme.label}</span>
+                      </span>
+                      {normalizedThemeId === id ? <span className="themeCheck">✓</span> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); }} title="Agents">🤖</button>
+            <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); }} title="Nodes">🖥️</button>
+          </div>
+          <div className="headerOverflowWrap" ref={headerOverflowRef}>
             <button
               type="button"
-              className={`ghostButton themeMenuButton ${showThemeMenu ? 'activeGhost' : ''}`}
-              onClick={() => setShowThemeMenu((v) => !v)}
+              className={`ghostButton headerOverflowBtn ${showHeaderOverflow ? 'activeGhost' : ''}`}
+              onClick={() => setShowHeaderOverflow((v) => !v)}
               aria-haspopup="menu"
-              aria-expanded={showThemeMenu}
-              title={`Theme: ${activeTheme.label}`}
+              aria-expanded={showHeaderOverflow}
+              aria-label="More actions"
+              title="More"
             >
-              <span>{activeTheme.emoji}</span>
+              <span aria-hidden="true">⋯</span>
             </button>
-            {showThemeMenu && (
-              <div className="themeDropdown" role="menu" aria-label="Theme list">
+            {showHeaderOverflow && (
+              <div className="headerOverflowMenu" role="menu" aria-label="Header actions">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showChatsPanel ? 'active' : ''}`}
+                  onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">💬</span>
+                  <span>Chats</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showAgentsPanel ? 'active' : ''}`}
+                  onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">🤖</span>
+                  <span>Agents</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showNodesPanel ? 'active' : ''}`}
+                  onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">🖥️</span>
+                  <span>Nodes</span>
+                </button>
+                <div className="headerOverflowSeparator" />
+                <div className="headerOverflowSectionLabel">Theme</div>
                 {Object.entries(THEMES).map(([id, theme]) => (
                   <button
                     key={id}
                     type="button"
                     role="menuitemradio"
                     aria-checked={normalizedThemeId === id}
-                    className={`themeOption ${normalizedThemeId === id ? 'activeThemeOption' : ''}`}
-                    onClick={() => {
-                      setThemeId(id as ThemeId);
-                      setShowThemeMenu(false);
-                    }}
+                    className={`headerOverflowItem ${normalizedThemeId === id ? 'active' : ''}`}
+                    onClick={() => { setThemeId(id as ThemeId); setShowHeaderOverflow(false); }}
                   >
-                    <span className="themeOptionMain">
-                      <span className="themeChipEmoji">{theme.emoji}</span>
-                      <span>{theme.label}</span>
-                    </span>
-                    {normalizedThemeId === id ? <span className="themeCheck">✓</span> : null}
+                    <span className="headerOverflowEmoji">{theme.emoji}</span>
+                    <span>{theme.label}</span>
+                    {normalizedThemeId === id ? <span className="headerOverflowCheck">✓</span> : null}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); }} title="Agents">🤖</button>
-          <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); }} title="Nodes">🖥️</button>
           {session?.user && (
             <div className="userChip">
               <span className="userAvatar">{(session.user.name || '?')[0].toUpperCase()}</span>
@@ -5934,7 +6168,10 @@ export default function Page() {
                   {mentionedAgentIds.length > 0 ? (
                     <div className="targetPills">
                       {mentionedAgentIds.map((agentId) => (
-                        <span key={agentId} className="targetPill">@{agentId}</span>
+                        <span key={agentId} className="targetPill modelTargetPill">
+                          <span>@{agentId}</span>
+                          {renderAgentModelSelect(agentId)}
+                        </span>
                       ))}
                       {orchestrationEnabled && (
                         <>
@@ -5979,8 +6216,9 @@ export default function Page() {
                     </div>
                   ) : effectiveComposerAgentId ? (
                     <div className="targetPills">
-                      <span className="targetPill rememberedAgentPill">
+                      <span className="targetPill rememberedAgentPill modelTargetPill">
                         <span>@{effectiveComposerAgentId}</span>
+                        {renderAgentModelSelect(effectiveComposerAgentId)}
                         {rememberedComposerAgentId ? (
                           <button
                             type="button"
@@ -6501,6 +6739,100 @@ export default function Page() {
           color: var(--text);
           transition: background 220ms ease, color 220ms ease;
         }
+        :global(.agentModelSelectWrap) {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+        :global(.agentModelSelect) {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          border: 0;
+          border-radius: 999px;
+          background: transparent;
+          color: inherit;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1;
+          padding: 2px 8px 2px 6px;
+          max-width: 28ch;
+          min-width: 0;
+          width: max-content;
+          cursor: pointer;
+          outline: none;
+          transition: color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+        }
+        :global(.agentModelSelectLabel) {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        :global(.agentModelSelectCaret) {
+          font-size: 9px;
+          opacity: 0.7;
+          line-height: 1;
+        }
+        :global(.agentModelSelect:hover),
+        :global(.agentModelSelectOpen) {
+          background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+          box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+        :global(.agentModelSelect:focus-visible) {
+          background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+          box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
+        }
+        :global(.agentModelDropdown) {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 0;
+          min-width: max(180px, 100%);
+          max-height: 320px;
+          overflow-y: auto;
+          padding: 6px;
+          background: var(--panel-strong, var(--panel, #1d2433));
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: var(--shadow);
+          backdrop-filter: blur(18px);
+          z-index: 40;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        :global(.agentModelOption) {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 7px 10px;
+          background: transparent;
+          border: 0;
+          border-radius: 8px;
+          color: inherit;
+          font: inherit;
+          font-size: 12px;
+          text-align: left;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        :global(.agentModelOption:hover) {
+          background: var(--hover, rgba(255,255,255,0.06));
+        }
+        :global(.agentModelOptionActive) {
+          background: var(--accent-soft, rgba(99,179,237,0.15));
+          color: var(--accent);
+        }
+        :global(.agentModelOptionLabel) {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        :global(.agentModelOptionCheck) {
+          color: var(--accent);
+        }
+        .modelTargetPill {
+          gap: 6px;
+        }
         .header {
           position: relative;
           z-index: 10;
@@ -6526,6 +6858,75 @@ export default function Page() {
           gap: 12px;
           flex-wrap: wrap;
           justify-content: flex-end;
+        }
+        .headerInlineActions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .headerOverflowWrap {
+          position: relative;
+          display: none;
+        }
+        .headerOverflowBtn {
+          font-size: 18px;
+          line-height: 1;
+        }
+        .headerOverflowMenu {
+          position: absolute;
+          top: calc(100% + 8px);
+          right: 0;
+          min-width: 200px;
+          padding: 6px;
+          background: var(--panel-strong, var(--panel, #1d2433));
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: var(--shadow);
+          z-index: 30;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          backdrop-filter: blur(18px);
+        }
+        .headerOverflowItem {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          background: transparent;
+          border: 0;
+          border-radius: 8px;
+          color: inherit;
+          font: inherit;
+          text-align: left;
+          cursor: pointer;
+        }
+        .headerOverflowItem:hover {
+          background: var(--hover, rgba(255,255,255,0.06));
+        }
+        .headerOverflowItem.active {
+          background: var(--accent-soft, rgba(99,179,237,0.15));
+          color: var(--accent);
+        }
+        .headerOverflowEmoji {
+          width: 20px;
+          text-align: center;
+        }
+        .headerOverflowCheck {
+          margin-left: auto;
+          color: var(--accent);
+        }
+        .headerOverflowSeparator {
+          height: 1px;
+          margin: 4px 6px;
+          background: var(--border);
+        }
+        .headerOverflowSectionLabel {
+          padding: 4px 10px 2px;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          opacity: 0.6;
         }
         h1 {
           margin: 0;
@@ -8727,16 +9128,13 @@ export default function Page() {
 
         @media (max-width: 1100px) {
           .header {
-            align-items: flex-start;
-            flex-direction: column;
             padding: 14px 16px;
           }
-          .headerLeft,
-          .headerRight {
-            width: 100%;
+          .headerInlineActions {
+            display: none;
           }
-          .headerRight {
-            justify-content: space-between;
+          .headerOverflowWrap {
+            display: block;
           }
           .themeMenuWrap {
             flex: none;

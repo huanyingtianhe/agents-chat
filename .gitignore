@@ -11,3 +11,4 @@ tsconfig.tsbuildinfo
 .omc
 certificates/
 setup-files/logs/*
+logs/*

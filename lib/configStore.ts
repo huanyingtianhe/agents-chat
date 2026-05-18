@@ -92,6 +92,13 @@ function getDb(): ReturnType<typeof Database> {
       PRIMARY KEY (agent_id, email),
       FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS user_agent_model_prefs (
+      user_email TEXT NOT NULL,
+      agent_id   TEXT NOT NULL,
+      model_id   TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_email, agent_id)
+    );
   `);
   runMigrations();
   return _db;
@@ -465,4 +472,36 @@ export function hasAgentAccess(agentId: string, email: string): boolean {
   const db = getDb();
   const row = db.prepare('SELECT 1 FROM agent_access WHERE agent_id = ? AND email = ?').get(agentId, email.toLowerCase());
   return !!row;
+}
+
+// ─── User Agent Model Preferences ───
+
+export function getUserAgentModelPref(userEmail: string, agentId: string): string | null {
+  const db = getDb();
+  const row = db.prepare('SELECT model_id FROM user_agent_model_prefs WHERE user_email = ? AND agent_id = ?')
+    .get(userEmail.toLowerCase(), agentId) as any;
+  return row?.model_id || null;
+}
+
+export function getUserAgentModelPrefs(userEmail: string): Record<string, string> {
+  const db = getDb();
+  const rows = db.prepare('SELECT agent_id, model_id FROM user_agent_model_prefs WHERE user_email = ?')
+    .all(userEmail.toLowerCase()) as any[];
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.agent_id] = row.model_id;
+  return result;
+}
+
+export function setUserAgentModelPref(userEmail: string, agentId: string, modelId: string): void {
+  const db = getDb();
+  if (!modelId) {
+    db.prepare('DELETE FROM user_agent_model_prefs WHERE user_email = ? AND agent_id = ?')
+      .run(userEmail.toLowerCase(), agentId);
+  } else {
+    db.prepare(`
+      INSERT INTO user_agent_model_prefs (user_email, agent_id, model_id, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(user_email, agent_id) DO UPDATE SET model_id = excluded.model_id, updated_at = excluded.updated_at
+    `).run(userEmail.toLowerCase(), agentId, modelId);
+  }
 }

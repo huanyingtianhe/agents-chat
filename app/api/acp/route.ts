@@ -2292,6 +2292,25 @@ export async function POST(req: NextRequest) {
 
     // ─── Config endpoints (no agentId required) ───
 
+    if (action === 'get-model-prefs') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const prefs = configStore.getUserAgentModelPrefs(userEmail);
+      return NextResponse.json({ ok: true, prefs });
+    }
+
+    if (action === 'set-model-pref') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const prefAgentId = typeof body?.agentId === 'string' ? body.agentId : '';
+      const modelId = typeof body?.modelId === 'string' ? body.modelId : '';
+      if (!prefAgentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      configStore.setUserAgentModelPref(userEmail, prefAgentId, modelId);
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === 'list-agents') {
       const allAgents = configStore.getAllAgents();
       const token = await getAuthToken(req);
@@ -2499,7 +2518,7 @@ export async function POST(req: NextRequest) {
 
     if (action === 'ensure-agent-models') {
       if ((config.models || []).length > 0) {
-        return NextResponse.json({ ok: true, models: config.models, defaultModelId: config.defaultModelId, cached: true });
+        return NextResponse.json({ ok: true, models: config.models, cached: true });
       }
       const chatId = body?.chatId as string | undefined;
       if (!chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
@@ -2518,15 +2537,24 @@ export async function POST(req: NextRequest) {
       const session = await proc.rpc.send('session/new', sessionParams);
       const synced = syncAgentModelsFromSessionResult(agentId, session);
       if (session?.sessionId) {
-        sess.sessionId = session.sessionId;
-        proc.knownSessions.add(session.sessionId);
-        pushChatSession(sess, chatId, session.sessionId);
-        updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        // Only link the probe session to this chat if the chat doesn't already have a
+        // saved session. If it does, the probe is purely for model discovery — try to
+        // close it immediately, and don't store it in memory or DB.
+        const existingChatSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+        if (!existingChatSessionId) {
+          sess.sessionId = session.sessionId;
+          proc.knownSessions.add(session.sessionId);
+          pushChatSession(sess, chatId, session.sessionId);
+          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        } else {
+          // Best-effort close the probe session so it doesn't linger on the agent.
+          proc.rpc.send('session/close', { sessionId: session.sessionId }).catch(() => { /* ignore if unsupported */ });
+        }
       }
       if (!synced) {
-        return NextResponse.json({ ok: true, models: [], defaultModelId: '', sessionId: session?.sessionId || null, unsupported: true });
+        return NextResponse.json({ ok: true, models: [], sessionId: sess.sessionId || null, unsupported: true });
       }
-      return NextResponse.json({ ok: true, models: synced.models, defaultModelId: synced.defaultModelId, sessionId: session?.sessionId || null, cached: false });
+      return NextResponse.json({ ok: true, models: synced.models, sessionId: sess.sessionId || null, cached: false });
     }
 
     if (action === 'status') {

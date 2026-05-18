@@ -1286,47 +1286,38 @@ export default function Page() {
     const agent = agents.find((item) => item.id === agentId);
     const models = agent?.models || [];
     const selected = selectedAgentModels[agentId];
-    if (selected && models.some((model) => model.modelId === selected)) return selected;
+    // If models not loaded yet, trust the stored pref as-is — the backend will validate it.
+    if (selected && (models.length === 0 || models.some((model) => model.modelId === selected))) return selected;
     if (agent?.defaultModelId && models.some((model) => model.modelId === agent.defaultModelId)) return agent.defaultModelId;
     return models[0]?.modelId || '';
   }
 
-  async function setSelectedModelForAgent(agentId: string, modelId: string) {
+  function setSelectedModelForAgent(agentId: string, modelId: string) {
     setSelectedAgentModels((prev) => ({ ...prev, [agentId]: modelId }));
-    const agent = agents.find((item) => item.id === agentId);
-    if (!agent || agent.defaultModelId === modelId) return;
-    setAgents((current) => current.map((item) => item.id === agentId ? { ...item, defaultModelId: modelId } : item));
-    try {
-      const data = await acp({
-        action: 'update-agent-config',
-        agentId,
-        updates: { defaultModelId: modelId },
-      });
-      if (!data.ok) throw new Error(data.error || 'unknown_error');
-    } catch (err) {
-      setAgents((current) => current.map((item) => item.id === agentId ? { ...item, defaultModelId: agent.defaultModelId } : item));
-      setSelectedAgentModels((prev) => {
-        const next = { ...prev };
-        if (agent.defaultModelId) next[agentId] = agent.defaultModelId;
-        else delete next[agentId];
-        return next;
-      });
-      addMessage({ type: 'system', content: `❌ Failed to save model for ${agentId}: ${err instanceof Error ? err.message : String(err)}` });
-    }
+    // Persist to server (per-user, keyed by email)
+    void acp({ action: 'set-model-pref', agentId, modelId }).catch(() => { /* ignore */ });
   }
 
   async function ensureAgentModels(agentId: string) {
     if (!currentChatIdRef.current || ensuringAgentModels[agentId] || getAgentModels(agentId).length > 0) return;
+    const chatId = currentChatIdRef.current;
     setEnsuringAgentModels((prev) => ({ ...prev, [agentId]: true }));
     try {
-      const data = await acp({ action: 'ensure-agent-models', agentId, chatId: currentChatIdRef.current });
+      const data = await acp({ action: 'ensure-agent-models', agentId, chatId });
       if (data.ok) {
         const models = Array.isArray(data.models) ? data.models : [];
-        const defaultModelId = typeof data.defaultModelId === 'string' ? data.defaultModelId : '';
-        setAgents((current) => current.map((agent) => agent.id === agentId ? { ...agent, models, defaultModelId } : agent));
+        // Only update models list (capability info); preserve user's selected model preference.
+        setAgents((current) => current.map((agent) => agent.id === agentId ? { ...agent, models } : agent));
+        // If the stored pref is no longer in the model list (stale from a previous config),
+        // clear it so the picker falls back to the agent's default / first model.
+        const storedPref = selectedAgentModels[agentId];
+        if (storedPref && models.length > 0 && !models.some((m: { modelId: string }) => m.modelId === storedPref)) {
+          setSelectedAgentModels((prev) => { const next = { ...prev }; delete next[agentId]; return next; });
+        }
+        // Only record the probe session if no session existed before (backend returns sessionId only when it linked it).
         if (data.sessionId) {
           currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: String(data.sessionId) };
-          setChatHistory((current) => current.map((chat) => chat.id === currentChatIdRef.current
+          setChatHistory((current) => current.map((chat) => chat.id === chatId
             ? { ...chat, agentSessions: { ...(chat.agentSessions || {}), [agentId]: String(data.sessionId) } }
             : chat));
         }
@@ -2220,9 +2211,16 @@ export default function Page() {
   async function loadAgents() {
     setAgentsLoading(true);
     try {
-      const data = await acp({ action: 'list-agents' });
-      if (data.ok && Array.isArray(data.agents)) {
-        setAgents(data.agents);
+      const [agentsData, prefsData] = await Promise.all([
+        acp({ action: 'list-agents' }),
+        acp({ action: 'get-model-prefs' }).catch(() => null),
+      ]);
+      if (agentsData.ok && Array.isArray(agentsData.agents)) {
+        setAgents(agentsData.agents);
+      }
+      if (prefsData?.ok && prefsData.prefs && typeof prefsData.prefs === 'object') {
+        const prefs = prefsData.prefs as Record<string, string>;
+        setSelectedAgentModels((prev) => ({ ...prev, ...prefs }));
       }
     } catch (err) {
       console.error('Failed to load agents', err);

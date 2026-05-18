@@ -100,8 +100,10 @@ cp .env.example .env.local
 | `ADMIN_PASSWORD` | Optional | Local admin password |
 | `ADMIN_EMAILS` | Optional | Comma-separated emails granted admin role for Azure AD users |
 | `RELAY_SEND_CONNECTION_STRING` | Optional | Azure Relay send connection string; required for relay agents and node probing |
-| `RELAY_SUBSCRIPTION_ID` | Optional | Azure subscription ID; enables auto-discovery of relay nodes via ARM API |
-| `RELAY_RESOURCE_GROUP` | Optional | Azure resource group containing the Relay namespace |
+| `RELAY_KEY_VAULT_NAME` | Optional | Key Vault name used when generating the node setup ZIP |
+| `RELAY_KEY_VAULT_SECRET_NAME` | Optional | Key Vault secret name used when generating the node setup ZIP |
+| `RELAY_SUBSCRIPTION_ID` | Optional | Azure subscription ID used by node setup ZIPs and relay node auto-discovery |
+| `RELAY_RESOURCE_GROUP` | Optional | Azure resource group used by node setup ZIPs and relay node auto-discovery |
 | `RELAY_NAMESPACE` | Optional | Azure Relay namespace name |
 
 ### Agents
@@ -182,9 +184,12 @@ Nodes represent remote machines that can host relay agents. A node is backed by 
 
 #### Add a node with the setup kit
 
-1. Configure Azure Relay variables in `.env.local`:
-   - `RELAY_SEND_CONNECTION_STRING`
-   - optionally `RELAY_SUBSCRIPTION_ID`, `RELAY_RESOURCE_GROUP`, and `RELAY_NAMESPACE` for auto-discovery.
+1. Configure Azure Relay variables in `.env.local` or deployment app settings:
+   - `RELAY_SEND_CONNECTION_STRING` for server-side relay connections and node probing.
+   - optionally `RELAY_KEY_VAULT_NAME` and `RELAY_KEY_VAULT_SECRET_NAME`; these values are embedded into newly downloaded setup ZIPs so the remote node can fetch `RELAY_CONNECTION_STRING` from Key Vault.
+   - optionally `RELAY_SUBSCRIPTION_ID` and `RELAY_RESOURCE_GROUP`; these values are embedded into newly downloaded setup ZIPs so the remote node can create/update/delete its Hybrid Connection.
+   - optionally `RELAY_NAMESPACE` for auto-discovery.
+   Restart or redeploy the app and download a new `copilot-node-setup.zip` after changing these environment variables.
 2. Open the **Nodes** panel.
 3. Click **+** to open **Node Setup Kit**.
 4. Download `copilot-node-setup.zip`.

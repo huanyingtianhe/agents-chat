@@ -1,7 +1,33 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
+const setupTemplateModuleUrl = new URL('../lib/setupNodeTemplate.mjs', import.meta.url);
 const routeSource = readFileSync(new URL('../app/api/acp/route.ts', import.meta.url), 'utf8');
+const setupRouteSource = readFileSync(new URL('../app/api/nodes/setup/route.ts', import.meta.url), 'utf8');
+const setupTemplateSource = existsSync(setupTemplateModuleUrl) ? readFileSync(setupTemplateModuleUrl, 'utf8') : '';
+const setupNodeScriptSource = readFileSync(new URL('../setup-files/setup-node.ps1', import.meta.url), 'utf8');
+const agentsConfigSource = readFileSync(new URL('../agents.json', import.meta.url), 'utf8');
+const envExampleSource = readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
+const readmeSource = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const agentsConfig = JSON.parse(agentsConfigSource);
+const publicSetupSources = [
+  setupNodeScriptSource,
+  readFileSync(new URL('../test/test-node-owner.spec.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../test/test-setup-node.spec.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../docs/superpowers/specs/2026-05-18-setup-key-vault-template-design.md', import.meta.url), 'utf8'),
+  readFileSync(new URL('../docs/superpowers/plans/2026-05-18-setup-key-vault-template.md', import.meta.url), 'utf8'),
+].join('\n');
+const concreteSetupDefaults = [
+  ['7f31cba8', 'b597', '4129', 'b158', '8f21a7395bd0'].join('-'),
+  ['wulei', 'test'].join('-'),
+  ['agents', 'chat', 'kv'].join('-'),
+  ['relay', 'connection', 'string'].join('-'),
+].map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+assert.ok(existsSync(setupTemplateModuleUrl), 'setup template rendering helpers should be in a runtime-testable module');
+const {
+  escapePowerShellDoubleQuotedString,
+  renderSetupNodeScript,
+} = await import(setupTemplateModuleUrl.href);
 const findTurnBySessionIdSource = routeSource.slice(
   routeSource.indexOf('function findTurnBySessionId'),
   routeSource.indexOf('/* ─────────────── ACP Lifecycle ─────────────── */'),
@@ -553,6 +579,228 @@ assert.doesNotMatch(
   warmLocalAgentsActionSource,
   /session\/new|session\/load|getUserSession|ensureUserSession/,
   'warm-local-agents action should not create, load, or attach chat sessions',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /\[string\]\$KeyVaultName\s*=\s*"__RELAY_KEY_VAULT_NAME__"/,
+  'setup-node.ps1 should use a Key Vault name placeholder instead of a committed deployment value',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /\[string\]\$SecretName\s*=\s*"__RELAY_KEY_VAULT_SECRET_NAME__"/,
+  'setup-node.ps1 should use a Key Vault secret-name placeholder instead of a committed deployment value',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /\[string\]\$RelaySubscriptionId\s*=\s*"__RELAY_SUBSCRIPTION_ID__"/,
+  'setup-node.ps1 should use a Relay subscription placeholder instead of a committed deployment value',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /\[string\]\$RelayResourceGroup\s*=\s*"__RELAY_RESOURCE_GROUP__"/,
+  'setup-node.ps1 should use a Relay resource group placeholder instead of a committed deployment value',
+);
+
+assert.doesNotMatch(
+  setupNodeScriptSource,
+  new RegExp(concreteSetupDefaults),
+  'setup-node.ps1 should not commit concrete setup deployment defaults',
+);
+
+assert.doesNotMatch(
+  publicSetupSources,
+  new RegExp(concreteSetupDefaults),
+  'public setup files, docs, and tests should not commit concrete setup deployment defaults',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /function\s+Test-IsTemplatePlaceholder[\s\S]*?\^__\.\*__\$[\s\S]*?function\s+Get-RelayAzureScopeArguments[\s\S]*?Test-IsTemplatePlaceholder\s+\$RelaySubscriptionId[\s\S]*?Test-IsTemplatePlaceholder\s+\$RelayResourceGroup/,
+  'setup-node.ps1 should treat unresolved template placeholders as missing relay Azure scope values',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /function\s+Test-CanUseKeyVaultLookup[\s\S]*?Test-IsTemplatePlaceholder\s+\$VaultName[\s\S]*?Test-IsTemplatePlaceholder\s+\$VaultSecretName[\s\S]*?function\s+Remove-AzureRelayHybridConnection[\s\S]*?Test-CanUseKeyVaultLookup\s+\$VaultName\s+\$VaultSecretName[\s\S]*?Download a rendered setup ZIP or pass -RelayConnectionString[\s\S]*?# If no connection string provided[\s\S]*?Test-CanUseKeyVaultLookup\s+\$KeyVaultName\s+\$SecretName[\s\S]*?Download a rendered setup ZIP or pass -RelayConnectionString/,
+  'setup-node.ps1 should treat unresolved Key Vault placeholders as missing before fetching secrets',
+);
+
+assert.match(
+  setupNodeScriptSource,
+  /\$scriptArguments\s*\+=\s*Format-TaskArgument\s+["']RelaySubscriptionId["']\s+\$RelaySubscriptionId[\s\S]*?\$scriptArguments\s*\+=\s*Format-TaskArgument\s+["']RelayResourceGroup["']\s+\$RelayResourceGroup/,
+  'setup-node.ps1 scheduled task reruns should preserve explicit RelaySubscriptionId and RelayResourceGroup values',
+);
+
+assert.match(
+  setupTemplateSource,
+  /const\s+SETUP_KEY_VAULT_NAME_PLACEHOLDER\s*=\s*['"]__RELAY_KEY_VAULT_NAME__['"]/,
+  'setup template helper should define the Key Vault name placeholder',
+);
+
+assert.match(
+  setupTemplateSource,
+  /const\s+SETUP_KEY_VAULT_SECRET_PLACEHOLDER\s*=\s*['"]__RELAY_KEY_VAULT_SECRET_NAME__['"]/,
+  'setup template helper should define the Key Vault secret-name placeholder',
+);
+
+assert.match(
+  setupTemplateSource,
+  /const\s+SETUP_SUBSCRIPTION_ID_PLACEHOLDER\s*=\s*['"]__RELAY_SUBSCRIPTION_ID__['"]/,
+  'setup template helper should define the Relay subscription placeholder',
+);
+
+assert.match(
+  setupTemplateSource,
+  /const\s+SETUP_RESOURCE_GROUP_PLACEHOLDER\s*=\s*['"]__RELAY_RESOURCE_GROUP__['"]/,
+  'setup template helper should define the Relay resource group placeholder',
+);
+
+assert.match(
+  setupTemplateSource,
+  /function\s+escapePowerShellDoubleQuotedString[\s\S]*?replace\([\s\S]*?`\/g[\s\S]*?replace\([\s\S]*?\$\/g[\s\S]*?replace\([\s\S]*?"\/g/,
+  'setup template helper should escape env values before embedding them in a PowerShell double-quoted string',
+);
+
+assert.match(
+  setupTemplateSource,
+  /function\s+renderSetupNodeScript\(source,\s*env\s*=\s*process\.env\)[\s\S]*?env\.RELAY_KEY_VAULT_NAME[\s\S]*?env\.RELAY_KEY_VAULT_SECRET_NAME[\s\S]*?env\.RELAY_SUBSCRIPTION_ID[\s\S]*?env\.RELAY_RESOURCE_GROUP[\s\S]*?SETUP_KEY_VAULT_NAME_PLACEHOLDER[\s\S]*?SETUP_KEY_VAULT_SECRET_PLACEHOLDER[\s\S]*?SETUP_SUBSCRIPTION_ID_PLACEHOLDER[\s\S]*?SETUP_RESOURCE_GROUP_PLACEHOLDER/,
+  'setup template helper should render setup-node.ps1 placeholders from deployment environment variables',
+);
+
+assert.match(
+  setupTemplateSource,
+  /env\.RELAY_KEY_VAULT_NAME\s*(?:\|\||\?\?)\s*['"]['"][\s\S]*?env\.RELAY_KEY_VAULT_SECRET_NAME\s*(?:\|\||\?\?)\s*['"]['"][\s\S]*?env\.RELAY_SUBSCRIPTION_ID\s*(?:\|\||\?\?)\s*['"]['"][\s\S]*?env\.RELAY_RESOURCE_GROUP\s*(?:\|\||\?\?)\s*['"]['"]/,
+  'setup template helper should render empty Key Vault defaults when deployment environment variables are missing',
+);
+
+assert.match(
+  setupRouteSource,
+  /import\s+\{[\s\S]*renderSetupNodeScript[\s\S]*\}\s+from\s+['"]\.\.\/\.\.\/\.\.\/\.\.\/lib\/setupNodeTemplate\.mjs['"]/,
+  'setup ZIP route should use the runtime-tested setup template helper',
+);
+
+assert.match(
+  setupRouteSource,
+  /const\s+stagedPs1Path\s*=\s*path\.join\(tempDir,\s*['"]setup-node\.ps1['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?stagedPs1Path/,
+  'setup ZIP route should zip a rendered temporary setup-node.ps1 instead of the tracked template file',
+);
+
+assert.match(
+  setupRouteSource,
+  /const\s+compressScriptPath\s*=\s*path\.join\(tempDir,\s*['"]compress-setup-zip\.ps1['"]\)[\s\S]*?await\s+fs\.writeFile\([\s\S]*?compressScriptPath,[\s\S]*?await\s+execFileAsync\([\s\S]*?['"]-File['"][\s\S]*?compressScriptPath[\s\S]*?stagedPs1Path[\s\S]*?jsPath[\s\S]*?zipPath/,
+  'setup ZIP route should pass archive paths through a temporary PowerShell script instead of interpolating paths into a command string',
+);
+
+assert.match(
+  setupRouteSource,
+  /import\s+\{\s*execFile\s*\}\s+from\s+['"]child_process['"][\s\S]*?import\s+\{\s*promisify\s*\}\s+from\s+['"]util['"][\s\S]*?const\s+execFileAsync\s*=\s*promisify\(execFile\)[\s\S]*?await\s+execFileAsync\(/,
+  'setup ZIP route should run PowerShell compression asynchronously instead of blocking the Node.js event loop',
+);
+
+assert.doesNotMatch(
+  setupRouteSource,
+  /execFileSync|execSync/,
+  'setup ZIP route should not use synchronous child_process compression',
+);
+
+assert.match(
+  setupRouteSource,
+  /Compress-Archive -LiteralPath @\(\$SetupScript, \$RelayListener\) -DestinationPath \$ZipPath -Force/,
+  'setup ZIP route should use PowerShell LiteralPath parameters in the temporary compression script',
+);
+
+const setupTemplateFixture = [
+  '[string]$KeyVaultName = "__RELAY_KEY_VAULT_NAME__"',
+  '[string]$SecretName = "__RELAY_KEY_VAULT_SECRET_NAME__"',
+  '[string]$RelaySubscriptionId = "__RELAY_SUBSCRIPTION_ID__"',
+  '[string]$RelayResourceGroup = "__RELAY_RESOURCE_GROUP__"',
+].join('\n');
+
+assert.equal(
+  escapePowerShellDoubleQuotedString('vault`$"name'),
+  'vault```$`"name',
+  'setup template helper should escape backticks, dollars, and double quotes for PowerShell strings',
+);
+
+assert.match(
+  renderSetupNodeScript(setupTemplateFixture, {
+    RELAY_KEY_VAULT_NAME: 'vault`$"name',
+    RELAY_KEY_VAULT_SECRET_NAME: 'secret`$"name',
+    RELAY_SUBSCRIPTION_ID: 'sub`$"id',
+    RELAY_RESOURCE_GROUP: 'rg`$"name',
+  }),
+  /\[string\]\$KeyVaultName = "vault```\$`"name"[\s\S]*\[string\]\$SecretName = "secret```\$`"name"[\s\S]*\[string\]\$RelaySubscriptionId = "sub```\$`"id"[\s\S]*\[string\]\$RelayResourceGroup = "rg```\$`"name"/,
+  'setup template helper should render escaped env values into the setup script',
+);
+
+assert.match(
+  renderSetupNodeScript(setupTemplateFixture, {}),
+  /\[string\]\$KeyVaultName = ""[\s\S]*\[string\]\$SecretName = ""[\s\S]*\[string\]\$RelaySubscriptionId = ""[\s\S]*\[string\]\$RelayResourceGroup = ""/,
+  'setup template helper should render empty defaults when deployment env values are missing',
+);
+
+assert.match(
+  setupRouteSource,
+  /const\s+zipBuffer\s*=\s*await\s*\(async\s*\(\)\s*=>\s*\{[\s\S]*?try\s*\{[\s\S]*?const\s+setupNodeScript\s*=\s*await\s+fs\.readFile\(ps1Path,\s*['"]utf-8['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]/,
+  'setup ZIP route should read and render the setup template inside the cleanup-protected block',
+);
+
+assert.match(
+  setupRouteSource,
+  /try\s*\{[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?await\s+fs\.readFile\(zipPath\)[\s\S]*?\}\s*finally\s*\{[\s\S]*?await\s+fs\.rm\(tempDir,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/,
+  'setup ZIP route should clean up temporary setup artifacts in a finally block after zipping and reading',
+);
+
+assert.match(
+  setupRouteSource,
+  /finally\s*\{[\s\S]*?try\s*\{[\s\S]*?await\s+fs\.rm\(tempDir,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)[\s\S]*?\}\s*catch\s*\(cleanupErr\)[\s\S]*?console\.warn/,
+  'setup ZIP route should not fail a successful download when temporary cleanup fails',
+);
+
+assert.deepEqual(
+  agentsConfig,
+  { agents: [] },
+  'tracked agents.json should be public-safe and empty',
+);
+
+assert.match(
+  envExampleSource,
+  /RELAY_KEY_VAULT_NAME=/,
+  '.env.example should document RELAY_KEY_VAULT_NAME',
+);
+
+assert.match(
+  envExampleSource,
+  /RELAY_KEY_VAULT_SECRET_NAME=/,
+  '.env.example should document RELAY_KEY_VAULT_SECRET_NAME',
+);
+
+assert.match(
+  envExampleSource,
+  /restart or redeploy[\s\S]*download a new copilot-node-setup\.zip/i,
+  '.env.example should explain that setup ZIP env changes require restart/redeploy and a fresh download',
+);
+
+assert.match(
+  readmeSource,
+  /RELAY_KEY_VAULT_NAME[\s\S]*Key Vault name used when generating the node setup ZIP/,
+  'README should document RELAY_KEY_VAULT_NAME setup ZIP behavior',
+);
+
+assert.match(
+  readmeSource,
+  /RELAY_KEY_VAULT_SECRET_NAME[\s\S]*Key Vault secret name used when generating the node setup ZIP/,
+  'README should document RELAY_KEY_VAULT_SECRET_NAME setup ZIP behavior',
+);
+
+assert.match(
+  readmeSource,
+  /download a new `copilot-node-setup\.zip` after changing these environment variables/,
+  'README should explain that setup ZIPs are generated from current deployment env values',
 );
 
 console.log('agent user request route shape checks passed');

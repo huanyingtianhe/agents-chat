@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { execSync } from 'child_process';
+import * as os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { renderSetupNodeScript } from '../../../../lib/setupNodeTemplate.mjs';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const SETUP_FILES_DIR = path.join(process.cwd(), 'setup-files');
+const execFileAsync = promisify(execFile);
 
 export async function GET() {
   try {
@@ -19,23 +23,49 @@ export async function GET() {
       fs.access(jsPath),
     ]);
 
-    // Create zip in temp directory
+    // Create zip in a request-scoped temp directory
     const zipName = 'copilot-node-setup.zip';
-    const tempDir = path.join(process.env.TEMP || '/tmp', 'node-setup-zip');
-    await fs.mkdir(tempDir, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-setup-zip-'));
     const zipPath = path.join(tempDir, zipName);
+    const stagedPs1Path = path.join(tempDir, 'setup-node.ps1');
+    const compressScriptPath = path.join(tempDir, 'compress-setup-zip.ps1');
 
-    // Use PowerShell Compress-Archive (available on Windows)
-    try { await fs.unlink(zipPath); } catch { /* ignore */ }
-    execSync(
-      `powershell -NoProfile -Command "Compress-Archive -Path '${ps1Path}','${jsPath}' -DestinationPath '${zipPath}' -Force"`,
-      { timeout: 10_000, windowsHide: true }
-    );
+    const zipBuffer = await (async () => {
+      try {
+        const setupNodeScript = await fs.readFile(ps1Path, 'utf-8');
 
-    const zipBuffer = await fs.readFile(zipPath);
+        // Use PowerShell Compress-Archive (available on Windows)
+        await fs.writeFile(stagedPs1Path, renderSetupNodeScript(setupNodeScript), 'utf-8');
+        await fs.writeFile(
+          compressScriptPath,
+          [
+            'param([string]$SetupScript, [string]$RelayListener, [string]$ZipPath)',
+            'Compress-Archive -LiteralPath @($SetupScript, $RelayListener) -DestinationPath $ZipPath -Force',
+          ].join('\n'),
+          'utf-8'
+        );
+        await execFileAsync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-File',
+            compressScriptPath,
+            stagedPs1Path,
+            jsPath,
+            zipPath,
+          ],
+          { timeout: 10_000, windowsHide: true }
+        );
 
-    // Cleanup temp zip
-    try { await fs.unlink(zipPath); } catch { /* ignore */ }
+        return await fs.readFile(zipPath);
+      } finally {
+        try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+        } catch (cleanupErr) {
+          console.warn('[Setup ZIP] Failed to clean up temporary setup files', cleanupErr);
+        }
+      }
+    })();
 
     return new NextResponse(zipBuffer, {
       headers: {

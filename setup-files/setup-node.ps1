@@ -9,8 +9,10 @@ param(
     [int]$RestartCooldown = 10,
     [string]$RelayConnectionString = $env:RELAY_CONNECTION_STRING,
     [string]$ConnectionName = $env:COMPUTERNAME.ToLower(),
-    [string]$KeyVaultName = "agents-chat-kv",
-    [string]$SecretName = "relay-connection-string",
+    [string]$KeyVaultName = "__RELAY_KEY_VAULT_NAME__",
+    [string]$SecretName = "__RELAY_KEY_VAULT_SECRET_NAME__",
+    [string]$RelaySubscriptionId = "__RELAY_SUBSCRIPTION_ID__",
+    [string]$RelayResourceGroup = "__RELAY_RESOURCE_GROUP__",
     [string]$NodePath,
     [string]$AgencyPath,
     [switch]$UninstallService,
@@ -140,6 +142,29 @@ function Get-AzureAccountEmail {
     return $null
 }
 
+function Test-IsTemplatePlaceholder([string]$Value) {
+    if (-not $Value) { return $false }
+    return $Value -match '^__.*__$'
+}
+
+function Test-CanUseKeyVaultLookup([string]$VaultName, [string]$VaultSecretName) {
+    if (-not $VaultName -or -not $VaultSecretName) { return $false }
+    if (Test-IsTemplatePlaceholder $VaultName) { return $false }
+    if (Test-IsTemplatePlaceholder $VaultSecretName) { return $false }
+    return $true
+}
+
+function Get-RelayAzureScopeArguments {
+    if (
+        -not $RelaySubscriptionId -or
+        -not $RelayResourceGroup -or
+        (Test-IsTemplatePlaceholder $RelaySubscriptionId) -or
+        (Test-IsTemplatePlaceholder $RelayResourceGroup)
+    ) { return $null }
+
+    return @("--subscription", $RelaySubscriptionId, "--resource-group", $RelayResourceGroup)
+}
+
 function Format-TaskArgument([string]$Name, [string]$Value) {
     if ($null -eq $Value -or $Value -eq "") { return "" }
     return " -$Name `"$Value`""
@@ -191,6 +216,11 @@ function Remove-AzureRelayHybridConnection([string]$ConnectionString, [string]$H
     }
 
     if (-not $ConnectionString) {
+        if (-not (Test-CanUseKeyVaultLookup $VaultName $VaultSecretName)) {
+            Write-Host "Relay connection string is missing. Download a rendered setup ZIP or pass -RelayConnectionString." -ForegroundColor Red
+            return $false
+        }
+
         Write-Host "Fetching relay connection string from Key Vault '$VaultName' for cleanup..." -ForegroundColor Yellow
         $ConnectionString = az keyvault secret show --vault-name $VaultName --name $VaultSecretName --query "value" -o tsv 2>&1
         if ($LASTEXITCODE -ne 0 -or -not $ConnectionString) {
@@ -207,8 +237,14 @@ function Remove-AzureRelayHybridConnection([string]$ConnectionString, [string]$H
     }
 
     $nsName = $Matches[1]
+    $relayScopeArgs = Get-RelayAzureScopeArguments
+    if (-not $relayScopeArgs) {
+        Write-Host "Set RelaySubscriptionId and RelayResourceGroup to delete the Azure Relay Hybrid Connection." -ForegroundColor Yellow
+        return $false
+    }
+
     Write-Host "Deleting hybrid connection '$HybridConnectionName' from namespace '$nsName'..." -ForegroundColor Yellow
-    $deleteOutput = az relay hyco delete --subscription 7f31cba8-b597-4129-b158-8f21a7395bd0 --resource-group wulei-test --namespace-name $nsName --name $HybridConnectionName 2>&1
+    $deleteOutput = az relay hyco delete @relayScopeArgs --namespace-name $nsName --name $HybridConnectionName 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Deleted hybrid connection '$HybridConnectionName'." -ForegroundColor Green
         return $true
@@ -276,6 +312,8 @@ if (-not $RunAsService) {
     $scriptArguments += Format-TaskArgument "ConnectionName" $ConnectionName
     $scriptArguments += Format-TaskArgument "KeyVaultName" $KeyVaultName
     $scriptArguments += Format-TaskArgument "SecretName" $SecretName
+    $scriptArguments += Format-TaskArgument "RelaySubscriptionId" $RelaySubscriptionId
+    $scriptArguments += Format-TaskArgument "RelayResourceGroup" $RelayResourceGroup
     $scriptArguments += Format-TaskArgument "NodePath" $NodePath
     $scriptArguments += Format-TaskArgument "AgencyPath" $AgencyPath
     if ($RelayConnectionString) { $scriptArguments += Format-TaskArgument "RelayConnectionString" $RelayConnectionString }
@@ -389,6 +427,11 @@ Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Service mode entered. Us
 
 # If no connection string provided, fetch from Azure Key Vault
 if (-not $RelayConnectionString) {
+    if (-not (Test-CanUseKeyVaultLookup $KeyVaultName $SecretName)) {
+        Write-Error "Relay connection string is missing. Download a rendered setup ZIP or pass -RelayConnectionString."
+        exit 1
+    }
+
     if (-not (Resolve-AzureCliPath)) {
         Write-Error "Azure CLI is required to fetch the relay connection string from Key Vault. Install Azure CLI manually, run 'az login', then rerun this script."
         exit 1
@@ -477,53 +520,64 @@ if (Resolve-AzureCliPath) {
     $nsMatch = $RelayConnectionString -match 'Endpoint=sb://([^.]+)\.'
     if ($nsMatch) {
         $nsName = $Matches[1]
-        $azureAccountEmail = Get-AzureAccountEmail
-        $userMetadataArgument = ""
-        if ($azureAccountEmail) {
-            $userMetadataArgument = " --user-metadata AzureAccountEmail=$azureAccountEmail"
-            Write-Host "Azure account: $azureAccountEmail" -ForegroundColor Gray
+        $relayScopeArgs = Get-RelayAzureScopeArguments
+        if (-not $relayScopeArgs) {
+            Write-Host "Skipping hybrid connection create/update because RelaySubscriptionId or RelayResourceGroup is not configured." -ForegroundColor Yellow
         } else {
-            Write-Host "Could not read Azure account email; creating hybrid connection without user metadata." -ForegroundColor Yellow
-        }
-
-        Write-Host "Creating hybrid connection '$ConnectionName' on namespace '$nsName' (if needed)..." -ForegroundColor Yellow
-        # Use Start-Process with timeout + spinner so user sees progress
-        $tmpOut = [System.IO.Path]::GetTempFileName()
-        $tmpErr = [System.IO.Path]::GetTempFileName()
-        $proc = Start-Process -FilePath "az" `
-            -ArgumentList "relay hyco create --subscription 7f31cba8-b597-4129-b158-8f21a7395bd0 --resource-group wulei-test --namespace-name $nsName --name $ConnectionName$userMetadataArgument" `
-            -NoNewWindow -PassThru -Wait:$false `
-            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
-        $waited = 0
-        while (-not $proc.HasExited -and $waited -lt 30) {
-            $spinChar = @('|','/','-','\')[$waited % 4]
-            Write-Host "`r  Waiting for az CLI... $spinChar ($waited`s)" -NoNewline
-            Start-Sleep -Seconds 1
-            $waited++
-        }
-        Write-Host ""
-        if (-not $proc.HasExited) {
-            try { $proc.Kill() } catch {}
-            Write-Host "  az CLI timed out (30s). Run 'az login' first, then re-run this script." -ForegroundColor Yellow
-        } elseif ($proc.ExitCode -eq 0) {
-            Write-Host "  Done." -ForegroundColor Green
-        } else {
-            $errText = Get-Content $tmpErr -Raw -ErrorAction SilentlyContinue
-            if ($errText -match "already exists") {
-                Write-Host "  Connection already exists." -ForegroundColor Green
-                if ($azureAccountEmail) {
-                    Write-Host "  Updating hybrid connection user metadata..." -ForegroundColor Yellow
-                    az relay hyco update --subscription 7f31cba8-b597-4129-b158-8f21a7395bd0 --resource-group wulei-test --namespace-name $nsName --name $ConnectionName --user-metadata "AzureAccountEmail=$azureAccountEmail" 2>&1 | Write-Host
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Host "  Failed to update user metadata." -ForegroundColor Yellow
-                    }
-                }
+            $azureAccountEmail = Get-AzureAccountEmail
+            $createArguments = @(
+                "relay", "hyco", "create",
+                "--subscription", $RelaySubscriptionId,
+                "--resource-group", $RelayResourceGroup,
+                "--namespace-name", $nsName,
+                "--name", $ConnectionName
+            )
+            if ($azureAccountEmail) {
+                $createArguments += @("--user-metadata", "AzureAccountEmail=$azureAccountEmail")
+                Write-Host "Azure account: $azureAccountEmail" -ForegroundColor Gray
             } else {
-                Write-Host "  Skipped (connection may already exist)." -ForegroundColor Gray
-                if ($errText) { Write-Host $errText -ForegroundColor Gray }
+                Write-Host "Could not read Azure account email; creating hybrid connection without user metadata." -ForegroundColor Yellow
             }
+
+            Write-Host "Creating hybrid connection '$ConnectionName' on namespace '$nsName' (if needed)..." -ForegroundColor Yellow
+            # Use Start-Process with timeout + spinner so user sees progress
+            $tmpOut = [System.IO.Path]::GetTempFileName()
+            $tmpErr = [System.IO.Path]::GetTempFileName()
+            $proc = Start-Process -FilePath "az" `
+                -ArgumentList $createArguments `
+                -NoNewWindow -PassThru -Wait:$false `
+                -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+            $waited = 0
+            while (-not $proc.HasExited -and $waited -lt 30) {
+                $spinChar = @('|','/','-','\')[$waited % 4]
+                Write-Host "`r  Waiting for az CLI... $spinChar ($waited`s)" -NoNewline
+                Start-Sleep -Seconds 1
+                $waited++
+            }
+            Write-Host ""
+            if (-not $proc.HasExited) {
+                try { $proc.Kill() } catch {}
+                Write-Host "  az CLI timed out (30s). Run 'az login' first, then re-run this script." -ForegroundColor Yellow
+            } elseif ($proc.ExitCode -eq 0) {
+                Write-Host "  Done." -ForegroundColor Green
+            } else {
+                $errText = Get-Content $tmpErr -Raw -ErrorAction SilentlyContinue
+                if ($errText -match "already exists") {
+                    Write-Host "  Connection already exists." -ForegroundColor Green
+                    if ($azureAccountEmail) {
+                        Write-Host "  Updating hybrid connection user metadata..." -ForegroundColor Yellow
+                        az relay hyco update @relayScopeArgs --namespace-name $nsName --name $ConnectionName --user-metadata "AzureAccountEmail=$azureAccountEmail" 2>&1 | Write-Host
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "  Failed to update user metadata." -ForegroundColor Yellow
+                        }
+                    }
+                } else {
+                    Write-Host "  Skipped (connection may already exist)." -ForegroundColor Gray
+                    if ($errText) { Write-Host $errText -ForegroundColor Gray }
+                }
+            }
+            Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
         }
-        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
     }
 } else {
     Write-Error "Azure CLI is required to create the Hybrid Connection. Install Azure CLI manually, run 'az login', then rerun this script."

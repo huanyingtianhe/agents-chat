@@ -6,12 +6,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getNodeOwner } from '../lib/nodeOwner';
 
-const TEST_SUBSCRIPTION_ID = '7f31cba8-b597-4129-b158-8f21a7395bd0';
-const TEST_RESOURCE_GROUP = 'wulei-test';
-const TEST_KEY_VAULT = 'agents-chat-kv';
-const TEST_SECRET_NAME = 'relay-connection-string';
-const DEFAULT_TEST_CONNECTION = `cpc-wulei-setup-test-${Date.now().toString(36)}`;
-
 function quotePowerShellArg(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -32,6 +26,22 @@ function runPowerShellFile(filePath: string, args: string[], cwd: string, timeou
     windowsHide: true,
   }).trim();
 }
+
+function readEnvFileValue(name: string): string {
+  const envPath = path.join(process.cwd(), '.env.local');
+  if (!fs.existsSync(envPath)) return '';
+
+  const line = fs.readFileSync(envPath, 'utf-8')
+    .split(/\r?\n/)
+    .find((entry: string) => entry.startsWith(`${name}=`));
+  return line?.replace(`${name}=`, '').replace(/^"|"$/g, '').trim() || '';
+}
+
+const TEST_SUBSCRIPTION_ID = process.env.SETUP_NODE_TEST_SUBSCRIPTION_ID || process.env.RELAY_SUBSCRIPTION_ID || readEnvFileValue('RELAY_SUBSCRIPTION_ID');
+const TEST_RESOURCE_GROUP = process.env.SETUP_NODE_TEST_RESOURCE_GROUP || process.env.RELAY_RESOURCE_GROUP || readEnvFileValue('RELAY_RESOURCE_GROUP');
+const TEST_KEY_VAULT = process.env.SETUP_NODE_TEST_KEY_VAULT || process.env.RELAY_KEY_VAULT_NAME || readEnvFileValue('RELAY_KEY_VAULT_NAME');
+const TEST_SECRET_NAME = process.env.SETUP_NODE_TEST_SECRET_NAME || process.env.RELAY_KEY_VAULT_SECRET_NAME || readEnvFileValue('RELAY_KEY_VAULT_SECRET_NAME');
+const DEFAULT_TEST_CONNECTION = `cpc-setup-test-${Date.now().toString(36)}`;
 
 function runAz(args: string[], timeout = 60_000): string {
   const command = [
@@ -109,6 +119,7 @@ test.describe('setup-node.ps1 integration', () => {
   test('installs service, exposes listener metadata, then uninstalls cleanly', async () => {
     test.setTimeout(900_000);
     test.skip(process.env.RUN_SETUP_NODE_TEST !== '1', 'Set RUN_SETUP_NODE_TEST=1 to install/uninstall the local node service.');
+    test.skip(!TEST_SUBSCRIPTION_ID || !TEST_RESOURCE_GROUP || !TEST_KEY_VAULT || !TEST_SECRET_NAME, 'Set Azure relay setup test configuration environment variables.');
     test.skip(!isAdministrator(), 'setup-node.ps1 integration test requires Administrator PowerShell.');
 
     const repoRoot = process.cwd();
@@ -125,7 +136,14 @@ test.describe('setup-node.ps1 integration', () => {
     expect(expectedOwner).toContain('@');
 
     try {
-      const setupOutput = runPowerShellFile(setupScript, ['-ConnectionName', connectionName], setupDir, 900_000);
+      const setupArgs = [
+        '-ConnectionName', connectionName,
+        '-KeyVaultName', TEST_KEY_VAULT,
+        '-SecretName', TEST_SECRET_NAME,
+        '-RelaySubscriptionId', TEST_SUBSCRIPTION_ID,
+        '-RelayResourceGroup', TEST_RESOURCE_GROUP,
+      ];
+      const setupOutput = runPowerShellFile(setupScript, setupArgs, setupDir, 900_000);
       expect(setupOutput).toContain('ACP server and relay listener are ready.');
 
       const serviceLogText = fs.readFileSync(serviceLog, 'utf-8');
@@ -140,7 +158,14 @@ test.describe('setup-node.ps1 integration', () => {
       expect(metadata).toContain(`AzureAccountEmail=${expectedOwner}`);
       expect(getNodeOwner(metadata, connectionName)).toBe(expectedOwner);
     } finally {
-      runPowerShellFile(setupScript, ['-UninstallService', '-ConnectionName', connectionName], setupDir, 300_000);
+      runPowerShellFile(setupScript, [
+        '-UninstallService',
+        '-ConnectionName', connectionName,
+        '-KeyVaultName', TEST_KEY_VAULT,
+        '-SecretName', TEST_SECRET_NAME,
+        '-RelaySubscriptionId', TEST_SUBSCRIPTION_ID,
+        '-RelayResourceGroup', TEST_RESOURCE_GROUP,
+      ], setupDir, 300_000);
     }
 
     await waitForHybridConnectionDeleted(namespaceName, connectionName);

@@ -1,0 +1,88 @@
+name: Playwright E2E
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  playwright:
+    name: Run Playwright tests
+    # GitHub-hosted runners are disabled for this repository.
+    # Register a Windows x64 self-hosted runner with the mwc-wulei label.
+    runs-on: [self-hosted, Windows, X64, mwc-wulei]
+    timeout-minutes: 30
+
+    env:
+      ADMIN_PASSWORD: admin123
+      ADMIN_USERNAME: admin
+      NEXTAUTH_SECRET: playwright-ci-secret
+      NEXTAUTH_URL: https://localhost:3010
+      PLAYWRIGHT_BASE_URL: https://localhost:3010
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Start Next.js dev server
+        shell: pwsh
+        run: |
+          $process = Start-Process npm -ArgumentList 'run', 'dev' -RedirectStandardOutput playwright-server.log -RedirectStandardError playwright-server.err.log -PassThru
+          $process.Id | Out-File -FilePath playwright-server.pid -Encoding ascii
+
+      - name: Wait for app
+        shell: pwsh
+        run: |
+          $pidPath = 'playwright-server.pid'
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri "$env:PLAYWRIGHT_BASE_URL/login" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 5 | Out-Null
+              exit 0
+            } catch {
+              $serverPid = [int](Get-Content $pidPath -Raw)
+              if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
+                Write-Error 'Next.js dev server exited before becoming ready.'
+                Get-Content playwright-server.log -ErrorAction SilentlyContinue
+                Get-Content playwright-server.err.log -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Start-Sleep -Seconds 2
+            }
+          }
+          Write-Error "Timed out waiting for $env:PLAYWRIGHT_BASE_URL/login"
+          Get-Content playwright-server.log -ErrorAction SilentlyContinue
+          Get-Content playwright-server.err.log -ErrorAction SilentlyContinue
+          exit 1
+
+      - name: Run Playwright tests
+        run: npx playwright test --config test/playwright.config.ts
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+            playwright-server.log
+            playwright-server.err.log
+          if-no-files-found: ignore

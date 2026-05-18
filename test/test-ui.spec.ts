@@ -61,6 +61,53 @@ async function expectCompactFailedSendStatus(message: Locator, error = 'Failed t
   await expect(message.locator('.userSendFailure')).not.toContainText(error);
 }
 
+async function mockTwoAgentsAcp(page: Page, sent: any[]) {
+  await page.route('**/api/acp', async (route) => {
+    const body = route.request().postDataJSON() as any;
+    if (body?.action === 'list-agents') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          agents: [
+            { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+            { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
+          ],
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'send') {
+      sent.push(body);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${body.agentId}`, turn: { id: `turn-${body.agentId}` } }),
+      });
+      return;
+    }
+    if (body?.action === 'poll') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          phase: 'idle',
+          ready: true,
+          booting: false,
+          activeTurn: {
+            id: `turn-${body.agentId}`,
+            fullText: `reply from ${body.agentId}`,
+            done: true,
+            phase: 'done',
+            events: [{ type: 'text_chunk', ts: Date.now(), text: `reply from ${body.agentId}` }],
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+}
+
 test.describe('Login', () => {
   test('should show login page', async ({ page }) => {
     await page.goto(`${BASE}/login`);
@@ -88,6 +135,17 @@ test.describe('Login', () => {
 
 test.describe('Chat UI', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'warm-local-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, warmed: 0, agents: [] }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
     await login(page);
     await deleteAllChats(page);
     await page.reload();
@@ -102,6 +160,335 @@ test.describe('Chat UI', () => {
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
+  });
+
+  test('Claude theme keeps the send button warm and readable', async ({ page }) => {
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(() => window.localStorage.setItem('acp_chat_theme_v1', 'claude'));
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+    await ensureActiveChat(page);
+
+    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('hello claude theme');
+    const sendButton = page.locator('button[aria-label="Send message"]');
+    await expect(sendButton).toBeEnabled();
+
+    const styles = await sendButton.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        backgroundImage: style.backgroundImage,
+        color: style.color,
+      };
+    });
+
+    expect(styles.backgroundImage).toContain('rgb(217, 130, 103)');
+    expect(styles.backgroundImage).toContain('rgb(201, 106, 75)');
+    expect(styles.backgroundImage).not.toContain('rgb(83, 102, 121)');
+    expect(styles.color).toBe('rgb(255, 250, 242)');
+  });
+
+  test('warms local agents after loading agents without blocking send', async ({ page }) => {
+    const actions: string[] = [];
+    const sent: any[] = [];
+    let warmupRequested = false;
+    let listAgentsFulfilled = false;
+    let warmupSawListCompleted = false;
+    let warmupCompleted = false;
+    let releaseWarmup: () => void = () => {};
+    const warmupCanFinish = new Promise<void>((resolve) => {
+      releaseWarmup = resolve;
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      actions.push(String(body?.action || ''));
+
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: false, relay: false },
+              { id: 'remote', name: 'Remote Agent', cwd: '', running: false, relay: true, relayConnectionName: 'remote-node' },
+            ],
+          }),
+        });
+        listAgentsFulfilled = true;
+        return;
+      }
+
+      if (body?.action === 'get-model-prefs') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, prefs: {} }) });
+        return;
+      }
+
+      if (body?.action === 'warm-local-agents') {
+        warmupRequested = true;
+        warmupSawListCompleted = listAgentsFulfilled;
+        await warmupCanFinish;
+        warmupCompleted = true;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            warmed: 1,
+            agents: [
+              { agentId: 'alpha', status: 'started' },
+              { agentId: 'remote', status: 'skipped_remote' },
+            ],
+          }),
+        });
+        return;
+      }
+
+      if (body?.action === 'send') {
+        sent.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${body.agentId}`, turn: { id: `turn-${body.agentId}` } }),
+        });
+        return;
+      }
+
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            booting: false,
+            activeTurn: {
+              id: `turn-${body.agentId}`,
+              fullText: `reply from ${body.agentId}`,
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: `reply from ${body.agentId}` }],
+            },
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
+
+    await expect.poll(() => warmupRequested).toBe(true);
+    expect(warmupSawListCompleted).toBe(true);
+    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('send while warmup pending');
+    await expect(page.locator('button[aria-label="Send message"]')).toBeEnabled();
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.map((request) => request.agentId)).toEqual(['alpha']);
+    expect(warmupCompleted).toBe(false);
+
+    releaseWarmup();
+    await expect.poll(() => warmupCompleted).toBe(true);
+    expect(actions.indexOf('warm-local-agents')).toBeGreaterThan(actions.indexOf('list-agents'));
+    expect(actions.filter((action) => action === 'warm-local-agents')).toHaveLength(1);
+  });
+
+  test('logs local agent warmup failures returned as JSON', async ({ page }) => {
+    await page.addInitScript(() => {
+      const originalError = console.error.bind(console);
+      (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors = [];
+      console.error = (...args: unknown[]) => {
+        const serialized = args.map((arg) => {
+          if (typeof arg === 'string') return arg;
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        });
+        (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors?.push(serialized);
+        originalError(...args);
+      };
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: false, relay: false }],
+          }),
+        });
+        return;
+      }
+
+      if (body?.action === 'get-model-prefs') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, prefs: {} }) });
+        return;
+      }
+
+      if (body?.action === 'warm-local-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'warm failed' }),
+        });
+        return;
+      }
+
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
+
+    await expect.poll(async () => {
+      const errors = await page.evaluate(() => (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors ?? []);
+      return errors.length;
+    }).toBe(1);
+
+    const errors = await page.evaluate(() => (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors ?? []);
+    expect(errors.some((entry) =>
+      entry[0] === 'Failed to warm local agents' && entry.some((part) => part.includes('warm failed')),
+    )).toBe(true);
+    await expect(page.locator('.chatContainer, .emptyHomepage').first()).not.toContainText('Failed to warm local agents');
+  });
+
+  test('remembers the first mentioned agent as the next composer target for the same chat', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    await textarea.fill('@beta @alpha first routed message');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@beta/);
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    await textarea.fill('next message without mention');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'next message without mention').map((request) => request.agentId)).toEqual(['beta']);
+  });
+
+  test('uses primary agent fallback, then default agent when no remembered target exists', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(async () => {
+      const chat = {
+        id: 'primary-agent-chat',
+        name: 'Primary agent chat',
+        ts: Date.now(),
+        agentId: 'beta',
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@beta/);
+
+    await textarea.fill('message using primary fallback');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message using primary fallback').map((request) => request.agentId)).toEqual(['beta']);
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    await page.evaluate(async () => {
+      await fetch('/api/chats?id=primary-agent-chat', { method: 'DELETE' });
+      const chat = {
+        id: 'default-agent-chat',
+        name: 'Default agent chat',
+        ts: Date.now(),
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect(page.locator('.rememberedAgentPill')).toHaveText(/@alpha/);
+
+    await textarea.fill('message using default fallback');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message using default fallback').map((request) => request.agentId)).toEqual(['alpha']);
+  });
+
+  test('clears remembered composer target with hover remove button', async ({ page }) => {
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(async () => {
+      const chat = {
+        id: 'remembered-remove-chat',
+        name: 'Remembered remove chat',
+        ts: Date.now(),
+        agentId: 'alpha',
+        messages: [],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    await textarea.fill('@beta remember beta');
+    await page.click('button[aria-label="Send message"]');
+    await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
+
+    const pill = page.locator('.rememberedAgentPill');
+    const removeButton = page.locator('button[aria-label="Remove remembered agent beta"]');
+    await expect(pill).toHaveText('@beta');
+    await expect(removeButton).toHaveCSS('opacity', '0');
+
+    await pill.hover();
+    await expect(removeButton).toHaveCSS('opacity', '1');
+    await removeButton.click();
+
+    await expect(page.locator('.rememberedAgentPill')).toHaveText('@alpha');
+    await expect(removeButton).toHaveCount(0);
+
+    await textarea.fill('message after clearing remembered target');
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.filter((request) => request.text === 'message after clearing remembered target').map((request) => request.agentId)).toEqual(['alpha']);
   });
 
   test('should copy only answer text from the below-message copy button', async ({ page }) => {
@@ -234,6 +621,30 @@ test.describe('Chat UI', () => {
 
       await expect(page.locator('.attachmentChip', { hasText: 'pasted.png' })).toBeVisible();
       await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toHaveValue('');
+    });
+
+    test('paste screenshot queues one attachment when exposed as both file and item', async ({ page }) => {
+      const captured: any[] = [];
+      await mockAcpForAttachments(page, captured);
+
+      await page.focus('textarea[placeholder="Message Agents Chat"]');
+      await page.evaluate(async () => {
+        const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+        const fileFromFiles = new File([bytes], 'pasted.png', { type: 'image/png', lastModified: 1 });
+        const fileFromItems = new File([bytes], 'pasted.png', { type: 'image/png', lastModified: 2 });
+        const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(pasteEvent, 'clipboardData', {
+          value: {
+            files: [fileFromFiles],
+            items: [{ kind: 'file', getAsFile: () => fileFromItems }],
+          },
+        });
+        const textarea = document.querySelector('textarea[placeholder="Message Agents Chat"]') as HTMLTextAreaElement;
+        textarea.dispatchEvent(pasteEvent);
+      });
+
+      await expect(page.locator('.attachmentChip')).toHaveCount(1);
+      await expect(page.locator('.attachmentChip', { hasText: 'pasted.png' })).toBeVisible();
     });
 
     test('file attachment chip has compact icon and remove control', async ({ page }) => {
@@ -544,6 +955,66 @@ test.describe('Chat UI', () => {
     await expect(statusBadge).not.toHaveText('.');
   });
 
+  test('should not show sidebar error when the visible agent message is successful', async ({ page }) => {
+    const chatId = `ui-sidebar-visible-success-${Date.now()}`;
+    const chatName = 'Sidebar visible success';
+    const visibleAnswer = 'Successful answer visible to the user.';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, chatName, visibleAnswer }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: chatName,
+        ts: now,
+        messages: [
+          { id: 'u1', type: 'user', content: 'show a normal answer', ts: now },
+          {
+            id: 'a1',
+            type: 'agent',
+            agentId: 'alpha',
+            content: '⚠️ stale hidden transport warning',
+            parts: [{ kind: 'text', text: visibleAnswer }],
+            ts: now + 1,
+          },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, chatName, visibleAnswer });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const chatRow = page.locator('.chatHistoryRow', { hasText: chatName }).first();
+    await expect(chatRow).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.message.agent .messageContent', { hasText: visibleAnswer })).toBeVisible();
+    await expect(chatRow.locator('.chatStatusBadge.error')).toHaveCount(0);
+    await expect(chatRow.locator('.chatStatusBadge.done')).toHaveText('Done');
+  });
+
   test('should not show punctuation-only ongoing message status', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const chatId = `ui-message-punctuation-status-${Date.now()}`;
@@ -818,6 +1289,79 @@ test.describe('Chat UI', () => {
     });
     expect(alignment.statusLeft).toBe(alignment.rowLeft);
     expect(alignment.resendLeft).toBeGreaterThan(alignment.statusRight);
+  });
+
+  test('should align failed send controls with the collapse action row', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const failedText = `failed long message action row check ${'long content '.repeat(60)}`;
+    const chatId = `ui-failed-action-row-${Date.now()}`;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, activeTurn: null }) });
+    });
+
+    await page.evaluate(async ({ chatId, failedText }) => {
+      const now = Date.now();
+      const chat = {
+        id: chatId,
+        name: 'UI failed action row',
+        ts: now,
+        messages: [
+          {
+            id: 'u1',
+            type: 'user',
+            content: failedText,
+            sendStatus: 'failed',
+            sendError: 'Failed to send prompt to agent',
+            resendAgentIds: ['alpha'],
+            resendMessage: failedText,
+            ts: now,
+          },
+        ],
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, failedText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const failedUserMessage = chatArea.locator('.message.user', { hasText: 'failed long message action row check' });
+    await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
+    await expect(failedUserMessage.getByRole('button', { name: 'Collapse' })).toBeVisible();
+    await expect(failedUserMessage.locator('.userSendFailure')).toBeVisible();
+
+    const verticalAlignment = await failedUserMessage.evaluate((message) => {
+      const collapse = message.querySelector('.collapseToggle') as HTMLElement | null;
+      const failure = message.querySelector('.userSendFailure') as HTMLElement | null;
+      if (!collapse || !failure) throw new Error('Expected collapse and failed-send controls');
+      const collapseRect = collapse.getBoundingClientRect();
+      const failureRect = failure.getBoundingClientRect();
+      return Math.abs(
+        collapseRect.top + collapseRect.height / 2 -
+        (failureRect.top + failureRect.height / 2),
+      );
+    });
+    expect(verticalAlignment).toBeLessThanOrEqual(2);
   });
 
   test('should keep failed send status on the original chat when user switches before failure returns', async ({ page }) => {
@@ -3057,6 +3601,177 @@ test.describe('Chat UI', () => {
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });
 
+  test('should not force-scroll to bottom after user scrolls up during streaming', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = 'stream without forcing scroll';
+    const newChunk = 'new streamed chunk after manual scroll';
+    let streamedText = 'Initial streaming answer.';
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-scroll-lock' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'busy',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-scroll-lock',
+              fullText: streamedText,
+              done: false,
+              phase: 'responding',
+              statusText: 'Generating',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: streamedText }],
+              totalEvents: 1,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.evaluate(async () => {
+      const now = Date.now();
+      const fillerMessages = Array.from({ length: 18 }, (_, index) => ({
+        id: `filler-${index}`,
+        type: index % 2 === 0 ? 'user' : 'agent',
+        agentId: index % 2 === 0 ? undefined : 'alpha',
+        content: `Scrollable history row ${index} `.repeat(20),
+        ts: now + index,
+      }));
+      const chat = {
+        id: 'stream-scroll-lock-chat',
+        name: 'Stream scroll lock chat',
+        ts: now,
+        messages: fillerMessages,
+        agentSessions: { alpha: 'session-alpha' },
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: chat.id }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    await expect(chatArea.locator('.message.agent', { hasText: streamedText })).toBeVisible({ timeout: 15000 });
+
+    const manualDistanceFromBottom = await chatArea.evaluate((el) => {
+      const maxScrollTop = el.scrollHeight - el.clientHeight;
+      if (maxScrollTop < 160) throw new Error(`Expected scrollable chat, got ${maxScrollTop}`);
+      el.scrollTop = maxScrollTop - 40;
+      el.dispatchEvent(new Event('scroll', { bubbles: true }));
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    expect(manualDistanceFromBottom).toBeGreaterThan(30);
+    expect(manualDistanceFromBottom).toBeLessThan(80);
+
+    streamedText = `${streamedText}\n\n${newChunk}\n${'more generated text '.repeat(80)}`;
+    await expect(chatArea.locator('.message.agent', { hasText: newChunk })).toBeVisible({ timeout: 15000 });
+
+    await expect.poll(async () => chatArea.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(20);
+  });
+
+  test('should keep pending agent bubble width stable while streaming response grows', async ({ page }) => {
+    const chatArea = page.locator('.chatContainer');
+    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const userText = 'stream without bubble shake';
+    const initialText = 'Short answer.';
+    const longChunk = 'additional streamed response text';
+    let streamedText = initialText;
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', turn: { id: 'turn-width-lock' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'busy',
+            ready: true,
+            booting: false,
+            sessionId: 'session-alpha',
+            activeTurn: {
+              id: 'turn-width-lock',
+              fullText: streamedText,
+              done: false,
+              phase: 'responding',
+              statusText: 'Generating',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: streamedText }],
+              totalEvents: 1,
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await textarea.fill(userText);
+    await page.click('button[aria-label="Send message"]');
+    const agentMessage = chatArea.locator('.message.agent').last();
+    await expect(agentMessage).toContainText(initialText, { timeout: 15000 });
+
+    const initialBox = await agentMessage.boundingBox();
+    expect(initialBox).not.toBeNull();
+
+    streamedText = `${initialText} ${Array(35).fill(longChunk).join(' ')}`;
+    await expect(agentMessage).toContainText(longChunk, { timeout: 15000 });
+    const grownBox = await agentMessage.boundingBox();
+    expect(grownBox).not.toBeNull();
+
+    expect(Math.abs(grownBox!.width - initialBox!.width)).toBeLessThanOrEqual(2);
+  });
+
   test('chat-scoped active turns: same chat rejects second send while another chat can keep its own active turn', async ({ page }) => {
     const agentId = 'alpha';
     const activeTurns = new Map<string, { id: string; messageId: string; text: string }>();
@@ -3738,6 +4453,48 @@ test.describe('Chat Rename', () => {
     await expect(page.locator('.chatHistoryRow').first().locator('.chatHistoryItem')).toContainText('My Renamed Chat');
   });
 
+  test('should keep chat actions usable after sidebar resize', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    const resizeHandle = page.locator('.sidebarResizeHandle');
+    await expect(resizeHandle).toBeVisible();
+    const handleBox = await resizeHandle.boundingBox();
+    expect(handleBox).not.toBeNull();
+
+    const dragY = handleBox!.y + 120;
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, dragY);
+    await page.mouse.down();
+    await page.mouse.move(80, dragY, { steps: 8 });
+    await page.mouse.up();
+
+    // Sidebar should be clamped to its minimum width (>= 260px) regardless of drag target.
+    const sidebarBox = await page.locator('.participantsSidebar').boundingBox();
+    expect(sidebarBox).not.toBeNull();
+    expect(sidebarBox!.width).toBeGreaterThanOrEqual(260);
+
+    const row = page.locator('.chatHistoryRow').first();
+    await row.hover();
+
+    // The chat name and the action button should not overlap horizontally.
+    const nameBox = await row.locator('.chatHistoryName').first().boundingBox();
+    const moreBtnBox = await row.locator('.chatMoreBtn').boundingBox();
+    expect(nameBox).not.toBeNull();
+    expect(moreBtnBox).not.toBeNull();
+    expect(nameBox!.x + nameBox!.width).toBeLessThanOrEqual(moreBtnBox!.x + 1);
+
+    await row.locator('.chatMoreBtn').click();
+
+    const menu = page.locator('.chatActionsMenu');
+    await expect(menu).toBeVisible();
+    const menuBox = await menu.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x - 1);
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width + 1);
+
+    await menu.locator('.chatActionItem', { hasText: 'Rename' }).click();
+    await expect(page.locator('.chatRenameInput')).toBeVisible();
+  });
+
   test('should preserve renamed chat name after creating new chat', async ({ page }) => {
     // Rename the first chat
     await page.locator('.chatHistoryRow').first().hover();
@@ -3766,50 +4523,84 @@ test.describe('Agent Filter Tabs', () => {
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
-  test('should show agent filter tabs in sidebar', async ({ page }) => {
-    // "All" tab should be visible and active
-    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toBeVisible();
-    await expect(page.locator('.chatAgentFilterBtn:has-text("All")')).toHaveClass(/active/);
+  test('should show agent filter dropdown in sidebar', async ({ page }) => {
+    const select = page.locator('select.chatAgentFilterSelect');
+    await expect(select).toBeVisible();
+    // Default selection is "All" (empty value)
+    await expect(select).toHaveValue('');
+    await expect(select.locator('option').first()).toHaveText(/All/);
+  });
+
+  test('should hide scheduler from agent filter dropdown', async ({ page }) => {
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.evaluate(() => window.localStorage.setItem('acp_agent_filter_v1', 'scheduler'));
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+
+    const select = page.locator('select.chatAgentFilterSelect');
+    await expect(select).toHaveValue('');
+    await expect(select.locator('option', { hasText: 'Alpha Agent' })).toHaveCount(1);
+    await expect(select.locator('option', { hasText: 'Scheduler' })).toHaveCount(0);
   });
 
   test('should switch agent filter and show empty homepage', async ({ page }) => {
-    // Create a chat under "All" tab
+    // Create a chat under "All"
     await page.click('button.emptyHomepageNewChat');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
-    // Click a different agent tab (skip "All", click the second tab)
-    const tabs = page.locator('.chatAgentFilterBtn');
-    const tabCount = await tabs.count();
-    if (tabCount > 1) {
-      await tabs.nth(1).click();
-      await page.waitForTimeout(500);
+    const select = page.locator('select.chatAgentFilterSelect');
+    const options = await select.locator('option').all();
+    if (options.length > 1) {
+      const value = await options[1].getAttribute('value');
+      if (value) {
+        await select.selectOption(value);
+        await page.waitForTimeout(500);
 
-      // Should show empty homepage since there are no chats for that agent
-      await expect(page.locator('.emptyHomepage')).toBeVisible();
+        // Should show empty homepage since there are no chats for that agent
+        await expect(page.locator('.emptyHomepage')).toBeVisible();
 
-      // Switch back to All — should show the chat we created
-      await page.locator('.chatAgentFilterBtn:has-text("All")').click();
-      await page.waitForTimeout(500);
-      await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+        // Switch back to All — should show the chat we created
+        await select.selectOption('');
+        await page.waitForTimeout(500);
+        await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
+      }
     }
   });
 
-  test('should persist agent filter tab after reload', async ({ page }) => {
-    // Click a non-All agent tab
-    const tabs = page.locator('.chatAgentFilterBtn');
-    const tabCount = await tabs.count();
-    if (tabCount > 1) {
-      const tabName = await tabs.nth(1).textContent();
-      await tabs.nth(1).click();
-      await page.waitForTimeout(500);
-      await expect(tabs.nth(1)).toHaveClass(/active/);
+  test('should persist agent filter selection after reload', async ({ page }) => {
+    const select = page.locator('select.chatAgentFilterSelect');
+    const options = await select.locator('option').all();
+    if (options.length > 1) {
+      const value = await options[1].getAttribute('value');
+      if (value) {
+        await select.selectOption(value);
+        await page.waitForTimeout(500);
+        await expect(select).toHaveValue(value);
 
-      // Reload
-      await page.reload();
-      await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+        // Reload
+        await page.reload();
+        await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
-      // The same tab should still be active
-      await expect(page.locator(`.chatAgentFilterBtn:has-text("${tabName}")`)).toHaveClass(/active/);
+        // The same agent should still be selected
+        await expect(page.locator('select.chatAgentFilterSelect')).toHaveValue(value);
+      }
     }
   });
 });
@@ -3864,5 +4655,234 @@ test.describe('Theme', () => {
     await page.click('button.themeMenuButton');
     // Theme dropdown should appear
     await expect(page.locator('[role="menu"][aria-label="Theme list"]')).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'VS Code Dark' })).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'Claude' })).toBeVisible();
+    await expect(page.locator('.themeOption', { hasText: 'One Dark' })).toHaveCount(0);
+    await expect(page.locator('.themeOption', { hasText: 'Forest' })).toHaveCount(0);
+    await expect(page.locator('.themeOption', { hasText: 'Velvet' })).toHaveCount(0);
+  });
+
+  test('should use the same selected text colors in Claude chat and file editors', async ({ page }) => {
+    const expectedSelectionStyle = { backgroundColor: 'rgb(237, 194, 178)', color: 'rgb(47, 39, 34)' };
+    const getSelectionStyle = (selector: string) =>
+      page.locator(selector).first().evaluate((element) => {
+        const style = getComputedStyle(element, '::selection');
+        return {
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+        };
+      });
+
+    await page.route('**/api/acp', async (route) => {
+      const request = route.request();
+      if (request.method() !== 'POST') return route.fallback();
+      const body = request.postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          json: {
+            ok: true,
+            agents: [{ id: 'selection-agent', name: 'Selection Agent', cwd: 'Q:\\Repos\\Agents-Chat', canTalk: true }],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/markdown**', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const filePath = url.searchParams.get('path');
+      if (request.method() === 'GET' && !filePath) {
+        await route.fulfill({
+          json: {
+            files: [
+              { path: 'selection.md', name: 'selection.md', mtime: '2026-01-01T00:00:00.000Z' },
+              { path: 'selection.txt', name: 'selection.txt', mtime: '2026-01-01T00:00:00.000Z' },
+            ],
+          },
+        });
+        return;
+      }
+      if (request.method() === 'GET' && filePath === 'selection.md') {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: '# Selection sample\n\nClaude file editor selected text.',
+            kind: 'markdown',
+            mtime: '2026-01-01T00:00:00.000Z',
+          },
+        });
+        return;
+      }
+      if (request.method() === 'GET' && filePath === 'selection.txt') {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: 'Claude plain file selected text.',
+            kind: 'text',
+            mtime: '2026-01-01T00:00:00.000Z',
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/comments**', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ json: { ok: true, comments: [] } });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.evaluate(() => {
+      window.localStorage.setItem('acp_chat_theme_v1', 'claude');
+      window.localStorage.removeItem('acp_file_workspace_v1');
+    });
+
+    const seedResult = await page.evaluate(async () => {
+      const chatId = 'claude-selection-chat';
+      const now = Date.now();
+      const saveResponse = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat: {
+            id: chatId,
+            name: 'Claude selection chat',
+            ts: now,
+            messages: [
+              { id: 'claude-selection-user', type: 'user', content: 'Claude selection sample from the user.', ts: now },
+              { id: 'claude-selection-agent', type: 'agent', agentId: 'alpha', content: 'Claude selection sample from the agent.', ts: now + 1 },
+            ],
+            agentSessions: {},
+          },
+        }),
+      });
+      const lastChatResponse = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+      return { saveOk: saveResponse.ok, lastChatOk: lastChatResponse.ok };
+    });
+    expect(seedResult).toEqual({ saveOk: true, lastChatOk: true });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await expect(page.locator('.messageContent p')).toHaveCount(2);
+
+    const chatSelectionStyles = await page.locator('.messageContent p').evaluateAll((paragraphs) =>
+      paragraphs.map((paragraph) => {
+        const style = getComputedStyle(paragraph, '::selection');
+        return {
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+        };
+      })
+    );
+
+    expect(chatSelectionStyles).toEqual([
+      expectedSelectionStyle,
+      expectedSelectionStyle,
+    ]);
+
+    await page.getByRole('button', { name: /Files/ }).click();
+    await page.locator('select.remoteAgentSelect').selectOption('selection-agent');
+    await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
+    await expect(page.locator('.mdLiveEditable')).toBeVisible();
+
+    const liveEditorSelectionStyle = await getSelectionStyle('.mdLiveEditable p');
+    await page.getByRole('button', { name: 'Split' }).click();
+    await expect(page.locator('textarea.mdEditorTextarea')).toBeVisible();
+
+    const splitTextareaSelectionStyle = await getSelectionStyle('textarea.mdEditorTextarea');
+    const splitPreviewSelectionStyle = await getSelectionStyle('.mdEditorPreviewPane p');
+    await page.locator('.mdTreeFile', { hasText: 'selection.txt' }).click();
+    await expect(page.locator('.fileContentWithLines')).toBeVisible();
+
+    const plainFileSelectionStyle = await getSelectionStyle('.fileLineText');
+    expect({
+      liveEditorSelectionStyle,
+      splitTextareaSelectionStyle,
+      splitPreviewSelectionStyle,
+      plainFileSelectionStyle,
+    }).toEqual({
+      liveEditorSelectionStyle: expectedSelectionStyle,
+      splitTextareaSelectionStyle: expectedSelectionStyle,
+      splitPreviewSelectionStyle: expectedSelectionStyle,
+      plainFileSelectionStyle: expectedSelectionStyle,
+    });
+  });
+
+  test('should recover from removed saved theme ids', async ({ page }) => {
+    const cases = [
+      { saved: 'oneDark', expectedTitle: 'Theme: VS Code Dark', expectedStored: 'vsCodeDark' },
+      { saved: 'forest', expectedTitle: 'Theme: Aurora', expectedStored: 'aurora' },
+      { saved: 'velvet', expectedTitle: 'Theme: Aurora', expectedStored: 'aurora' },
+    ];
+
+    for (const themeCase of cases) {
+      await page.evaluate((savedTheme) => window.localStorage.setItem('acp_chat_theme_v1', savedTheme), themeCase.saved);
+      await page.reload();
+      await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+
+      await expect(page.locator('button.themeMenuButton')).toHaveAttribute('title', themeCase.expectedTitle);
+      await expect.poll(() => page.evaluate(() => window.localStorage.getItem('acp_chat_theme_v1'))).toBe(themeCase.expectedStored);
+    }
+  });
+});
+
+test.describe('Comment Review Chat', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+    await deleteAllChats(page);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+  });
+
+  test('should not mark approved comment user message as failed before agent responds', async ({ page }) => {
+    const chatId = `comment-review:${encodeURIComponent('test/dummy.md')}-${Date.now()}`;
+    const messageText = `Review comment on test/dummy.md (line 1)\n\n"please change the word"`;
+
+    await page.evaluate(async ({ chatId, messageText }) => {
+      const chat = {
+        id: chatId,
+        name: 'Review: test/dummy.md',
+        ts: Date.now(),
+        messages: [
+          { id: 'u1', type: 'user', content: messageText, ts: Date.now() },
+        ],
+        agentSessions: {},
+      };
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId }),
+      });
+    }, { chatId, messageText });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 15000 });
+
+    const userMessage = page.locator('.message.user', { hasText: 'please change the word' });
+    await expect(userMessage).toBeVisible({ timeout: 10000 });
+    await expect(userMessage.getByRole('button', { name: 'Resend' })).toHaveCount(0);
+    await expect(userMessage.locator('.userSendFailureStatus')).toHaveCount(0);
+
+    // The stored chat must not have been silently re-saved with sendStatus 'failed'
+    const stored = await page.evaluate(async (id) => {
+      const r = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+      const data = await r.json();
+      return data.chat?.messages?.[0]?.sendStatus || null;
+    }, chatId);
+    expect(stored).toBeNull();
   });
 });

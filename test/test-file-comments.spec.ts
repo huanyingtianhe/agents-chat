@@ -17,7 +17,12 @@ async function login(page: Page) {
   await page.fill('input[placeholder="Admin username"]', ADMIN_USER);
   await page.fill('input[placeholder="Password"]', ADMIN_PASS);
   await page.click('button[type="submit"]');
-  await page.waitForSelector('.chatContainer', { timeout: 30000 });
+  await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+  const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 2000 }).catch(() => false);
+  if (isEmpty) {
+    await page.click('button.newChatButton, button.emptyHomepageNewChat');
+    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+  }
   await page.waitForTimeout(500);
 }
 
@@ -2233,6 +2238,175 @@ test.describe('File Comments UI', () => {
     }).toBeLessThan(4);
   });
 
+  test('live edit multi-paragraph selection shows Add Comment', async ({ page }) => {
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          json: {
+            ok: true,
+            agents: [{ id: 'test-md-multi-select-agent', name: 'Test Markdown Multi Select Agent', cwd: 'Q:\\Repos\\Agents-Chat' }],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/markdown?**', async route => {
+      const url = new URL(route.request().url());
+      const filePath = url.searchParams.get('path');
+      if (filePath) {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: 'First paragraph selected text.\n\nSecond paragraph selected text.',
+            kind: 'markdown',
+            mtime: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          files: [{ path: 'live-multi-selection.md', name: 'live-multi-selection.md', mtime: new Date().toISOString() }],
+        },
+      });
+    });
+
+    await page.route('**/api/comments**', async route => {
+      await route.fulfill({ json: { ok: true, comments: [] } });
+    });
+
+    await login(page);
+    await page.click('button:has-text("Files")');
+    await page.selectOption('.remoteAgentSelect', 'test-md-multi-select-agent');
+    await page.locator('.mdTreeFile', { hasText: 'live-multi-selection.md' }).click();
+
+    await expect(page.locator('.mdLiveEditable')).toBeVisible();
+    const selectionBoxes = await page.locator('.mdLiveEditable').evaluate(editor => {
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+      let firstNode: Text | null = null;
+      let secondNode: Text | null = null;
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.textContent || '';
+        if (text.includes('First paragraph selected text.')) firstNode = node as Text;
+        if (text.includes('Second paragraph selected text.')) secondNode = node as Text;
+      }
+      if (!firstNode || !secondNode) throw new Error('Expected rendered paragraph text nodes');
+
+      const firstRange = document.createRange();
+      firstRange.setStart(firstNode, firstNode.textContent!.indexOf('First paragraph'));
+      firstRange.setEnd(firstNode, firstNode.textContent!.indexOf('First paragraph') + 'First'.length);
+      const firstRect = firstRange.getBoundingClientRect();
+
+      const secondRange = document.createRange();
+      secondRange.setStart(secondNode, secondNode.textContent!.indexOf('Second paragraph selected text.') + 'Second paragraph selected text.'.length - 1);
+      secondRange.setEnd(secondNode, secondNode.textContent!.indexOf('Second paragraph selected text.') + 'Second paragraph selected text.'.length);
+      const secondRect = secondRange.getBoundingClientRect();
+
+      return {
+        startX: firstRect.left + 1,
+        startY: firstRect.top + firstRect.height / 2,
+        endX: secondRect.right + 1,
+        endY: secondRect.top + secondRect.height / 2,
+      };
+    });
+
+    await page.mouse.move(selectionBoxes.startX, selectionBoxes.startY);
+    await page.mouse.down();
+    await page.mouse.move(selectionBoxes.endX, selectionBoxes.endY, { steps: 12 });
+    await page.mouse.up();
+
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() || '')).toContain('Second paragraph selected text.');
+    const addCommentButton = page.locator('.addCommentFloatingBtn');
+    await expect(addCommentButton).toBeVisible();
+
+    await addCommentButton.click();
+    await expect(page.locator('.commentAddForm')).toBeVisible();
+    await expect(page.locator('.commentAddLabel')).toHaveText('New comment on L1-3');
+  });
+
+  test('live edit triple-click rendered markdown paragraph shows Add Comment', async ({ page }) => {
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          json: {
+            ok: true,
+            agents: [{ id: 'test-md-triple-select-agent', name: 'Test Markdown Triple Select Agent', cwd: 'Q:\\Repos\\Agents-Chat' }],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/markdown?**', async route => {
+      const url = new URL(route.request().url());
+      const filePath = url.searchParams.get('path');
+      if (filePath) {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: 'Paragraph with **bold selected phrase** and [linked selected text](https://example.com).',
+            kind: 'markdown',
+            mtime: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          files: [{ path: 'live-triple-selection.md', name: 'live-triple-selection.md', mtime: new Date().toISOString() }],
+        },
+      });
+    });
+
+    await page.route('**/api/comments**', async route => {
+      await route.fulfill({ json: { ok: true, comments: [] } });
+    });
+
+    await login(page);
+    await page.click('button:has-text("Files")');
+    await page.selectOption('.remoteAgentSelect', 'test-md-triple-select-agent');
+    await page.locator('.mdTreeFile', { hasText: 'live-triple-selection.md' }).click();
+
+    const paragraph = page.locator('.mdLiveEditable p', { hasText: 'Paragraph with bold selected phrase' });
+    await expect(paragraph).toBeVisible();
+    const paragraphTextBox = await paragraph.evaluate(el => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.textContent || '';
+        const index = text.indexOf('bold selected phrase');
+        if (index >= 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + 'bold'.length);
+          const rect = range.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        }
+      }
+      const rect = el.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+
+    await page.mouse.click(
+      paragraphTextBox.x + paragraphTextBox.width / 2,
+      paragraphTextBox.y + paragraphTextBox.height / 2,
+      { clickCount: 3 },
+    );
+
+    const addCommentButton = page.locator('.addCommentFloatingBtn');
+    await expect(addCommentButton).toBeVisible();
+
+    await addCommentButton.click();
+    await expect(page.locator('.commentAddForm')).toBeVisible();
+    await expect(page.locator('.commentAddLabel')).toHaveText('New comment on L1');
+  });
+
   test('restores Files tab, agent, editor mode, and open file after refresh', async ({ page }) => {
     await page.route('**/api/acp', async route => {
       const body = route.request().postDataJSON() as { action?: string } | null;
@@ -2579,5 +2753,99 @@ test.describe('File Comments UI', () => {
 
     await expect(page.locator('.mdLiveEditable')).toContainText('Changed live text survives switching.');
     await expect(page.locator('.mdDirtyBadge')).toBeVisible();
+  });
+
+  test('keeps Live Edit caret at edit position after deleting text', async ({ page }) => {
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          json: {
+            ok: true,
+            agents: [{ id: 'live-caret-agent', name: 'Live Caret Agent', cwd: 'Q:\\Repos\\Agents-Chat' }],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+
+    await page.route('**/api/markdown?**', async route => {
+      const url = new URL(route.request().url());
+      const filePath = url.searchParams.get('path');
+      if (filePath) {
+        await route.fulfill({
+          json: {
+            path: filePath,
+            content: 'Alpha bravo charlie.',
+            kind: 'markdown',
+            mtime: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          files: [{ path: 'live-caret.md', name: 'live-caret.md', mtime: new Date().toISOString() }],
+        },
+      });
+    });
+
+    await page.route('**/api/comments**', async route => {
+      await route.fulfill({ json: { ok: true, comments: [] } });
+    });
+
+    await login(page);
+    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.selectOption('.remoteAgentSelect', 'live-caret-agent');
+    await page.locator('.mdTreeFile', { hasText: 'live-caret.md' }).click();
+
+    const liveEditor = page.locator('.mdLiveEditable');
+    await expect(liveEditor).toBeVisible();
+    await liveEditor.evaluate(editor => {
+      (editor as HTMLElement).focus();
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.textContent || '';
+        const index = text.indexOf('Alpha bravo charlie.');
+        if (index >= 0) {
+          const offset = index + 'Alpha bravo'.length;
+          const range = document.createRange();
+          range.setStart(node, offset);
+          range.collapse(true);
+          const selection = window.getSelection();
+          if (!selection) throw new Error('Expected selection');
+          selection.removeAllRanges();
+          selection.addRange(range);
+          editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'deleteContentBackward' }));
+          node.textContent = `${text.slice(0, offset - 1)}${text.slice(offset)}`;
+          range.setStart(node, offset - 1);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+          return;
+        }
+      }
+      throw new Error('Expected editable text node');
+    });
+
+    await expect(liveEditor).toContainText('Alpha brav charlie.');
+
+    await expect.poll(() => liveEditor.evaluate(editor => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      return {
+        insideEditor: editor.contains(range.startContainer),
+        offset: range.startOffset,
+        text: range.startContainer.textContent || '',
+      };
+    })).toEqual({
+      insideEditor: true,
+      offset: 'Alpha brav'.length,
+      text: 'Alpha brav charlie.',
+    });
   });
 });

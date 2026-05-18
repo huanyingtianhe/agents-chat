@@ -409,6 +409,8 @@ function buildPromptParts(text: string, attachments: PromptAttachment[] = []): A
   return parts;
 }
 
+type AgentModel = configStore.AgentModel;
+
 type AgentConfig = {
   id: string;
   name: string;
@@ -419,6 +421,8 @@ type AgentConfig = {
   noTools?: boolean;
   relay?: boolean;
   relayConnectionName?: string;
+  models?: AgentModel[];
+  defaultModelId?: string;
 };
 
 const pendingUserRequestGlobal = globalThis as typeof globalThis & {
@@ -795,6 +799,8 @@ function readAgentsConfig(): AgentConfig[] {
     noTools: a.noTools,
     relay: a.relay,
     relayConnectionName: a.relayConnectionName,
+    models: a.models,
+    defaultModelId: a.defaultModelId,
   }));
 }
 
@@ -811,6 +817,8 @@ function getAgentById(agentId: string): AgentConfig | null {
     noTools: a.noTools,
     relay: a.relay,
     relayConnectionName: a.relayConnectionName,
+    models: a.models,
+    defaultModelId: a.defaultModelId,
   };
 }
 
@@ -979,6 +987,40 @@ function getActiveTurnForResume(chatTurn: TurnState | undefined, savedSessionId:
   if (chatTurn.sessionId && chatTurn.sessionId !== savedSessionId) return null;
   if (!chatTurn.sessionId) chatTurn.sessionId = savedSessionId;
   return chatTurn;
+}
+
+type WarmLocalAgentStatus = 'ready' | 'booting' | 'started' | 'failed' | 'skipped_remote';
+
+type WarmLocalAgentResult = {
+  agentId: string;
+  status: WarmLocalAgentStatus;
+  error?: string;
+};
+
+async function warmLocalAgents(): Promise<WarmLocalAgentResult[]> {
+  const agents = readAgentsConfig();
+  return Promise.all(agents.map(async (agent): Promise<WarmLocalAgentResult> => {
+    if (agent.relay) {
+      return { agentId: agent.id, status: 'skipped_remote' };
+    }
+
+    const proc = getAgentProcess(agent.id, agent);
+    if (proc.ready) {
+      return { agentId: agent.id, status: 'ready' };
+    }
+    if (proc.booting) {
+      return { agentId: agent.id, status: 'booting' };
+    }
+
+    try {
+      await bootAgent(agent.id);
+      return { agentId: agent.id, status: 'started' };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[ACP:${agent.id}] Warmup failed:`, error);
+      return { agentId: agent.id, status: 'failed', error };
+    }
+  }));
 }
 
 /* ─────────────── ACP Lifecycle ─────────────── */
@@ -1287,12 +1329,152 @@ async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise
   return params;
 }
 
+function normalizeSessionModels(input: unknown): AgentModel[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const models: AgentModel[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : '';
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+    models.push({
+      modelId,
+      ...(name ? { name } : {}),
+      ...(description ? { description } : {}),
+    });
+  }
+  return models;
+}
+
+function syncAgentModelsFromSessionResult(agentId: string, sessionResult: unknown): { models: AgentModel[]; defaultModelId: string } | null {
+  const session = sessionResult && typeof sessionResult === 'object' ? sessionResult as Record<string, any> : null;
+  const modelState = session?.models && typeof session.models === 'object' ? session.models as Record<string, unknown> : null;
+  const availableModels = normalizeSessionModels(modelState?.availableModels);
+  if (availableModels.length === 0) return null;
+  const currentModelId = typeof modelState?.currentModelId === 'string' ? modelState.currentModelId.trim() : '';
+  const defaultModelId = currentModelId && availableModels.some(model => model.modelId === currentModelId)
+    ? currentModelId
+    : availableModels[0].modelId;
+  configStore.updateAgent(agentId, { models: availableModels, defaultModelId });
+  const proc = getAgentProcesses().get(agentId);
+  if (proc) {
+    proc.config = { ...proc.config, models: availableModels, defaultModelId };
+  }
+  console.log(`[ACP:${agentId}] Synced ${availableModels.length} model(s) from session/new; default=${defaultModelId}`);
+  return { models: availableModels, defaultModelId };
+}
+
+function validateRequestedModel(config: AgentConfig, requested: unknown): string | undefined {
+  const modelId = typeof requested === 'string' ? requested.trim() : '';
+  if (!modelId) return undefined;
+  const models = config.models || [];
+  if (models.length > 0 && !models.some(model => model.modelId === modelId)) {
+    throw new Error(`Unknown modelId "${modelId}" for agent "${config.id}"`);
+  }
+  return modelId;
+}
+
+async function applySessionModelIfRequested(proc: AgentProcess, sessionId: string | null, requestedModelId: string | undefined): Promise<void> {
+  if (!requestedModelId) return;
+  if (!sessionId) throw new Error('Cannot set model before session is created');
+  if (!proc.rpc) throw new Error('Agent process not ready');
+  try {
+    await proc.rpc.send('session/set_model', { sessionId, modelId: requestedModelId });
+  } catch (firstErr: any) {
+    const firstMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+    try {
+      await proc.rpc.send('unstable_setSessionModel', { sessionId, modelId: requestedModelId });
+    } catch (secondErr: any) {
+      const secondMsg = secondErr instanceof Error ? secondErr.message : String(secondErr);
+      throw new Error(`Agent does not support switching to model "${requestedModelId}" for this session (${firstMsg}; ${secondMsg})`);
+    }
+  }
+}
+
+function logSessionLoadFallback(agentId: string, userId: string, chatId: string | undefined, savedSessionId: string, reason: string): void {
+  console.log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
+}
+
+function getLastStoredSessionId(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i--) {
+      const item = value[i];
+      if (typeof item === 'string' && item.trim()) return item.trim();
+    }
+  }
+  return null;
+}
+
+async function getStoredChatAgentSessionId(userId: string, chatId: string, agentId: string): Promise<string | null> {
+  const chat = await getChat(userId, chatId);
+  return getLastStoredSessionId(chat?.agentSessions?.[agentId]);
+}
+
+async function loadSavedChatSessionForSend(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  chatId: string,
+  savedSessionId: string,
+  isAdmin: boolean,
+): Promise<boolean> {
+  if (!proc.rpc) throw new Error('Agent process not ready');
+  if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
+    sess.sessionId = savedSessionId;
+    pushChatSession(sess, chatId, savedSessionId);
+    sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
+    console.log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    return true;
+  }
+  if (!proc.supportsLoadSession) {
+    logSessionLoadFallback(agentId, userId, chatId, savedSessionId, 'agent does not support loadSession');
+    return false;
+  }
+
+  const replayBuffers = getReplayBuffers();
+  replayBuffers.set(savedSessionId, []);
+  try {
+    const sessionParams = await buildSessionParams(proc, isAdmin);
+    await proc.rpc.send('session/load', { sessionId: savedSessionId, ...sessionParams });
+    replayBuffers.delete(savedSessionId);
+    sess.sessionId = savedSessionId;
+    pushChatSession(sess, chatId, savedSessionId);
+    if (sess.activeTurns.size === 0) sess.phase = 'idle';
+    proc.knownSessions.add(savedSessionId);
+    console.log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    return true;
+  } catch (loadErr: any) {
+    replayBuffers.delete(savedSessionId);
+    const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
+    let code = loadErr?.data?.code ?? loadErr?.code;
+    if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
+    const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
+    if (alreadyLoaded) {
+      sess.sessionId = savedSessionId;
+      pushChatSession(sess, chatId, savedSessionId);
+      sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
+      proc.knownSessions.add(savedSessionId);
+      console.log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
+      return true;
+    }
+    logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
+    return false;
+  }
+}
+
 async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId: string, userId: string, isAdmin: boolean): Promise<void> {
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
   const sessionParams = await buildSessionParams(proc, isAdmin);
   console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
   const result = await proc.rpc.send('session/new', sessionParams);
+  syncAgentModelsFromSessionResult(agentId, result);
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);
   console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
@@ -1421,7 +1603,7 @@ function scheduleTurnRelease(sess: UserSession, turnChatKey: string, turn: TurnS
   }, 30_000);
 }
 
-function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string, messageId?: string, attachments: PromptAttachment[] = []): TurnState {
+function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prompt: string, isAdmin: boolean, userId: string, chatHistory?: { type: string; content: string; agentId?: string }[], chatId?: string, messageId?: string, attachments: PromptAttachment[] = [], requestedModelId?: string): TurnState {
   const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turn: TurnState = {
     id: turnId,
@@ -1475,6 +1657,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       try {
         const sessionParams = await buildSessionParams(proc, isAdmin);
         const session = await proc.rpc!.send('session/new', sessionParams);
+        syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
@@ -1503,6 +1686,8 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         turn.phase = 'thinking';
         turn.statusText = 'Reconnected — retrying';
         turn.events.push({ type: 'thinking', ts: Date.now(), text: '(Session recovered, retrying...)' });
+
+        await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
 
         const retryResult = await proc.rpc!.send('session/prompt', {
           sessionId: sess.sessionId,
@@ -2141,6 +2326,25 @@ export async function POST(req: NextRequest) {
 
     // ─── Config endpoints (no agentId required) ───
 
+    if (action === 'get-model-prefs') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const prefs = configStore.getUserAgentModelPrefs(userEmail);
+      return NextResponse.json({ ok: true, prefs });
+    }
+
+    if (action === 'set-model-pref') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const prefAgentId = typeof body?.agentId === 'string' ? body.agentId : '';
+      const modelId = typeof body?.modelId === 'string' ? body.modelId : '';
+      if (!prefAgentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      configStore.setUserAgentModelPref(userEmail, prefAgentId, modelId);
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === 'list-agents') {
       const allAgents = configStore.getAllAgents();
       const token = await getAuthToken(req);
@@ -2150,13 +2354,19 @@ export async function POST(req: NextRequest) {
         const userCanModify = canModify(token, a.owner);
         const userCanTalk = canTalkTo(token, a.owner, a.id, a.public, configStore.hasAgentAccess);
         const relayNode = a.relay && a.relayConnectionName ? configStore.getNodeByName(a.relayConnectionName) : null;
-        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label, cwd: a.cwd };
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label, cwd: a.cwd, models: a.models, defaultModelId: a.defaultModelId };
         if (userCanModify) {
           return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label };
         }
         return base;
       });
       return NextResponse.json({ ok: true, agents });
+    }
+
+    if (action === 'warm-local-agents') {
+      const agents = await warmLocalAgents();
+      const warmed = agents.filter(agent => agent.status === 'started').length;
+      return NextResponse.json({ ok: true, warmed, agents });
     }
 
     if (action === 'get-agent-config') {
@@ -2199,13 +2409,21 @@ export async function POST(req: NextRequest) {
         cwd: updates.cwd,
         yolo: updates.yolo,
         public: (body?.updates as any)?.public,
+        models: updates.models,
+        defaultModelId: updates.defaultModelId,
       });
 
-      // Restart if running
+      // Only restart the agent process when fields that affect spawn/runtime change.
+      // Model selection is applied per-session via session/set_model, so changing
+      // `defaultModelId` (or just refreshing `models`) must not kill the process.
+      const updateKeys = Object.keys(updates).filter(k => (updates as any)[k] !== undefined);
+      const restartRequiringKeys = new Set(['name', 'command', 'args', 'cwd', 'yolo', 'public']);
+      const needsRestart = updateKeys.some(k => restartRequiringKeys.has(k));
+
       let restarted = false;
       const procs = getAgentProcesses();
       const existing = procs.get(agentId);
-      if (existing?.ready) {
+      if (needsRestart && existing?.ready) {
         if (existing.rpc) existing.rpc.destroy();
         procs.delete(agentId);
         for (const [key, staleSess] of [...getUserSessions().entries()]) {
@@ -2246,6 +2464,8 @@ export async function POST(req: NextRequest) {
         yolo: newAgent.yolo ?? true,
         relay: newAgent.relay,
         relayConnectionName: newAgent.relayConnectionName || (newAgent.relay ? newAgent.id : ''),
+        models: newAgent.models,
+        defaultModelId: newAgent.defaultModelId,
         owner: ownerEmail,
       });
 
@@ -2336,6 +2556,47 @@ export async function POST(req: NextRequest) {
     const proc = getAgentProcess(agentId, config);
     const sess = getUserSession(agentId, userId);
 
+    if (action === 'ensure-agent-models') {
+      if ((config.models || []).length > 0) {
+        return NextResponse.json({ ok: true, models: config.models, cached: true });
+      }
+      const chatId = body?.chatId as string | undefined;
+      if (!chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
+      if (!proc.ready) {
+        if (!proc.booting) {
+          await bootAgent(agentId);
+        } else {
+          const p = getBootPromises().get(agentId);
+          if (p) await p;
+        }
+      }
+      if (!proc.ready || !proc.rpc) {
+        return NextResponse.json({ ok: false, error: proc.error || 'Agent not ready' }, { status: 503 });
+      }
+      const sessionParams = await buildSessionParams(proc, isAdmin);
+      const session = await proc.rpc.send('session/new', sessionParams);
+      const synced = syncAgentModelsFromSessionResult(agentId, session);
+      if (session?.sessionId) {
+        // Only link the probe session to this chat if the chat doesn't already have a
+        // saved session. If it does, the probe is purely for model discovery — try to
+        // close it immediately, and don't store it in memory or DB.
+        const existingChatSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+        if (!existingChatSessionId) {
+          sess.sessionId = session.sessionId;
+          proc.knownSessions.add(session.sessionId);
+          pushChatSession(sess, chatId, session.sessionId);
+          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+        } else {
+          // Best-effort close the probe session so it doesn't linger on the agent.
+          proc.rpc.send('session/close', { sessionId: session.sessionId }).catch(() => { /* ignore if unsupported */ });
+        }
+      }
+      if (!synced) {
+        return NextResponse.json({ ok: true, models: [], sessionId: sess.sessionId || null, unsupported: true });
+      }
+      return NextResponse.json({ ok: true, models: synced.models, sessionId: sess.sessionId || null, cached: false });
+    }
+
     if (action === 'status') {
       const chatId = body?.chatId as string | undefined;
       const turnChatKey = chatId || '__default';
@@ -2377,6 +2638,13 @@ export async function POST(req: NextRequest) {
         throw err;
       }
       if (!text && attachments.length === 0) return NextResponse.json({ ok: false, error: 'missing_text' }, { status: 400 });
+      let requestedModelId: string | undefined;
+      try {
+        requestedModelId = validateRequestedModel(config, body?.modelId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+      }
 
       // Check talk permission
       const agentRecord = configStore.getAgentById(agentId);
@@ -2410,8 +2678,14 @@ export async function POST(req: NextRequest) {
             // Don't null activeTurns — other chats may have active turns
           }
         } else {
-          // New chat with no prior session — clear so ensureUserSession creates a fresh one
-          sess.sessionId = null;
+          const savedSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+          if (savedSessionId) {
+            const loadedSavedSession = await loadSavedChatSessionForSend(proc, sess, agentId, userId, chatId, savedSessionId, isAdmin);
+            if (!loadedSavedSession) sess.sessionId = null;
+          } else {
+            // New chat with no prior session — clear so ensureUserSession creates a fresh one
+            sess.sessionId = null;
+          }
         }
       }
 
@@ -2435,7 +2709,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'turn_in_progress' }, { status: 409 });
       }
 
-      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId, messageId, attachments);
+      try {
+        await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+      }
+
+      const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId, messageId, attachments, requestedModelId);
       return NextResponse.json({ ok: true, phase: sess.phase, sessionId: sess.sessionId, turn: serializeTurn(turn) });
     }
 
@@ -2569,6 +2850,7 @@ export async function POST(req: NextRequest) {
         // Note: ACP has no session/close — old session persists on the agent for future session/load
         const sessionParams = await buildSessionParams(proc, isAdmin);
         const session = await proc.rpc.send('session/new', sessionParams);
+        syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
@@ -2669,15 +2951,16 @@ export async function POST(req: NextRequest) {
             console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
             return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
           }
-          console.log(`[ACP:${agentId}] session/load failed for ${savedSessionId}: ${errStr}, falling back to session/new`);
+          logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
         }
       } else {
-        console.log(`[ACP:${agentId}] Agent does not support loadSession, falling back to session/new`);
+        logSessionLoadFallback(agentId, userId, chatId, savedSessionId, 'agent does not support loadSession');
       }
       // Fall back to creating a new session — the frontend will inject chat history on first turn
       try {
         const sessionParams = await buildSessionParams(proc, isAdmin);
         const session = await proc.rpc!.send('session/new', sessionParams);
+        syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
         // Don't clear other chats' active turns

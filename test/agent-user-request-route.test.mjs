@@ -19,6 +19,14 @@ const freeformRequestHandlerIndex = routeSource.indexOf(
   "if (method === 'session/request_input' || method === 'session/request_user_input')",
 );
 const freeformQueuedInNoToolsBranch = /method\s*===\s*['"]session\/request_input['"]\s*\|\|\s*method\s*===\s*['"]session\/request_user_input['"][\s\S]*?queueUserRequestForTurn/.test(noToolsBranchSource);
+const warmLocalAgentsActionStart = routeSource.indexOf("if (action === 'warm-local-agents')");
+const warmLocalAgentsActionEnd = warmLocalAgentsActionStart >= 0
+  ? routeSource.indexOf("if (action === 'get-agent-config')", warmLocalAgentsActionStart)
+  : -1;
+const warmLocalAgentsActionSource = warmLocalAgentsActionStart >= 0 && warmLocalAgentsActionEnd >= 0
+  ? routeSource.slice(warmLocalAgentsActionStart, warmLocalAgentsActionEnd)
+  : '';
+const runtimeActionsStart = routeSource.indexOf('// ─── Agent runtime actions (require agentId + userId) ───');
 
 assert.match(
   routeSource,
@@ -478,8 +486,73 @@ assert.match(
 
 assert.match(
   routeSource,
+  /function\s+logSessionLoadFallback\([\s\S]*?console\.log\(\s*`\[ACP:\$\{agentId\}\]\s+session\/load fallback:[\s\S]*?chat=\$\{chatId\s*\|\|\s*['"]\(none\)['"]\}[\s\S]*?savedSession=\$\{savedSessionId\}[\s\S]*?reason=\$\{reason\};\s+falling back to session\/new/,
+  'route.ts should log chat/session/reason to stdout whenever session/load falls back to session/new',
+);
+
+assert.match(
+  routeSource,
+  /catch\s*\(loadErr:[\s\S]*?const\s+alreadyLoaded[\s\S]*?if\s*\(alreadyLoaded\)[\s\S]*?return\s+NextResponse\.json[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId,[\s\S]*?errStr[\s\S]*?\);[\s\S]*?\}[\s\S]*?else\s*\{[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId,\s*['"]agent does not support loadSession['"]\);/,
+  'resume-session should log both failed session/load and unsupported loadSession fallback paths',
+);
+
+assert.match(
+  routeSource,
+  /function\s+getLastStoredSessionId\([\s\S]*?Array\.isArray\(value\)[\s\S]*?for\s*\(let\s+i\s*=\s*value\.length\s*-\s*1[\s\S]*?typeof\s+item\s*===\s*['"]string['"][\s\S]*?return\s+item/,
+  'route.ts should read the latest session id from either legacy string or append-only session arrays',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+getStoredChatAgentSessionId\([\s\S]*?await\s+getChat\(userId,\s*chatId\)[\s\S]*?getLastStoredSessionId\(chat\?\.agentSessions\?\.\[agentId\]\)/,
+  'route.ts should be able to read a saved chat agent session from SQLite before sending',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+loadSavedChatSessionForSend\([\s\S]*?proc\.knownSessions\.has\(savedSessionId\)[\s\S]*?proc\.supportsLoadSession[\s\S]*?await\s+proc\.rpc!\.send\('session\/load',\s*\{\s*sessionId:\s*savedSessionId[\s\S]*?logSessionLoadFallback\(agentId,\s*userId,\s*chatId,\s*savedSessionId/,
+  'send should load a saved chat session before falling back to session/new',
+);
+
+assert.match(
+  routeSource,
+  /action\s*===\s*['"]send['"][\s\S]*?const\s+chatSessionId\s*=\s*getChatSession\(sess,\s*chatId\);[\s\S]*?const\s+savedSessionId\s*=\s*await\s+getStoredChatAgentSessionId\(userId,\s*chatId,\s*agentId\);[\s\S]*?if\s*\(savedSessionId\)\s*\{[\s\S]*?await\s+loadSavedChatSessionForSend\(proc,\s*sess,\s*agentId,\s*userId,\s*chatId,\s*savedSessionId,\s*isAdmin\)[\s\S]*?await\s+ensureUserSession\(proc,\s*sess,\s*agentId,\s*userId,\s*isAdmin\)/,
+  'send should try the saved SQLite session for this chat before ensureUserSession creates a new session',
+);
+
+assert.match(
+  routeSource,
   /const\s+alreadyLoaded\s*=[\s\S]*?if\s*\(alreadyLoaded\)\s*\{[\s\S]*?const\s+activeTurn\s*=\s*getActiveTurnForResume\(chatTurn,\s*savedSessionId\)[\s\S]*?return\s+NextResponse\.json\(\{\s*ok:\s*true,\s*sessionId:\s*savedSessionId,\s*loaded:\s*true,\s*activeTurn:\s*serializeTurn\(activeTurn\)\s*\}\)/,
   'already-loaded resume should return the matching active turn even when sess.sessionId was stale',
+);
+
+assert.match(
+  routeSource,
+  /type\s+WarmLocalAgentStatus\s*=\s*[\s\S]*?['"]ready['"][\s\S]*?['"]booting['"][\s\S]*?['"]started['"][\s\S]*?['"]failed['"][\s\S]*?['"]skipped_remote['"]/,
+  'route.ts should define explicit warmup status values for local agent warmup summaries',
+);
+
+assert.match(
+  routeSource,
+  /async\s+function\s+warmLocalAgents\(\):\s*Promise<WarmLocalAgentResult\[]>[\s\S]*?readAgentsConfig\(\)[\s\S]*?if\s*\(agent\.relay\)[\s\S]*?status:\s*['"]skipped_remote['"][\s\S]*?getAgentProcess\(agent\.id,\s*agent\)[\s\S]*?proc\.ready[\s\S]*?status:\s*['"]ready['"][\s\S]*?proc\.booting[\s\S]*?status:\s*['"]booting['"][\s\S]*?await\s+bootAgent\(agent\.id\)[\s\S]*?status:\s*['"]started['"][\s\S]*?catch[\s\S]*?console\.error[\s\S]*?status:\s*['"]failed['"]/,
+  'warmLocalAgents should skip relay/ready/booting agents, boot unready local agents, and report failures per agent',
+);
+
+assert.ok(
+  warmLocalAgentsActionStart >= 0 && runtimeActionsStart >= 0 && warmLocalAgentsActionStart < runtimeActionsStart,
+  'warm-local-agents should be handled before the shared runtime action guard that requires agentId',
+);
+
+assert.match(
+  warmLocalAgentsActionSource,
+  /const\s+agents\s*=\s*await\s+warmLocalAgents\(\);[\s\S]*?const\s+warmed\s*=\s*agents\.filter\([\s\S]*?status\s*===\s*['"]started['"][\s\S]*?NextResponse\.json\(\{\s*ok:\s*true,\s*warmed,\s*agents\s*\}\)/,
+  'warm-local-agents action should return an ok response with warmed count and per-agent summary',
+);
+
+assert.doesNotMatch(
+  warmLocalAgentsActionSource,
+  /session\/new|session\/load|getUserSession|ensureUserSession/,
+  'warm-local-agents action should not create, load, or attach chat sessions',
 );
 
 console.log('agent user request route shape checks passed');

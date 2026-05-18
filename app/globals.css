@@ -36,12 +36,45 @@ a {
 }
 
 ::selection {
-  background: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--accent, #5b8cff) 35%, transparent);
+  color: inherit;
+}
+::-moz-selection {
+  background: color-mix(in srgb, var(--accent, #5b8cff) 35%, transparent);
+  color: inherit;
+}
+
+.page[data-theme="claude"] .message::selection,
+.page[data-theme="claude"] .message ::selection,
+.page[data-theme="claude"] .mdLiveEditable::selection,
+.page[data-theme="claude"] .mdLiveEditable ::selection,
+.page[data-theme="claude"] .mdEditorTextarea::selection,
+.page[data-theme="claude"] .mdEditorPreviewPane::selection,
+.page[data-theme="claude"] .mdEditorPreviewPane ::selection,
+.page[data-theme="claude"] .fileContentWithLines::selection,
+.page[data-theme="claude"] .fileContentWithLines ::selection {
+  background: #edc2b2;
+  color: #2f2722;
+  text-shadow: none;
+}
+
+.page[data-theme="claude"] .message::-moz-selection,
+.page[data-theme="claude"] .message ::-moz-selection,
+.page[data-theme="claude"] .mdLiveEditable::-moz-selection,
+.page[data-theme="claude"] .mdLiveEditable ::-moz-selection,
+.page[data-theme="claude"] .mdEditorTextarea::-moz-selection,
+.page[data-theme="claude"] .mdEditorPreviewPane::-moz-selection,
+.page[data-theme="claude"] .mdEditorPreviewPane ::-moz-selection,
+.page[data-theme="claude"] .fileContentWithLines::-moz-selection,
+.page[data-theme="claude"] .fileContentWithLines ::-moz-selection {
+  background: #edc2b2;
+  color: #2f2722;
+  text-shadow: none;
 }
 
 /* Agent filter overflow menu (rendered via portal to document.body) */
 .chatAgentFilterOverflowMenu {
-  background: var(--panel, #151b2e);
+  background: var(--panel-strong, var(--panel-bg, #151b2e));
   border: 1px solid var(--border-strong, #2a3550);
   border-radius: 10px;
   padding: 4px;
@@ -51,7 +84,7 @@ a {
   min-width: 170px;
   max-height: 240px;
   overflow-y: auto;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  box-shadow: var(--shadow, 0 8px 24px rgba(0,0,0,0.45));
 }
 .chatAgentFilterOverflowItem {
   padding: 6px 12px;
@@ -73,4 +106,64 @@ a {
   background: var(--accent-soft, rgba(0,200,255,0.1));
   color: var(--accent, #00c8ff);
   font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Refined scrollbars — thin, subtle, theme-aware, with a soft
+   hover/active state. Works in WebKit/Blink and Firefox.
+   ───────────────────────────────────────────────────────────── */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong, rgba(255, 255, 255, 0.18)) transparent;
+}
+
+/* WebKit / Blink */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border, rgba(255, 255, 255, 0.12));
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-height: 36px;
+  transition: background-color 0.18s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong, rgba(255, 255, 255, 0.24));
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent, rgba(0, 200, 255, 0.55));
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Slim variant for compact areas (sidebars, code blocks, menus). */
+.scroll-slim::-webkit-scrollbar,
+.participantsSidebar::-webkit-scrollbar,
+.chatAgentFilterOverflowMenu::-webkit-scrollbar,
+.mdFilesList::-webkit-scrollbar,
+.chatActionsMenu::-webkit-scrollbar,
+pre::-webkit-scrollbar,
+code::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb,
+.participantsSidebar::-webkit-scrollbar-thumb,
+.chatAgentFilterOverflowMenu::-webkit-scrollbar-thumb,
+.mdFilesList::-webkit-scrollbar-thumb,
+.chatActionsMenu::-webkit-scrollbar-thumb {
+  border-width: 1px;
 }

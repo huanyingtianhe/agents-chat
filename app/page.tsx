@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, startTransition, type ClipboardEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, startTransition, type ClipboardEvent, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSession, signOut } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
@@ -17,6 +17,19 @@ import rehypeStringify from 'rehype-stringify';
 const mdProcessor = remark().use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true }).use(rehypeStringify, { allowDangerousHtml: true });
 function markdownToHtml(md: string): string {
   return String(mdProcessor.processSync(md));
+}
+
+function stripMarkdownSyntaxForSearch(text: string): string {
+  return text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 }
 
 // Detect file paths ending in .html/.htm in text and wrap them with report links
@@ -74,6 +87,12 @@ const mdComponents = {
 
 /* ────────── Types ────────── */
 
+type AgentModel = {
+  modelId: string;
+  name?: string;
+  description?: string;
+};
+
 type Agent = {
   id: string;
   name: string;
@@ -88,6 +107,8 @@ type Agent = {
   canModify?: boolean;
   canTalk?: boolean;
   public?: boolean;
+  models?: AgentModel[];
+  defaultModelId?: string;
 };
 
 type PtyPhase = 'booting' | 'loading-environment' | 'idle-ready' | 'thinking' | 'replying';
@@ -128,6 +149,8 @@ const COMMENT_SIDEBAR_CARD_PADDING = 120;
 const COMMENT_SIDEBAR_CARD_GAP = 8;
 const COMMENT_SIDEBAR_COLLAPSED_CARD_HEIGHT = 54;
 const COMMENT_SIDEBAR_EXPANDED_CARD_HEIGHT = 118;
+const CHAT_ACTION_MENU_WIDTH = 132;
+const CHAT_ACTION_MENU_HEIGHT = 124;
 
 type FileWorkspaceState = {
   tab: LeftSidebarTab;
@@ -135,6 +158,7 @@ type FileWorkspaceState = {
   filePath: string | null;
   diffOnly: boolean;
   editorMode: MdEditorMode;
+  scrollTop?: number;
 };
 
 type FileComment = {
@@ -166,6 +190,11 @@ type FileCommentReply = {
 
 type LiveSelectionDraftAnchor = {
   rects: { left: number; top: number; width: number; height: number }[];
+};
+
+type LiveEditorSelectionSnapshot = {
+  start: number;
+  end: number;
 };
 
 type LiveCommentMarker = {
@@ -215,12 +244,16 @@ function parseFileWorkspaceState(raw: string | null): FileWorkspaceState | null 
     const parsed = JSON.parse(raw) as Partial<FileWorkspaceState>;
     const filePath = typeof parsed.filePath === 'string' && parsed.filePath ? parsed.filePath : null;
     const editorMode = isMdEditorMode(parsed.editorMode) ? parsed.editorMode : 'live';
+    const scrollTop = typeof parsed.scrollTop === 'number' && Number.isFinite(parsed.scrollTop) && parsed.scrollTop >= 0
+      ? parsed.scrollTop
+      : undefined;
     return {
       tab: isLeftSidebarTab(parsed.tab) ? parsed.tab : 'chats',
       agentId: typeof parsed.agentId === 'string' && parsed.agentId ? parsed.agentId : null,
       filePath,
       diffOnly: parsed.diffOnly === true,
       editorMode: normalizeFileEditorMode(editorMode, filePath),
+      scrollTop,
     };
   } catch {
     return null;
@@ -498,6 +531,7 @@ const STORAGE_INPUT_HISTORY = 'acp_input_history_v2';
 const STORAGE_THEME = 'acp_chat_theme_v1';
 const STORAGE_AGENT_FILTER = 'acp_agent_filter_v1';
 const STORAGE_FILE_WORKSPACE = 'acp_file_workspace_v1';
+const STORAGE_REMEMBERED_CHAT_AGENTS = 'acp_remembered_chat_agents_v1';
 
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -566,102 +600,123 @@ const THEMES = {
       '--comment-user-color': '#58a6ff',
     },
   },
-  forest: {
-    label: 'Forest',
-    emoji: '🌲',
+  vsCodeDark: {
+    label: 'VS Code Dark',
+    emoji: '▣',
     values: {
-      '--bg': '#081410',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(16,185,129,0.2), transparent 28%), radial-gradient(circle at bottom right, rgba(132,204,22,0.16), transparent 24%), linear-gradient(180deg, #0a1611 0%, #07110d 100%)',
-      '--header-bg': 'rgba(8, 19, 15, 0.88)',
-      '--panel-bg': 'rgba(10, 22, 17, 0.8)',
-      '--panel-strong': '#11271d',
-      '--panel-soft': '#173126',
-      '--border': 'rgba(74, 222, 128, 0.14)',
-      '--border-strong': 'rgba(52, 211, 153, 0.28)',
-      '--text': '#ecfff4',
-      '--text-soft': '#b5d9c4',
-      '--muted': '#7ca191',
-      '--accent': '#34d399',
-      '--accent-2': '#84cc16',
-      '--accent-soft': 'rgba(52, 211, 153, 0.11)',
-      '--accent-strong': 'rgba(132, 204, 22, 0.18)',
-      '--message-user': 'linear-gradient(135deg, rgba(52,211,153,0.13), rgba(132,204,22,0.13))',
-      '--message-agent': 'rgba(10, 22, 17, 0.9)',
-      '--summary-glow': 'rgba(52,211,153,0.16)',
-      '--input-bg': '#173126',
-      '--code-bg': '#0d1b14',
-      '--success': '#bbf7d0',
-      '--danger': '#f87171',
-      '--shadow': '0 20px 60px rgba(3, 10, 7, 0.48)',
+      '--bg': '#1e1e1e',
+      '--bg-accent': 'linear-gradient(180deg, #1f1f1f 0%, #1e1e1e 52%, #181818 100%)',
+      '--header-bg': 'rgba(37, 37, 38, 0.94)',
+      '--panel-bg': 'rgba(37, 37, 38, 0.88)',
+      '--panel-strong': '#252526',
+      '--panel-soft': '#2d2d30',
+      '--border': 'rgba(128, 128, 128, 0.18)',
+      '--border-strong': 'rgba(0, 122, 204, 0.42)',
+      '--text': '#cccccc',
+      '--text-soft': '#b3b3b3',
+      '--muted': '#858585',
+      '--accent': '#3794ff',
+      '--accent-2': '#007acc',
+      '--accent-soft': 'rgba(55, 148, 255, 0.13)',
+      '--accent-strong': 'rgba(0, 122, 204, 0.24)',
+      '--message-user': 'linear-gradient(135deg, rgba(55,148,255,0.12), rgba(0,122,204,0.10))',
+      '--message-agent': 'rgba(37, 37, 38, 0.94)',
+      '--summary-glow': 'rgba(55,148,255,0.14)',
+      '--input-bg': '#3c3c3c',
+      '--code-bg': '#1e1e1e',
+      '--success': '#89d185',
+      '--danger': '#f48771',
+      '--shadow': '0 22px 58px rgba(0, 0, 0, 0.42)',
       '--comment-agent-color': '#f0c040',
       '--comment-user-color': '#58a6ff',
     },
   },
-  pearl: {
-    label: 'Pearl',
-    emoji: '☁️',
+  claude: {
+    label: 'Claude',
+    emoji: '✦',
     values: {
-      '--bg': '#eef2f8',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(59,130,246,0.12), transparent 28%), radial-gradient(circle at top right, rgba(236,72,153,0.08), transparent 24%), linear-gradient(180deg, #f8fbff 0%, #edf2f8 100%)',
-      '--header-bg': 'rgba(255, 255, 255, 0.86)',
-      '--panel-bg': 'rgba(255, 255, 255, 0.72)',
+      '--bg': '#f7f2e8',
+      '--bg-accent': 'radial-gradient(circle at top left, rgba(196, 95, 65, 0.14), transparent 30%), radial-gradient(circle at bottom right, rgba(83, 102, 121, 0.08), transparent 26%), linear-gradient(180deg, #fbf7ef 0%, #f1e8dc 100%)',
+      '--header-bg': 'rgba(250, 246, 238, 0.9)',
+      '--panel-bg': 'rgba(255, 251, 243, 0.78)',
+      '--panel-strong': '#fffaf2',
+      '--panel-soft': '#f1e8dc',
+      '--border': 'rgba(88, 70, 60, 0.13)',
+      '--border-strong': 'rgba(196, 95, 65, 0.28)',
+      '--text': '#2f2722',
+      '--text-soft': '#6f625a',
+      '--muted': '#97897d',
+      '--accent': '#c45f41',
+      '--accent-2': '#536679',
+      '--accent-soft': 'rgba(196, 95, 65, 0.12)',
+      '--accent-strong': 'rgba(83, 102, 121, 0.14)',
+      '--message-user': 'linear-gradient(135deg, rgba(196,95,65,0.11), rgba(83,102,121,0.09))',
+      '--message-agent': 'rgba(255, 250, 242, 0.9)',
+      '--summary-glow': 'rgba(196, 95, 65, 0.12)',
+      '--input-bg': '#fffaf2',
+      '--code-bg': '#eee3d6',
+      '--success': '#218a54',
+      '--danger': '#c2413b',
+      '--shadow': '0 22px 58px rgba(75, 54, 43, 0.16)',
+      '--comment-agent-color': '#a35d00',
+      '--comment-user-color': '#2f6f9f',
+      '--avatar-bg': 'linear-gradient(135deg, #d97757, #c45f41)',
+      '--avatar-text': '#fff',
+      '--send-button-bg': 'linear-gradient(135deg, #d98267 0%, #c96a4b 100%)',
+      '--send-button-border': 'rgba(196, 95, 65, 0.34)',
+      '--send-button-color': '#fffaf2',
+      '--send-button-shadow': '0 8px 18px rgba(196, 95, 65, 0.18), inset 0 1px 0 rgba(255,255,255,0.30)',
+    },
+  },
+  chatgpt: {
+    label: 'ChatGPT',
+    emoji: '◉',
+    values: {
+      '--bg': '#ffffff',
+      '--bg-accent': 'linear-gradient(180deg, #ffffff 0%, #fbfbfa 100%)',
+      '--header-bg': 'rgba(255, 255, 255, 0.94)',
+      '--panel-bg': 'rgba(249, 249, 248, 0.92)',
       '--panel-strong': '#ffffff',
-      '--panel-soft': '#f4f7fb',
-      '--border': 'rgba(15, 23, 42, 0.08)',
-      '--border-strong': 'rgba(59, 130, 246, 0.2)',
-      '--text': '#132238',
-      '--text-soft': '#52627a',
-      '--muted': '#748196',
-      '--accent': '#2563eb',
-      '--accent-2': '#ec4899',
-      '--accent-soft': 'rgba(37, 99, 235, 0.08)',
-      '--accent-strong': 'rgba(236, 72, 153, 0.12)',
-      '--message-user': 'linear-gradient(135deg, rgba(37,99,235,0.08), rgba(236,72,153,0.08))',
-      '--message-agent': 'rgba(255,255,255,0.86)',
-      '--summary-glow': 'rgba(37,99,235,0.12)',
+      '--panel-soft': '#f4f4f3',
+      '--border': 'rgba(13, 13, 13, 0.08)',
+      '--border-strong': 'rgba(13, 13, 13, 0.16)',
+      '--text': '#0d0d0d',
+      '--text-soft': '#3f3f3f',
+      '--muted': '#737373',
+      '--accent': '#ff5e1a',
+      '--accent-2': '#0d0d0d',
+      '--accent-soft': 'rgba(255, 94, 26, 0.10)',
+      '--accent-strong': 'rgba(255, 94, 26, 0.18)',
+      '--message-user': 'linear-gradient(135deg, rgba(255,94,26,0.08), rgba(13,13,13,0.04))',
+      '--message-agent': '#ffffff',
+      '--summary-glow': 'rgba(255, 94, 26, 0.10)',
       '--input-bg': '#ffffff',
-      '--code-bg': '#f3f6fb',
+      '--code-bg': '#f4f4f3',
       '--success': '#16a34a',
       '--danger': '#dc2626',
-      '--shadow': '0 20px 50px rgba(148, 163, 184, 0.18)',
-      '--comment-agent-color': '#f0c040',
-      '--comment-user-color': '#58a6ff',
-    },
-  },
-  velvet: {
-    label: 'Velvet',
-    emoji: '🪄',
-    values: {
-      '--bg': '#120b1d',
-      '--bg-accent': 'radial-gradient(circle at top left, rgba(217,70,239,0.22), transparent 30%), radial-gradient(circle at bottom right, rgba(59,130,246,0.16), transparent 26%), linear-gradient(180deg, #160d23 0%, #0f0918 100%)',
-      '--header-bg': 'rgba(18, 10, 30, 0.9)',
-      '--panel-bg': 'rgba(19, 11, 31, 0.82)',
-      '--panel-strong': '#1a102b',
-      '--panel-soft': '#23153a',
-      '--border': 'rgba(217, 70, 239, 0.16)',
-      '--border-strong': 'rgba(96, 165, 250, 0.22)',
-      '--text': '#f7ecff',
-      '--text-soft': '#cbb9df',
-      '--muted': '#8d7aa6',
-      '--accent': '#d946ef',
-      '--accent-2': '#60a5fa',
-      '--accent-soft': 'rgba(217, 70, 239, 0.12)',
-      '--accent-strong': 'rgba(96, 165, 250, 0.14)',
-      '--message-user': 'linear-gradient(135deg, rgba(217,70,239,0.14), rgba(96,165,250,0.12))',
-      '--message-agent': 'rgba(20, 11, 31, 0.92)',
-      '--summary-glow': 'rgba(217,70,239,0.14)',
-      '--input-bg': '#23153a',
-      '--code-bg': '#150e24',
-      '--success': '#86efac',
-      '--danger': '#fb7185',
-      '--shadow': '0 24px 64px rgba(10, 6, 18, 0.5)',
-      '--comment-agent-color': '#f0c040',
-      '--comment-user-color': '#58a6ff',
+      '--shadow': '0 18px 48px rgba(13, 13, 13, 0.08)',
+      '--comment-agent-color': '#c2520a',
+      '--comment-user-color': '#2f6f9f',
+      '--avatar-bg': 'linear-gradient(135deg, #ff8a4a, #ff5e1a)',
+      '--avatar-text': '#fff',
     },
   },
 } as const;
 
 type ThemeId = keyof typeof THEMES;
+const DEFAULT_THEME_ID: ThemeId = 'aurora';
+const LEGACY_THEME_ID_MAP: Record<string, ThemeId> = {
+  oneDark: 'vsCodeDark',
+  forest: DEFAULT_THEME_ID,
+  velvet: DEFAULT_THEME_ID,
+  pearl: 'chatgpt',
+};
+
+function normalizeThemeId(value: unknown): ThemeId {
+  if (typeof value !== 'string') return DEFAULT_THEME_ID;
+  if (value in THEMES) return value as ThemeId;
+  return LEGACY_THEME_ID_MAP[value] || DEFAULT_THEME_ID;
+}
 
 /* ────────── Helpers ────────── */
 
@@ -948,13 +1003,21 @@ function getMentionedAgentIds(text: string, agents: Agent[]) {
   return selected;
 }
 
+function getDefaultAgentId(agents: Agent[]): string | null {
+  return (agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || null)?.id || null;
+}
+
+function getExistingAgentId(agentId: string | null | undefined, agents: Agent[]): string | null {
+  if (!agentId) return null;
+  return agents.some((agent) => agent.id === agentId) ? agentId : null;
+}
+
 function parseAgents(text: string, agents: Agent[], preferredAgentId?: string | null) {
   const agentIds = getMentionedAgentIds(text, agents);
   if (agentIds.length === 0) {
     // Use preferred agent (from chat's agentId) if available, otherwise fall back to first non-scheduler
-    const preferred = preferredAgentId ? agents.find(a => a.id === preferredAgentId) : null;
-    const fallback = preferred || agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID) || agents[0] || { id: 'main', name: 'Main' };
-    return { agentIds: [fallback.id], message: text };
+    const fallbackId = getExistingAgentId(preferredAgentId, agents) || getDefaultAgentId(agents) || 'main';
+    return { agentIds: [fallbackId], message: text };
   }
   const message = text.replace(/(?:^|\s)@(\S+)/g, '').trim();
   return { agentIds, message: message || text };
@@ -976,6 +1039,31 @@ async function acpApi(body: Record<string, unknown>) {
     body: JSON.stringify(body),
   });
   return res.json();
+}
+
+function isAcpFailureResult(value: unknown): value is { ok?: unknown; error?: unknown } {
+  return !!value && typeof value === 'object' && 'ok' in value && (value as { ok?: unknown }).ok !== true;
+}
+
+let localAgentsWarmupStarted = false;
+
+function warmLocalAgentsOnce(
+  acpCall: (body: Record<string, unknown>) => Promise<unknown>,
+  loadedAgents: Agent[],
+) {
+  if (localAgentsWarmupStarted) return;
+  if (!loadedAgents.some(agent => !agent.relay)) return;
+
+  localAgentsWarmupStarted = true;
+  void acpCall({ action: 'warm-local-agents' })
+    .then((result) => {
+      if (isAcpFailureResult(result)) {
+        console.error('Failed to warm local agents', result.error || result);
+      }
+    })
+    .catch((err) => {
+      console.error('Failed to warm local agents', err);
+    });
 }
 
 /* ────────── Page Component ────────── */
@@ -1018,6 +1106,8 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
+  const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
+  const [ensuringAgentModels, setEnsuringAgentModels] = useState<Record<string, boolean>>({});
   const [discussionRounds, setDiscussionRounds] = useState(2);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1035,13 +1125,15 @@ export default function Page() {
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [themeId, setThemeId] = useState<ThemeId>('aurora');
   const [showThemeMenu, setShowThemeMenu] = useState(false);
+  const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
+  const [openModelMenuAgentId, setOpenModelMenuAgentId] = useState<string | null>(null);
   const [showChatsPanel, setShowChatsPanel] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  const chatMenuButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [chatAgentFilter, setChatAgentFilter] = useState<string | null>(null); // null = "All"
-  const [agentFilterOverflowOpen, setAgentFilterOverflowOpen] = useState(false);
-  const [maxVisibleAgents, setMaxVisibleAgents] = useState(4);
+  const [rememberedChatAgents, setRememberedChatAgents] = useState<Record<string, string>>({});
   function switchAgentFilter(agentId: string | null) {
     if (agentId === chatAgentFilter) return;
     // Save current chat before switching
@@ -1103,6 +1195,11 @@ export default function Page() {
   const [mdExpandedDirs, setMdExpandedDirs] = useState<Set<string>>(new Set());
   const [mdDiffOnly, setMdDiffOnly] = useState(false);
   const mdLiveRef = useRef<HTMLDivElement>(null);
+  const [mdLiveElementVersion, setMdLiveElementVersion] = useState(0);
+  const setMdLiveElementRef = useCallback((node: HTMLDivElement | null) => {
+    mdLiveRef.current = node;
+    if (node) setMdLiveElementVersion((version) => version + 1);
+  }, []);
   const turndownRef = useRef<TurndownService | null>(null);
   if (!turndownRef.current) {
     const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', emDelimiter: '*' });
@@ -1135,8 +1232,15 @@ export default function Page() {
   const pendingLiveEditCommentAnchorRef = useRef<LiveSelectionDraftAnchor | null>(null);
   const pendingLiveEditDomRangeRef = useRef<Range | null>(null);
   const pendingLiveEditSelectedTextRef = useRef<string | null>(null);
+  const preserveLiveEditCommentButtonOnCollapseRef = useRef(false);
+  const pendingLiveEditorSelectionRef = useRef<LiveEditorSelectionSnapshot | null>(null);
   const liveSelectionDraftRangeRef = useRef<Range | null>(null);
   const liveSelectionDraftTextRef = useRef<string | null>(null);
+  // Maps a newly-created comment id to the editor-content y where it should
+  // appear in the sidebar until a real live-edit marker is computed for it.
+  // Prevents the card from being mispositioned by the (lineNumber * 20px)
+  // fallback when DOM text matching fails (e.g. multi-line selections).
+  const recentLiveCommentAnchorsRef = useRef<Map<string, number>>(new Map());
   const fileWorkspaceRestoreRef = useRef<FileWorkspaceState | null>(null);
   const fileWorkspaceRestoredRef = useRef(false);
 
@@ -1159,12 +1263,13 @@ export default function Page() {
   chatNameRef.current = chatName;
   const sessionRunsRef = useRef<Record<string, SessionRunContext>>({});
   const orchestrationsRef = useRef<Record<string, OrchestrationState>>({});
-  const chatContainerRef = useRef<HTMLDivElement | null>(null);
-  const filterRowRef = useRef<HTMLDivElement | null>(null);
-  const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
+  const chatContainerRef = useRef<HTMLElement | null>(null);
   const sidebarDragRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
+  const lastChatScrollTopRef = useRef(0);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerOverflowRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map());
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputHistoryRef = useRef<Record<string, string[]>>({});
@@ -1181,6 +1286,8 @@ export default function Page() {
     return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q)));
   }, [input, agents]);
 
+  const chatFilterAgents = useMemo(() => agents.filter((agent) => agent.id !== SCHEDULER_AGENT_ID), [agents]);
+
   const mentionedAgentIds = useMemo(() => getMentionedAgentIds(input, agents), [input, agents]);
   const orchestrationEnabled = mentionedAgentIds.length > 1;
 
@@ -1191,12 +1298,162 @@ export default function Page() {
     });
   }, [agents, messages]);
 
-  const activeTheme = THEMES[themeId];
+  const normalizedThemeId = normalizeThemeId(themeId);
+  const activeTheme = THEMES[normalizedThemeId];
   const themeStyle = activeTheme.values as React.CSSProperties;
   const mobilePanelOpen = showChatsPanel || showAgentsPanel || showNodesPanel;
   const isCurrentChatSending = useMemo(() => isChatRunning(currentChatId), [currentChatId, runVersion]);
+  const currentChatPrimaryAgentId = useMemo(() => {
+    return chatHistory.find((chat) => chat.id === currentChatId)?.agentId || null;
+  }, [chatHistory, currentChatId]);
+  const rememberedComposerAgentId = getExistingAgentId(
+    currentChatId ? rememberedChatAgents[currentChatId] : null,
+    agents,
+  );
+  const effectiveComposerAgentId = mentionedAgentIds.length === 0
+    ? rememberedComposerAgentId
+      || getExistingAgentId(currentChatPrimaryAgentId, agents)
+      || getDefaultAgentId(agents)
+    : null;
+
+  const composerTargetAgentIds = mentionedAgentIds.length > 0
+    ? mentionedAgentIds
+    : effectiveComposerAgentId ? [effectiveComposerAgentId] : [];
+
+  function getAgentModels(agentId: string): AgentModel[] {
+    return agents.find((agent) => agent.id === agentId)?.models || [];
+  }
+
+  function getSelectedModelIdForAgent(agentId: string): string {
+    const agent = agents.find((item) => item.id === agentId);
+    const models = agent?.models || [];
+    const selected = selectedAgentModels[agentId];
+    // If models not loaded yet, trust the stored pref as-is — the backend will validate it.
+    if (selected && (models.length === 0 || models.some((model) => model.modelId === selected))) return selected;
+    if (agent?.defaultModelId && models.some((model) => model.modelId === agent.defaultModelId)) return agent.defaultModelId;
+    return models[0]?.modelId || '';
+  }
+
+  function setSelectedModelForAgent(agentId: string, modelId: string) {
+    setSelectedAgentModels((prev) => ({ ...prev, [agentId]: modelId }));
+    // Persist to server (per-user, keyed by email)
+    void acp({ action: 'set-model-pref', agentId, modelId }).catch(() => { /* ignore */ });
+  }
+
+  async function ensureAgentModels(agentId: string) {
+    if (!currentChatIdRef.current || ensuringAgentModels[agentId] || getAgentModels(agentId).length > 0) return;
+    const chatId = currentChatIdRef.current;
+    setEnsuringAgentModels((prev) => ({ ...prev, [agentId]: true }));
+    try {
+      const data = await acp({ action: 'ensure-agent-models', agentId, chatId });
+      if (data.ok) {
+        const models = Array.isArray(data.models) ? data.models : [];
+        // Only update models list (capability info); preserve user's selected model preference.
+        setAgents((current) => current.map((agent) => agent.id === agentId ? { ...agent, models } : agent));
+        // If the stored pref is no longer in the model list (stale from a previous config),
+        // clear it so the picker falls back to the agent's default / first model.
+        const storedPref = selectedAgentModels[agentId];
+        if (storedPref && models.length > 0 && !models.some((m: { modelId: string }) => m.modelId === storedPref)) {
+          setSelectedAgentModels((prev) => { const next = { ...prev }; delete next[agentId]; return next; });
+        }
+        // Only record the probe session if no session existed before (backend returns sessionId only when it linked it).
+        if (data.sessionId) {
+          currentAgentSessionsRef.current = { ...currentAgentSessionsRef.current, [agentId]: String(data.sessionId) };
+          setChatHistory((current) => current.map((chat) => chat.id === chatId
+            ? { ...chat, agentSessions: { ...(chat.agentSessions || {}), [agentId]: String(data.sessionId) } }
+            : chat));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to ensure agent models', err);
+    } finally {
+      setEnsuringAgentModels((prev) => ({ ...prev, [agentId]: false }));
+    }
+  }
+
+  function renderAgentModelSelect(agentId: string) {
+    const models = getAgentModels(agentId);
+    if (models.length === 0) return null;
+    const selectedModelId = getSelectedModelIdForAgent(agentId);
+    const selectedModel = models.find((model) => model.modelId === selectedModelId) || models[0];
+    const selectedModelLabel = selectedModel?.name || selectedModel?.modelId || '';
+    const isOpen = openModelMenuAgentId === agentId;
+    return (
+      <span
+        className="agentModelSelectWrap"
+        ref={(el) => { modelMenuRefs.current.set(agentId, el); }}
+      >
+        <button
+          type="button"
+          className={`agentModelSelect ${isOpen ? 'agentModelSelectOpen' : ''}`}
+          data-testid="agent-model-select"
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          aria-label={`Model for ${agentId}`}
+          title={`Model for @${agentId}`}
+          onClick={() => setOpenModelMenuAgentId(isOpen ? null : agentId)}
+        >
+          <span className="agentModelSelectLabel">{selectedModelLabel}</span>
+          <span className="agentModelSelectCaret" aria-hidden="true">▾</span>
+        </button>
+        {isOpen && (
+          <div className="agentModelDropdown" role="listbox" aria-label={`Model for ${agentId}`}>
+            {models.map((model) => {
+              const isSelected = model.modelId === selectedModelId;
+              return (
+                <button
+                  key={model.modelId}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={`agentModelOption ${isSelected ? 'agentModelOptionActive' : ''}`}
+                  title={model.description || model.modelId}
+                  onClick={() => {
+                    void setSelectedModelForAgent(agentId, model.modelId);
+                    setOpenModelMenuAgentId(null);
+                  }}
+                >
+                  <span className="agentModelOptionLabel">{model.name || model.modelId}</span>
+                  {isSelected ? <span className="agentModelOptionCheck">✓</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </span>
+    );
+  }
+
+  useEffect(() => {
+    if (!mounted || !currentChatId) return;
+    for (const agentId of composerTargetAgentIds) {
+      if (getAgentModels(agentId).length === 0 && !ensuringAgentModels[agentId]) {
+        void ensureAgentModels(agentId);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, currentChatId, composerTargetAgentIds.join('|'), agents]);
 
   const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
+
+  function persistRememberedChatAgents(next: Record<string, string>) {
+    setRememberedChatAgents(next);
+    try {
+      window.localStorage.setItem(STORAGE_REMEMBERED_CHAT_AGENTS, JSON.stringify(next));
+    } catch { /* ignore */ }
+  }
+
+  function rememberChatAgent(chatId: string, agentId: string) {
+    if (!chatId || !getExistingAgentId(agentId, agents)) return;
+    persistRememberedChatAgents({ ...rememberedChatAgents, [chatId]: agentId });
+  }
+
+  function clearRememberedChatAgent(chatId: string) {
+    if (!chatId || !rememberedChatAgents[chatId]) return;
+    const next = { ...rememberedChatAgents };
+    delete next[chatId];
+    persistRememberedChatAgents(next);
+  }
 
   function toggleMdDir(dirPath: string) {
     setMdExpandedDirs(prev => {
@@ -1239,7 +1496,7 @@ export default function Page() {
     }
     const lastAgent = [...chatMessages].reverse().find((m) => m.type === 'agent');
     if (!lastAgent) return null;
-    if ((lastAgent.content || '').trim().startsWith('⚠️')) return { label: 'Error', kind: 'error' };
+    if (getMessageCopyText(lastAgent).trim().startsWith('⚠️')) return { label: 'Error', kind: 'error' };
     return { label: 'Done', kind: 'done' };
   }, [currentChatId, messages, runVersion]);
 
@@ -1257,7 +1514,6 @@ export default function Page() {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (lightboxImage) { setLightboxImage(null); return; }
-      if (agentFilterOverflowOpen) { setAgentFilterOverflowOpen(false); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
       if (showAddAgent) { setShowAddAgent(false); return; }
       if (showAddRelayAgent) { setShowAddRelayAgent(false); return; }
@@ -1267,27 +1523,13 @@ export default function Page() {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [lightboxImage, agentFilterOverflowOpen, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
-
-  // Close agent filter overflow menu when clicking outside
-  useEffect(() => {
-    if (!agentFilterOverflowOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // Menu is portaled to body, so check both the trigger and the menu itself
-      if (!target.closest('.chatAgentFilterOverflow') && !target.closest('.chatAgentFilterOverflowMenu')) {
-        setAgentFilterOverflowOpen(false);
-      }
-    };
-    document.addEventListener('click', handleClick, true);
-    return () => document.removeEventListener('click', handleClick, true);
-  }, [agentFilterOverflowOpen]);
+  }, [lightboxImage, showAgentSettings, showAddAgent, showAddRelayAgent, showAddRemoteAgent, showSetupScript, shareDialog]);
 
   // Sidebar resize drag handler
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!sidebarDragRef.current) return;
-      const newWidth = Math.max(200, Math.min(600, e.clientX));
+      const newWidth = Math.max(260, Math.min(600, e.clientX));
       setSidebarWidth(newWidth);
     };
     const onMouseUp = () => {
@@ -1302,41 +1544,13 @@ export default function Page() {
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
   }, []);
 
-  // Dynamically compute how many agent filter tabs fit in the row
   useEffect(() => {
-    const row = filterRowRef.current;
-    if (!row || agents.length === 0) return;
-    const computeMax = () => {
-      const rowWidth = row.clientWidth;
-      const gap = 4;
-      const moreBtnWidth = 38; // "···" button
-      // Measure actual button widths from the DOM
-      const buttons = Array.from(row.querySelectorAll('.chatAgentFilterBtn:not(.chatAgentFilterMoreBtn)'));
-      const allBtn = buttons[0]; // "All" button is always first
-      const allBtnWidth = allBtn ? allBtn.getBoundingClientRect().width : 34;
-      const agentButtons = buttons.slice(1);
-      // If we have fewer buttons than agents (some are in overflow), estimate the rest
-      const agentWidths = agents.map((a, i) => {
-        if (i < agentButtons.length) return agentButtons[i].getBoundingClientRect().width;
-        return Math.ceil((a.name || a.id).length * 6.5) + 22;
-      });
-      let used = allBtnWidth + gap;
-      let fits = 0;
-      for (let i = 0; i < agentWidths.length; i++) {
-        const remaining = agents.length - i - 1;
-        const reserveMore = remaining > 0 ? moreBtnWidth + gap : 0;
-        if (used + agentWidths[i] + gap + reserveMore > rowWidth) break;
-        used += agentWidths[i] + gap;
-        fits++;
-      }
-      setMaxVisibleAgents(Math.max(1, fits));
-    };
-    // Run after a frame to ensure buttons are rendered with correct widths
-    const frameId = requestAnimationFrame(computeMax);
-    const observer = new ResizeObserver(computeMax);
-    observer.observe(row);
-    return () => { cancelAnimationFrame(frameId); observer.disconnect(); };
-  }, [agents]);
+    if (chatFilterAgents.length === 0) return; // agents not loaded yet — don't clobber saved filter
+    if (chatAgentFilter && !chatFilterAgents.some((agent) => agent.id === chatAgentFilter)) {
+      setChatAgentFilter(null);
+      try { window.localStorage.removeItem(STORAGE_AGENT_FILTER); } catch { /* ignore */ }
+    }
+  }, [chatAgentFilter, chatFilterAgents]);
 
   useEffect(() => {
     const activeRequestIds = new Set<string>();
@@ -1378,6 +1592,17 @@ export default function Page() {
       const savedFilter = window.localStorage.getItem(STORAGE_AGENT_FILTER);
       if (savedFilter) setChatAgentFilter(savedFilter);
     } catch { /* ignore */ }
+    try {
+      const savedRememberedAgents = window.localStorage.getItem(STORAGE_REMEMBERED_CHAT_AGENTS);
+      if (savedRememberedAgents) {
+        const parsed = JSON.parse(savedRememberedAgents) as Record<string, unknown>;
+        const next: Record<string, string> = {};
+        for (const [chatId, agentId] of Object.entries(parsed)) {
+          if (chatId && typeof agentId === 'string' && agentId) next[chatId] = agentId;
+        }
+        setRememberedChatAgents(next);
+      }
+    } catch { /* ignore */ }
 
     // Load chat history + last active chat from server (SQLite is source of truth)
     fetch('/api/chats').then(r => r.json()).then(data => {
@@ -1393,7 +1618,10 @@ export default function Page() {
           .then(chatData => {
             if (chatData.ok && chatData.chat) {
               const agentSessions = chatData.chat.agentSessions || {};
-              const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions);
+              const isReviewChat = typeof lastChatId === 'string' && lastChatId.startsWith('comment-review:');
+              const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions, {
+                inferLatestUserFailure: !isReviewChat,
+              });
               const msgs = migration.messages;
               currentAgentSessionsRef.current = agentSessions;
               setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
@@ -1415,7 +1643,11 @@ export default function Page() {
     } catch { /* ignore */ }
     try {
       const savedTheme = window.localStorage.getItem(STORAGE_THEME);
-      if (savedTheme && savedTheme in THEMES) setThemeId(savedTheme as ThemeId);
+      if (savedTheme) {
+        const nextThemeId = normalizeThemeId(savedTheme);
+        setThemeId(nextThemeId);
+        if (nextThemeId !== savedTheme) window.localStorage.setItem(STORAGE_THEME, nextThemeId);
+      }
     } catch { /* ignore */ }
     void loadAgents();
   }, []);
@@ -1432,21 +1664,31 @@ export default function Page() {
       filePath: mdSelectedFile,
       diffOnly: mdDiffOnly,
       editorMode: mdEditorMode,
+      scrollTop: commentSourceScrollTop,
     } satisfies FileWorkspaceState));
-  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, mounted]);
+  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, commentSourceScrollTop, mounted]);
 
   useEffect(() => {
     const el = chatContainerRef.current;
-    if (el && shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    if (el && shouldStickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      lastChatScrollTopRef.current = el.scrollTop;
+    }
   }, [messages]);
+
+  function updateChatStickiness(container: HTMLElement) {
+    const previousScrollTop = lastChatScrollTopRef.current;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldStickToBottomRef.current = container.scrollTop < previousScrollTop - 1 ? false : distanceFromBottom <= 4;
+    lastChatScrollTopRef.current = container.scrollTop;
+  }
 
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     const container = el;
     function handleScroll() {
-      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom < 80;
+      updateChatStickiness(container);
     }
     handleScroll();
     container.addEventListener('scroll', handleScroll, { passive: true });
@@ -1534,7 +1776,12 @@ export default function Page() {
 
   useEffect(() => {
     if (!mounted) return;
-    window.localStorage.setItem(STORAGE_THEME, themeId);
+    const nextThemeId = normalizeThemeId(themeId);
+    if (nextThemeId !== themeId) {
+      setThemeId(nextThemeId);
+      return;
+    }
+    window.localStorage.setItem(STORAGE_THEME, nextThemeId);
   }, [themeId, mounted]);
 
   useEffect(() => {
@@ -1549,10 +1796,40 @@ export default function Page() {
   }, [showThemeMenu]);
 
   useEffect(() => {
+    if (!showHeaderOverflow) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (!headerOverflowRef.current?.contains(event.target as Node)) {
+        setShowHeaderOverflow(false);
+      }
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [showHeaderOverflow]);
+
+  useEffect(() => {
+    if (!openModelMenuAgentId) return;
+    function handlePointerDown(event: MouseEvent) {
+      const wrap = modelMenuRefs.current.get(openModelMenuAgentId!);
+      if (wrap && !wrap.contains(event.target as Node)) {
+        setOpenModelMenuAgentId(null);
+      }
+    }
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpenModelMenuAgentId(null);
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [openModelMenuAgentId]);
+
+  useEffect(() => {
     if (!openChatMenuId) return;
     function handlePointerDown(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
-      if (!target?.closest('.chatActionsWrap')) {
+      if (!target?.closest('.chatActionsWrap') && !target?.closest('.chatActionsMenu')) {
         setOpenChatMenuId(null);
       }
     }
@@ -1622,7 +1899,9 @@ export default function Page() {
   function migrateFailedSendWarnings(
     chatMessages: ChatMessage[],
     agentSessions?: Record<string, string>,
+    options?: { inferLatestUserFailure?: boolean },
   ): { messages: ChatMessage[]; changed: boolean } {
+    const inferLatestUserFailure = options?.inferLatestUserFailure !== false;
     const migrated: ChatMessage[] = [];
     let changed = false;
     for (const message of chatMessages) {
@@ -1644,7 +1923,7 @@ export default function Page() {
       }
       migrated.push(message);
     }
-    if (!hasPersistedAgentSession(agentSessions)) {
+    if (inferLatestUserFailure && !hasPersistedAgentSession(agentSessions)) {
       const userIndex = getLatestUserWithoutSavedResponseIndex(migrated);
       const userMessage = userIndex >= 0 ? migrated[userIndex] : null;
       if (userMessage?.type === 'user' && userMessage.sendStatus !== 'failed') {
@@ -1692,7 +1971,13 @@ export default function Page() {
       const data = await res.json();
       if (data.ok && data.chat) {
         const agentSessions = data.chat.agentSessions || {};
-        const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+        // Comment-review chats dispatch the agent immediately after approval; the
+        // "no agent response yet" state is expected and should not be inferred
+        // as a send failure.
+        const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
+        const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions, {
+          inferLatestUserFailure: !isReviewChat,
+        });
         setMessagesForChat(chatId, migration.messages);
         if (migration.changed) {
           void persistLoadedChatMigration(chatId, data.chat.name || chatId, data.chat.ts || Date.now(), migration.messages, agentSessions);
@@ -1952,18 +2237,20 @@ export default function Page() {
     const error = message.sendError || 'Failed to send prompt to agent';
     return (
       <div className="userSendFailure">
-        <span className="userSendFailureStatus" title={error} aria-label={`Failed: ${error}`}>
-          Failed
+        <span className="userSendFailurePill">
+          <span className="userSendFailureStatus" title={error} aria-label={`Failed: ${error}`}>
+            Failed
+          </span>
+          <button
+            type="button"
+            className="userSendFailureButton"
+            disabled={resendDisabled}
+            title={waitingForAgents ? 'Waiting for agents to load' : 'Retry sending this message'}
+            onClick={() => void resendFailedUserMessage(message)}
+          >
+            Resend
+          </button>
         </span>
-        <button
-          type="button"
-          className="messageCopyButton userSendFailureButton"
-          disabled={resendDisabled}
-          title={waitingForAgents ? 'Waiting for agents to load' : undefined}
-          onClick={() => void resendFailedUserMessage(message)}
-        >
-          Resend
-        </button>
       </div>
     );
   }
@@ -1971,9 +2258,18 @@ export default function Page() {
   async function loadAgents() {
     setAgentsLoading(true);
     try {
-      const data = await acp({ action: 'list-agents' });
-      if (data.ok && Array.isArray(data.agents)) {
-        setAgents(data.agents);
+      const [agentsData, prefsData] = await Promise.all([
+        acp({ action: 'list-agents' }),
+        acp({ action: 'get-model-prefs' }).catch(() => null),
+      ]);
+      if (agentsData.ok && Array.isArray(agentsData.agents)) {
+        const loadedAgents = agentsData.agents as Agent[];
+        setAgents(loadedAgents);
+        warmLocalAgentsOnce(acp, loadedAgents);
+      }
+      if (prefsData?.ok && prefsData.prefs && typeof prefsData.prefs === 'object') {
+        const prefs = prefsData.prefs as Record<string, string>;
+        setSelectedAgentModels((prev) => ({ ...prev, ...prefs }));
       }
     } catch (err) {
       console.error('Failed to load agents', err);
@@ -2034,7 +2330,7 @@ export default function Page() {
     } catch { /* ignore */ }
   }
 
-  async function openMdFileForAgent(agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode }) {
+  async function openMdFileForAgent(agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number }) {
     if (!options?.skipDirtyConfirm && mdDirty) {
       if (!confirm('You have unsaved changes. Discard?')) return;
     }
@@ -2049,10 +2345,21 @@ export default function Page() {
         setMdDirty(false);
         setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
         setMdEditorMode(current => normalizeFileEditorMode(options?.editorMode ?? current, filePath));
-        setCommentSourceScrollTop(0);
+        const restoreScrollTop = options?.restoreScrollTop ?? 0;
+        setCommentSourceScrollTop(restoreScrollTop);
+        const applyScroll = () => {
+          mdLiveContainerRef.current?.scrollTo({ top: restoreScrollTop });
+          fileContentRef.current?.scrollTo({ top: restoreScrollTop });
+        };
+        // The rendered DOM grows over the next few frames as live HTML and
+        // images settle. Apply the saved scroll a few times so we land on the
+        // correct position even after late layout.
         window.requestAnimationFrame(() => {
-          mdLiveContainerRef.current?.scrollTo({ top: 0 });
-          fileContentRef.current?.scrollTo({ top: 0 });
+          applyScroll();
+          window.requestAnimationFrame(() => {
+            applyScroll();
+            window.setTimeout(applyScroll, 120);
+          });
         });
         setMdEditorOpen(true);
         setFileComments([]);
@@ -2099,6 +2406,7 @@ export default function Page() {
         await openMdFileForAgent(agentId, workspace.filePath, {
           skipDirtyConfirm: true,
           editorMode: workspace.editorMode,
+          restoreScrollTop: workspace.scrollTop,
         });
       }
     })();
@@ -2124,12 +2432,20 @@ export default function Page() {
       });
       const data = await res.json();
       if (data.ok) {
+        // Remember where the user just submitted from so the new comment card
+        // can land at the visible selection even if the marker text-matcher
+        // can't find the (possibly multi-line) selection in the rendered DOM.
+        const submitAnchorTop = liveSelectionDraftAnchor?.rects?.[0]?.top;
+        if (typeof data.id === 'string' && submitAnchorTop != null) {
+          recentLiveCommentAnchorsRef.current.set(data.id, submitAnchorTop);
+        }
         setCommentInput('');
         setShowCommentInput(false);
         setCommentAddRange(null);
         clearLiveSelectionDraft();
-        void loadFileComments(mdSelectedAgentId, mdSelectedFile);
+        await loadFileComments(mdSelectedAgentId, mdSelectedFile);
         if (!commentSidebarOpen) setCommentSidebarOpen(true);
+        if (typeof data.id === 'string') setSelectedCommentId(data.id);
       }
     } catch { /* ignore */ }
   }
@@ -2346,6 +2662,11 @@ export default function Page() {
 
   function getCommentDisplayTop(comment: FileComment): number {
     if (mdEditorMode === 'live' && mdSelectedFile && isMarkdownFile(mdSelectedFile)) {
+      // A recent submit anchor is the exact y of the user's actual selection;
+      // prefer it over the computed live marker, which goes through a text
+      // matcher that can land on the wrong occurrence of the same phrase.
+      const recent = recentLiveCommentAnchorsRef.current.get(comment.id);
+      if (recent != null) return recent;
       const marker = liveCommentMarkers.find(m => m.commentIds.includes(comment.id));
       if (marker) return marker.top;
     }
@@ -2543,6 +2864,67 @@ export default function Page() {
     handleCommentSourceScroll(mdLiveContainerRef.current);
   }
 
+  function getTextOffsetInRoot(root: Node, container: Node, offset: number): number | null {
+    try {
+      const range = document.createRange();
+      range.setStart(root, 0);
+      range.setEnd(container, offset);
+      return range.toString().length;
+    } catch {
+      return null;
+    }
+  }
+
+  function captureLiveEditorSelection(): LiveEditorSelectionSnapshot | null {
+    const root = mdLiveRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0) return null;
+
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+
+    const start = getTextOffsetInRoot(root, range.startContainer, range.startOffset);
+    const end = getTextOffsetInRoot(root, range.endContainer, range.endOffset);
+    return start == null || end == null ? null : { start, end };
+  }
+
+  function getTextPositionInRoot(root: Node, textOffset: number): { node: Node; offset: number } {
+    const target = Math.max(0, textOffset);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let remaining = target;
+    let node: Node | null;
+    let lastTextNode: Text | null = null;
+
+    while ((node = walker.nextNode())) {
+      const textNode = node as Text;
+      const length = textNode.textContent?.length ?? 0;
+      lastTextNode = textNode;
+      if (remaining <= length) return { node: textNode, offset: remaining };
+      remaining -= length;
+    }
+
+    if (lastTextNode) {
+      return { node: lastTextNode, offset: lastTextNode.textContent?.length ?? 0 };
+    }
+    return { node: root, offset: 0 };
+  }
+
+  function restoreLiveEditorSelection(snapshot: LiveEditorSelectionSnapshot) {
+    const root = mdLiveRef.current;
+    if (!root) return;
+
+    const start = getTextPositionInRoot(root, snapshot.start);
+    const end = getTextPositionInRoot(root, snapshot.end);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
   function handleTextSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !fileContentRef.current) return;
@@ -2569,6 +2951,7 @@ export default function Page() {
   }
 
   function hideLiveEditCommentButton() {
+    preserveLiveEditCommentButtonOnCollapseRef.current = false;
     pendingLiveEditCommentRangeRef.current = null;
     pendingLiveEditCommentAnchorRef.current = null;
     pendingLiveEditDomRangeRef.current = null;
@@ -2578,24 +2961,144 @@ export default function Page() {
     button.style.display = 'none';
   }
 
-  function findLiveEditTextRange(selectedText: string): Range | null {
+  function findLiveEditTextRange(selectedText: string, occurrenceIndex = 0): Range | null {
     if (!mdLiveRef.current) return null;
     const searchText = selectedText.trim();
     if (!searchText) return null;
+    const skip = Math.max(0, occurrenceIndex);
 
+    // First pass: try to find the text inside a single text node (fast path).
     const walker = document.createTreeWalker(mdLiveRef.current, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
     let node: Node | null;
+    let singleNodeRemaining = skip;
     while ((node = walker.nextNode())) {
       const text = node.textContent || '';
-      const index = text.indexOf(searchText);
-      if (index >= 0) {
-        const range = document.createRange();
-        range.setStart(node, index);
-        range.setEnd(node, index + searchText.length);
-        return range;
+      let from = 0;
+      while (from <= text.length) {
+        const index = text.indexOf(searchText, from);
+        if (index < 0) break;
+        if (singleNodeRemaining === 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + searchText.length);
+          return range;
+        }
+        singleNodeRemaining--;
+        from = index + searchText.length;
+      }
+      nodes.push(node as Text);
+    }
+
+    // Second pass: search across consecutive text nodes. Build a concatenated
+    // string with an offset map so we can recover the start/end text nodes
+    // and intra-node offsets for any match.
+    if (nodes.length === 0) return null;
+    let joined = '';
+    const offsets: number[] = []; // joined-string offset where each node begins
+    for (const n of nodes) {
+      offsets.push(joined.length);
+      joined += n.textContent || '';
+    }
+    const findOffsetNode = (offset: number): { node: Text; localOffset: number } | null => {
+      let lo = 0;
+      let hi = nodes.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (offsets[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      const n = nodes[lo];
+      const localOffset = offset - offsets[lo];
+      const len = (n.textContent || '').length;
+      if (localOffset < 0 || localOffset > len) return null;
+      return { node: n, localOffset };
+    };
+
+    const buildRangeAt = (rawStart: number, rawEnd: number): Range | null => {
+      const start = findOffsetNode(rawStart);
+      const end = findOffsetNode(rawEnd);
+      if (!start || !end) return null;
+      const range = document.createRange();
+      range.setStart(start.node, start.localOffset);
+      range.setEnd(end.node, end.localOffset);
+      return range;
+    };
+
+    const candidates = [searchText, searchText.replace(/\s+/g, ' ')];
+    const normalizedJoined = joined.replace(/\s+/g, ' ');
+    for (const candidate of candidates) {
+      // Direct match in the literal joined text — skip earlier occurrences.
+      let remaining = skip;
+      let from = 0;
+      while (from <= joined.length) {
+        const direct = joined.indexOf(candidate, from);
+        if (direct < 0) break;
+        if (remaining === 0) {
+          const range = buildRangeAt(direct, direct + candidate.length);
+          if (range) return range;
+        }
+        remaining--;
+        from = direct + candidate.length;
+      }
+      // Whitespace-normalized fallback for selections whose whitespace differs.
+      const normIdx = normalizedJoined.indexOf(candidate);
+      if (normIdx >= 0) {
+        // Map normalized index back to a raw index by walking joined and
+        // counting collapsed whitespace.
+        let rawStart = -1;
+        let rawEnd = -1;
+        let raw = 0;
+        let norm = 0;
+        let prevWasSpace = false;
+        while (raw < joined.length) {
+          if (rawStart < 0 && norm === normIdx) rawStart = raw;
+          if (norm === normIdx + candidate.length) { rawEnd = raw; break; }
+          const ch = joined[raw];
+          if (/\s/.test(ch)) {
+            if (!prevWasSpace) norm++;
+            prevWasSpace = true;
+          } else {
+            norm++;
+            prevWasSpace = false;
+          }
+          raw++;
+        }
+        if (rawStart < 0 && norm >= normIdx) rawStart = raw;
+        if (rawEnd < 0) rawEnd = joined.length;
+        const range = buildRangeAt(rawStart, rawEnd);
+        if (range) return range;
       }
     }
     return null;
+  }
+
+  // Count how many times `searchText` appears in `mdEditContent` strictly
+  // before the given source position (line is 1-based; char is the start char
+  // within that line). Used to find the matching occurrence in the rendered
+  // DOM so we don't always land on the first match in the document.
+  function countSourceOccurrencesBefore(searchText: string, line: number | null | undefined, char: number | null | undefined): number {
+    if (!searchText) return 0;
+    const trimmed = searchText.trim();
+    if (!trimmed) return 0;
+    const lines = mdEditContent.split('\n');
+    const targetLine = Math.max(1, line ?? 1) - 1;
+    const targetChar = Math.max(0, char ?? 0);
+    let absolute = 0;
+    for (let i = 0; i < targetLine && i < lines.length; i++) {
+      absolute += lines[i].length + 1; // +1 for newline
+    }
+    if (targetLine < lines.length) absolute += Math.min(targetChar, lines[targetLine].length);
+
+    let count = 0;
+    let from = 0;
+    while (from < absolute) {
+      const idx = mdEditContent.indexOf(trimmed, from);
+      if (idx < 0 || idx >= absolute) break;
+      count++;
+      from = idx + trimmed.length;
+    }
+    return count;
   }
 
   function getCommentSourceText(comment: FileComment): string | null {
@@ -2624,20 +3127,18 @@ export default function Page() {
   function getLiveEditRangeForComment(comment: FileComment): Range | null {
     const selectedText = getCommentSourceText(comment);
     if (!selectedText) return null;
-    const renderedText = selectedText
-      .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-      .replace(/^\s{0,3}>\s?/gm, '')
-      .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/__([^_]+)__/g, '$1')
-      .replace(/_([^_]+)_/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .trim();
+    const renderedText = stripMarkdownSyntaxForSearch(selectedText).trim();
     const candidates = Array.from(new Set([selectedText.trim(), renderedText].filter(Boolean)));
     for (const candidate of candidates) {
-      const range = findLiveEditTextRange(candidate);
+      const occurrenceIndex = countSourceOccurrencesBefore(
+        candidate,
+        comment.rangeStartLine,
+        comment.rangeStartChar,
+      );
+      const range = findLiveEditTextRange(candidate, occurrenceIndex)
+        // Fallback to first match if the indexed lookup misses (e.g. rendered
+        // DOM normalizes whitespace and the count is off by one).
+        || findLiveEditTextRange(candidate, 0);
       if (range) return range;
     }
     return null;
@@ -2674,7 +3175,13 @@ export default function Page() {
 
       const range = getLiveEditRangeForComment(markerComment);
       let top = getCommentLineTop(markerComment) + 1;
-      if (range) {
+      const recentAnchor = recentLiveCommentAnchorsRef.current.get(markerComment.id);
+      if (recentAnchor != null) {
+        // Prefer the exact submit-time y for freshly created comments — the
+        // text matcher used below can land on the wrong occurrence of the
+        // same phrase in large files.
+        top = Math.max(8, recentAnchor);
+      } else if (range) {
         const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
         const rect = rects[0] || range.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
@@ -2723,7 +3230,22 @@ export default function Page() {
 
   function handleLiveEditSelection() {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !mdLiveRef.current) {
+    if (!mdLiveRef.current) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    if (!sel || sel.isCollapsed) {
+      const button = liveEditCommentBtnRef.current;
+      if (
+        preserveLiveEditCommentButtonOnCollapseRef.current &&
+        pendingLiveEditCommentRangeRef.current &&
+        button &&
+        button.style.display !== 'none'
+      ) {
+        preserveLiveEditCommentButtonOnCollapseRef.current = false;
+        return;
+      }
       hideLiveEditCommentButton();
       return;
     }
@@ -2740,32 +3262,84 @@ export default function Page() {
       return;
     }
 
-    // Find the selected text in source markdown to determine line range
+    // Find the selected text in source markdown to determine line range.
+    // Use a single linear scan: normalize each line once, build a joined
+    // document, indexOf the search, then map character offsets back to line
+    // numbers. This avoids the previous O(N²·L) sliding-window approach
+    // that froze the UI on large markdown files.
     const lines = mdEditContent.split('\n');
-    const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').toLowerCase();
+    const normalizeSelectionText = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
     const searchNorm = normalizeSelectionText(selectedText);
+    if (!searchNorm) {
+      hideLiveEditCommentButton();
+      return;
+    }
+
+    // lineEnd[i] = exclusive end offset (in the joined string) of line i.
+    // Empty Markdown separator lines should not create extra spaces because
+    // rendered browser selection text collapses them to a single boundary.
+    const buildSearchIndex = (lineTexts: string[]) => {
+      const lineEnd = new Int32Array(lines.length);
+      let cursor = 0;
+      let joined = '';
+      let hasContent = false;
+
+      for (let i = 0; i < lines.length; i++) {
+        const n = lineTexts[i];
+        if (n) {
+          if (hasContent) {
+            joined += ' ';
+            cursor += 1;
+          }
+          joined += n;
+          cursor += n.length;
+          hasContent = true;
+        }
+        lineEnd[i] = cursor;
+      }
+
+      return { joined, lineEnd };
+    };
+
     let startLine = -1;
     let endLine = -1;
     let startChar: number | undefined;
     let endChar: number | undefined;
-    let bestSpan = Number.POSITIVE_INFINITY;
 
-    for (let i = 0; i < lines.length; i++) {
-      for (let j = i; j < lines.length; j++) {
-        const chunk = normalizeSelectionText(lines.slice(i, j + 1).join(' '));
-        if (chunk.includes(searchNorm)) {
-          const span = j - i;
-          const rawIndex = i === j ? lines[i].toLowerCase().indexOf(selectedText.toLowerCase()) : -1;
-          if (span < bestSpan) {
-            startLine = i + 1;
-            endLine = j + 1;
-            startChar = rawIndex >= 0 ? rawIndex : undefined;
-            endChar = rawIndex >= 0 ? rawIndex + selectedText.length : undefined;
-            bestSpan = span;
-          }
-          break;
+    const searchIndexes = [
+      buildSearchIndex(lines.map(normalizeSelectionText)),
+      buildSearchIndex(lines.map(line => normalizeSelectionText(stripMarkdownSyntaxForSearch(line)))),
+    ];
+
+    for (const { joined, lineEnd } of searchIndexes) {
+      const matchStart = joined.indexOf(searchNorm);
+      if (matchStart < 0) continue;
+
+      const matchEnd = matchStart + searchNorm.length - 1;
+      // Binary search for the line containing matchStart / matchEnd.
+      const findLine = (offset: number): number => {
+        let lo = 0;
+        let hi = lineEnd.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (lineEnd[mid] <= offset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      const si = findLine(matchStart);
+      const ei = findLine(matchEnd);
+      startLine = si + 1;
+      endLine = ei + 1;
+
+      if (si === ei) {
+        const rawIndex = lines[si].toLowerCase().indexOf(selectedText.toLowerCase());
+        if (rawIndex >= 0) {
+          startChar = rawIndex;
+          endChar = rawIndex + selectedText.length;
         }
       }
+      break;
     }
 
     if (startLine > 0 && endLine > 0) {
@@ -2773,6 +3347,7 @@ export default function Page() {
       pendingLiveEditCommentAnchorRef.current = getLiveSelectionDraftAnchor(range);
       pendingLiveEditDomRangeRef.current = range.cloneRange();
       pendingLiveEditSelectedTextRef.current = selectedText;
+      preserveLiveEditCommentButtonOnCollapseRef.current = true;
       positionLiveEditCommentButton(range);
     } else {
       hideLiveEditCommentButton();
@@ -2803,11 +3378,30 @@ export default function Page() {
     }
 
     let frameId = 0;
+    let trailingFrameId = 0;
+    let trailingTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const computeMarkers = () => {
+      const markers = getLiveCommentMarkersForEditor();
+      setLiveCommentMarkers(markers);
+    };
     frameId = window.requestAnimationFrame(() => {
-      setLiveCommentMarkers(getLiveCommentMarkersForEditor());
+      computeMarkers();
+      // Layout can shift after this frame when the comments sidebar is in the
+      // middle of opening (clientWidth narrows, the right-edge marker would
+      // otherwise be left under the new sidebar). Recompute once more after
+      // the next frame plus a short timeout so markers land on the final
+      // right edge.
+      trailingFrameId = window.requestAnimationFrame(() => {
+        computeMarkers();
+        trailingTimeoutId = setTimeout(computeMarkers, 120);
+      });
     });
 
-    return () => window.cancelAnimationFrame(frameId);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(trailingFrameId);
+      if (trailingTimeoutId != null) clearTimeout(trailingTimeoutId);
+    };
   }, [fileComments, mdEditorMode, mdSelectedFile, mdEditContent, mdLiveHtml, selectedCommentId, commentSidebarOpen]);
 
   useEffect(() => {
@@ -2818,9 +3412,26 @@ export default function Page() {
     outerFrameId = window.requestAnimationFrame(() => {
       innerFrameId = window.requestAnimationFrame(() => {
         const range = liveSelectionDraftRangeRef.current;
-        const rebuiltRange = liveSelectionDraftTextRef.current ? findLiveEditTextRange(liveSelectionDraftTextRef.current) : null;
-        const activeRange = rebuiltRange || range;
-        if (!activeRange || !mdLiveRef.current) return;
+        if (!mdLiveRef.current) return;
+
+        // Recompute from text first so the draft anchor follows layout changes
+        // after the comment sidebar opens. Use the source range to avoid
+        // landing on an earlier duplicate when the selected text repeats.
+        const originalAttached = range
+          && mdLiveRef.current.contains(range.startContainer)
+          && mdLiveRef.current.contains(range.endContainer);
+        const textRange = liveSelectionDraftTextRef.current && commentAddRange
+          ? findLiveEditTextRange(
+            liveSelectionDraftTextRef.current,
+            countSourceOccurrencesBefore(
+              liveSelectionDraftTextRef.current,
+              commentAddRange.startLine,
+              commentAddRange.startChar,
+            ),
+          )
+          : null;
+        const activeRange = textRange || (originalAttached ? range : null);
+        if (!activeRange) return;
         if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
 
         liveSelectionDraftRangeRef.current = activeRange.cloneRange();
@@ -2833,7 +3444,21 @@ export default function Page() {
       window.cancelAnimationFrame(outerFrameId);
       window.cancelAnimationFrame(innerFrameId);
     };
-  }, [showCommentInput, commentSidebarOpen]);
+  }, [showCommentInput, commentSidebarOpen, commentAddRange]);
+
+  useLayoutEffect(() => {
+    if (mdEditorMode !== 'live' || !mdLiveRef.current) return;
+    if (mdLiveRef.current.innerHTML !== mdLiveHtml) {
+      mdLiveRef.current.innerHTML = mdLiveHtml;
+    }
+  }, [mdLiveHtml, mdEditorMode, mdSelectedFile, mdLiveElementVersion]);
+
+  useLayoutEffect(() => {
+    const snapshot = pendingLiveEditorSelectionRef.current;
+    if (!snapshot || mdEditorMode !== 'live') return;
+    pendingLiveEditorSelectionRef.current = null;
+    restoreLiveEditorSelection(snapshot);
+  }, [mdLiveHtml, mdEditorMode]);
 
   useEffect(() => {
     if (showCommentInput) return;
@@ -3152,6 +3777,7 @@ export default function Page() {
     // using this chat even if the user switches chats while the turn is active.
     const sendChatId = run.chatId;
     const sendBody: Record<string, unknown> = { action: 'send', agentId, text: content, chatId: sendChatId, messageId: pendingId };
+    sendBody.modelId = getSelectedModelIdForAgent(agentId);
     if (promptAttachments.length > 0) sendBody.attachments = promptAttachments;
     if (needsContextRestoreRef.current) {
       const historyMessages = chatMessagesRef.current[sendChatId] || (sendChatId === currentChatIdRef.current ? messagesRef.current : []);
@@ -3781,7 +4407,7 @@ export default function Page() {
     const seen = new Set<string>();
     const addFile = (file: File | null) => {
       if (!file) return;
-      const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+      const key = `${file.name.trim().toLowerCase()}:${file.size}:${file.type.trim().toLowerCase()}`;
       if (seen.has(key)) return;
       seen.add(key);
       files.push(file);
@@ -3925,8 +4551,15 @@ export default function Page() {
       await createNewChat();
     }
 
-    const currentChatAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId;
-    const { agentIds, message } = parseAgents(textForAgent, agents, currentChatAgentId);
+    const sendChatPrimaryAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId || null;
+    const sendFallbackAgentId = getExistingAgentId(rememberedChatAgents[currentChatIdRef.current], agents)
+      || getExistingAgentId(sendChatPrimaryAgentId, agents)
+      || getDefaultAgentId(agents);
+    const { agentIds, message } = parseAgents(textForAgent, agents, sendFallbackAgentId);
+    const explicitlyMentionedAgentIds = getMentionedAgentIds(textForAgent, agents);
+    if (explicitlyMentionedAgentIds.length > 0) {
+      rememberChatAgent(currentChatIdRef.current, explicitlyMentionedAgentIds[0]);
+    }
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
 
@@ -4295,7 +4928,10 @@ export default function Page() {
         if (cachedMessages) {
           targetMessages = cachedMessages;
         } else {
-          const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions);
+          const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
+          const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions, {
+            inferLatestUserFailure: !isReviewChat,
+          });
           targetMessages = migration.messages;
           migratedFailedSendState = migration.changed;
         }
@@ -4507,50 +5143,112 @@ export default function Page() {
   /* ────────── Render ────────── */
 
   return (
-    <main className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
+    <main className="page" style={themeStyle} data-theme={normalizedThemeId} suppressHydrationWarning>
       <header className="header">
         <div className="headerLeft">
           <h1>🤖 Agents Chat</h1>
         </div>
         <div className="headerRight">
-          <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
-          <div className="themeMenuWrap" ref={themeMenuRef}>
+          <div className="headerInlineActions">
+            <button className={`ghostButton mobileOnlyButton ${showChatsPanel ? 'activeGhost' : ''}`} onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); }} title="Chats">💬</button>
+            <div className="themeMenuWrap" ref={themeMenuRef}>
+              <button
+                type="button"
+                className={`ghostButton themeMenuButton ${showThemeMenu ? 'activeGhost' : ''}`}
+                onClick={() => setShowThemeMenu((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={showThemeMenu}
+                title={`Theme: ${activeTheme.label}`}
+              >
+                <span>{activeTheme.emoji}</span>
+              </button>
+              {showThemeMenu && (
+                <div className="themeDropdown" role="menu" aria-label="Theme list">
+                  {Object.entries(THEMES).map(([id, theme]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={normalizedThemeId === id}
+                      className={`themeOption ${normalizedThemeId === id ? 'activeThemeOption' : ''}`}
+                      onClick={() => {
+                        setThemeId(id as ThemeId);
+                        setShowThemeMenu(false);
+                      }}
+                    >
+                      <span className="themeOptionMain">
+                        <span className="themeChipEmoji">{theme.emoji}</span>
+                        <span>{theme.label}</span>
+                      </span>
+                      {normalizedThemeId === id ? <span className="themeCheck">✓</span> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); }} title="Agents">🤖</button>
+            <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); }} title="Nodes">🖥️</button>
+          </div>
+          <div className="headerOverflowWrap" ref={headerOverflowRef}>
             <button
               type="button"
-              className={`ghostButton themeMenuButton ${showThemeMenu ? 'activeGhost' : ''}`}
-              onClick={() => setShowThemeMenu((v) => !v)}
+              className={`ghostButton headerOverflowBtn ${showHeaderOverflow ? 'activeGhost' : ''}`}
+              onClick={() => setShowHeaderOverflow((v) => !v)}
               aria-haspopup="menu"
-              aria-expanded={showThemeMenu}
-              title={`Theme: ${activeTheme.label}`}
+              aria-expanded={showHeaderOverflow}
+              aria-label="More actions"
+              title="More"
             >
-              <span>{activeTheme.emoji}</span>
+              <span aria-hidden="true">⋯</span>
             </button>
-            {showThemeMenu && (
-              <div className="themeDropdown" role="menu" aria-label="Theme list">
+            {showHeaderOverflow && (
+              <div className="headerOverflowMenu" role="menu" aria-label="Header actions">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showChatsPanel ? 'active' : ''}`}
+                  onClick={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">💬</span>
+                  <span>Chats</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showAgentsPanel ? 'active' : ''}`}
+                  onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">🤖</span>
+                  <span>Agents</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${showNodesPanel ? 'active' : ''}`}
+                  onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">🖥️</span>
+                  <span>Nodes</span>
+                </button>
+                <div className="headerOverflowSeparator" />
+                <div className="headerOverflowSectionLabel">Theme</div>
                 {Object.entries(THEMES).map(([id, theme]) => (
                   <button
                     key={id}
                     type="button"
                     role="menuitemradio"
-                    aria-checked={themeId === id}
-                    className={`themeOption ${themeId === id ? 'activeThemeOption' : ''}`}
-                    onClick={() => {
-                      setThemeId(id as ThemeId);
-                      setShowThemeMenu(false);
-                    }}
+                    aria-checked={normalizedThemeId === id}
+                    className={`headerOverflowItem ${normalizedThemeId === id ? 'active' : ''}`}
+                    onClick={() => { setThemeId(id as ThemeId); setShowHeaderOverflow(false); }}
                   >
-                    <span className="themeOptionMain">
-                      <span className="themeChipEmoji">{theme.emoji}</span>
-                      <span>{theme.label}</span>
-                    </span>
-                    {themeId === id ? <span className="themeCheck">✓</span> : null}
+                    <span className="headerOverflowEmoji">{theme.emoji}</span>
+                    <span>{theme.label}</span>
+                    {normalizedThemeId === id ? <span className="headerOverflowCheck">✓</span> : null}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); }} title="Agents">🤖</button>
-          <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={() => { setShowNodesPanel((p) => { if (!p) loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); }} title="Nodes">🖥️</button>
           {session?.user && (
             <div className="userChip">
               <span className="userAvatar">{(session.user.name || '?')[0].toUpperCase()}</span>
@@ -4589,46 +5287,21 @@ export default function Page() {
           </div>
           {!sidebarCollapsed && leftSidebarTab === 'chats' && (
             <div className="participantsList">
-              {(() => {
-                const visibleAgents = agents.slice(0, maxVisibleAgents);
-                const overflowAgents = agents.slice(maxVisibleAgents);
-                // If the active filter is in overflow, swap it into visible
-                const activeInOverflow = chatAgentFilter && overflowAgents.some(a => a.id === chatAgentFilter);
-                const displayVisible = activeInOverflow
-                  ? [...visibleAgents.slice(0, maxVisibleAgents - 1), agents.find(a => a.id === chatAgentFilter)!]
-                  : visibleAgents;
-                const displayOverflow = activeInOverflow
-                  ? [visibleAgents[maxVisibleAgents - 1], ...overflowAgents.filter(a => a.id !== chatAgentFilter)]
-                  : overflowAgents;
-
-                return (
-                  <div className="chatAgentFilterRow" ref={filterRowRef}>
-                    <button className={`chatAgentFilterBtn ${chatAgentFilter === null ? 'active' : ''}`} onClick={() => { switchAgentFilter(null); setAgentFilterOverflowOpen(false); }}>All</button>
-                    {displayVisible.map(a => (
-                      <button key={a.id} className={`chatAgentFilterBtn ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
-                    ))}
-                    {displayOverflow.length > 0 && (
-                      <div className="chatAgentFilterOverflow">
-                        <button ref={overflowBtnRef} className={`chatAgentFilterBtn chatAgentFilterMoreBtn ${agentFilterOverflowOpen ? 'active' : ''}`} onClick={() => setAgentFilterOverflowOpen(v => !v)}>···</button>
-                        {agentFilterOverflowOpen && (() => {
-                          const rect = overflowBtnRef.current?.getBoundingClientRect();
-                          if (!rect) return null;
-                          return createPortal(
-                            <div className="chatAgentFilterOverflowMenu" style={{ position: 'fixed', top: rect.bottom + 4, left: rect.left, zIndex: 9999 }}>
-                              {displayOverflow.map(a => (
-                                <button key={a.id} className={`chatAgentFilterOverflowItem ${chatAgentFilter === a.id ? 'active' : ''}`} onClick={() => { switchAgentFilter(a.id); setAgentFilterOverflowOpen(false); }}>{a.name || a.id}</button>
-                              ))}
-                            </div>,
-                            document.body
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              <div className="chatAgentFilterRow" aria-label="Filter chats by primary agent">
+                <select
+                  className="chatAgentFilterSelect"
+                  value={chatAgentFilter ?? ''}
+                  onChange={(e) => switchAgentFilter(e.target.value ? e.target.value : null)}
+                  aria-label="Filter chats by primary agent"
+                >
+                  <option value="">All agents</option>
+                  {chatFilterAgents.map(a => (
+                    <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                  ))}
+                </select>
+              </div>
               <div className="newChatRow">
-                <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
+                <button className="newChatButton" onClick={() => void createNewChat()}>+ New Chat{chatAgentFilter ? ` (${chatFilterAgents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter})` : ''}</button>
               </div>
               {(() => {
                 const allChats = (currentChatId && !chatHistory.some(c => c.id === currentChatId))
@@ -4676,6 +5349,10 @@ export default function Page() {
                       <div className="chatActionsWrap">
                         <button
                           type="button"
+                          ref={(node) => {
+                            if (node) chatMenuButtonRefs.current.set(chat.id, node);
+                            else chatMenuButtonRefs.current.delete(chat.id);
+                          }}
                           className={`chatMoreBtn ${openChatMenuId === chat.id ? 'active' : ''}`}
                           title="Chat actions"
                           aria-haspopup="menu"
@@ -4687,8 +5364,13 @@ export default function Page() {
                         >
                           ...
                         </button>
-                        {openChatMenuId === chat.id ? (
-                          <div className="chatActionsMenu" role="menu">
+                        {openChatMenuId === chat.id ? (() => {
+                          const rect = chatMenuButtonRefs.current.get(chat.id)?.getBoundingClientRect();
+                          if (!rect) return null;
+                          const left = Math.max(8, Math.min(rect.right - CHAT_ACTION_MENU_WIDTH, window.innerWidth - CHAT_ACTION_MENU_WIDTH - 8));
+                          const top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - CHAT_ACTION_MENU_HEIGHT - 8));
+                          return createPortal(
+                            <div className="chatActionsMenu" role="menu" style={{ ...themeStyle, position: 'fixed', top, left, right: 'auto', width: CHAT_ACTION_MENU_WIDTH, zIndex: 9999 }}>
                             <button
                               type="button"
                               className="chatActionItem"
@@ -4725,8 +5407,10 @@ export default function Page() {
                               >
                                 Delete
                               </button>
-                          </div>
-                        ) : null}
+                              </div>,
+                              document.body
+                            );
+                          })() : null}
                       </div>
                     </div>
                   );
@@ -4824,6 +5508,7 @@ export default function Page() {
             className="sidebarResizeHandle"
             onMouseDown={(e) => {
               e.preventDefault();
+              setOpenChatMenuId(null);
               sidebarDragRef.current = true;
               document.body.style.cursor = 'col-resize';
               document.body.style.userSelect = 'none';
@@ -4989,22 +5674,50 @@ export default function Page() {
                 ) : (
                   <div className="mdEditorLive" ref={mdLiveContainerRef} onScroll={handleLiveEditorScroll}>
                     <div
-                      ref={mdLiveRef}
+                      ref={setMdLiveElementRef}
                       className="mdLiveEditable markdownBody"
                       contentEditable
                       suppressContentEditableWarning
-                      dangerouslySetInnerHTML={{ __html: mdLiveHtml }}
                       onMouseDown={() => {
                         hideLiveEditCommentButton();
                         clearLiveSelectionDraft();
                       }}
+                      onMouseUp={(e) => {
+                        if (e.detail >= 2) {
+                          liveEditSelectionRef.current();
+                        }
+                      }}
+                      onBeforeInput={(e) => {
+                        const snapshot = captureLiveEditorSelection();
+                        if (!snapshot) return;
+
+                        const inputEvent = e.nativeEvent as InputEvent;
+                        if (inputEvent.inputType === 'deleteContentBackward' && snapshot.start === snapshot.end) {
+                          const nextOffset = Math.max(0, snapshot.start - 1);
+                          pendingLiveEditorSelectionRef.current = { start: nextOffset, end: nextOffset };
+                          return;
+                        }
+
+                        if (inputEvent.inputType === 'insertText' && typeof inputEvent.data === 'string') {
+                          const nextOffset = snapshot.start + inputEvent.data.length;
+                          pendingLiveEditorSelectionRef.current = { start: nextOffset, end: nextOffset };
+                          return;
+                        }
+
+                        pendingLiveEditorSelectionRef.current = { start: snapshot.start, end: snapshot.start };
+                      }}
                       onInput={() => {
                         if (mdLiveRef.current) {
+                          const selectionSnapshot = pendingLiveEditorSelectionRef.current || captureLiveEditorSelection();
+                          pendingLiveEditorSelectionRef.current = selectionSnapshot;
                           const html = mdLiveRef.current.innerHTML;
                           const md = turndownRef.current!.turndown(html);
                           setMdLiveHtml(html);
                           setMdEditContent(md);
                           setMdDirty(md !== mdFileContent);
+                          if (selectionSnapshot) {
+                            window.requestAnimationFrame(() => restoreLiveEditorSelection(selectionSnapshot));
+                          }
                         }
                       }}
                     />
@@ -5058,13 +5771,44 @@ export default function Page() {
                         const domRange = pendingLiveEditDomRangeRef.current;
                         const selectedText = pendingLiveEditSelectedTextRef.current;
                         if (!range) return;
+                        const willOpenSidebar = !commentSidebarOpen;
                         setCommentAddRange(range);
                         liveSelectionDraftRangeRef.current = domRange ? domRange.cloneRange() : null;
                         liveSelectionDraftTextRef.current = selectedText;
                         setLiveSelectionDraftAnchor(anchor);
                         setShowCommentInput(true);
-                        if (!commentSidebarOpen) setCommentSidebarOpen(true);
+                        if (willOpenSidebar) setCommentSidebarOpen(true);
                         hideLiveEditCommentButton();
+                        // Opening the sidebar narrows the editor and reflows the
+                        // rendered markdown, so the anchor captured before the
+                        // click is in stale layout coordinates. Recompute after
+                        // layout settles so the new comment form lands at the
+                        // visible selection.
+                        if (willOpenSidebar) {
+                          const refreshAnchor = () => {
+                            const liveRange = liveSelectionDraftRangeRef.current;
+                            const selectedText = liveSelectionDraftTextRef.current;
+                            if (!mdLiveRef.current) return;
+                            const textRange = selectedText
+                              ? findLiveEditTextRange(
+                                selectedText,
+                                countSourceOccurrencesBefore(selectedText, range.startLine, range.startChar),
+                              )
+                              : null;
+                            const activeRange = textRange || liveRange;
+                            if (!activeRange) return;
+                            if (!mdLiveRef.current.contains(activeRange.startContainer) || !mdLiveRef.current.contains(activeRange.endContainer)) return;
+                            liveSelectionDraftRangeRef.current = activeRange.cloneRange();
+                            const next = getLiveSelectionDraftAnchor(activeRange);
+                            if (next) setLiveSelectionDraftAnchor(next);
+                          };
+                          window.requestAnimationFrame(() => {
+                            window.requestAnimationFrame(() => {
+                              refreshAnchor();
+                              window.setTimeout(refreshAnchor, 80);
+                            });
+                          });
+                        }
                       }}
                     >
                       💬 Add Comment
@@ -5237,11 +5981,21 @@ export default function Page() {
                                 </div>
                               );
                             })}
-                            {showCommentInput && commentAddRange && (
+                            {showCommentInput && commentAddRange && (() => {
+                              // In live-edit mode, source lines map to variable-height
+                              // rendered blocks, so the line-based estimate of
+                              // (startLine - 1) * 20px can land far from the actual
+                              // selection on large files. Prefer the captured DOM
+                              // anchor rect when available.
+                              const anchorTop = liveSelectionDraftAnchor?.rects?.[0]?.top;
+                              const top = anchorTop != null
+                                ? anchorTop - commentSourceScrollTop
+                                : (commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT - commentSourceScrollTop;
+                              return (
                               <div
                                 className="commentAddForm aligned"
                                 ref={commentAddFormRef}
-                                style={{ top: `${(commentAddRange.startLine - 1) * FILE_REVIEW_LINE_HEIGHT - commentSourceScrollTop}px` }}
+                                style={{ top: `${top}px` }}
                               >
                                 <div className="commentAddLabel">New comment on L{commentAddRange.startLine}{commentAddRange.endLine !== commentAddRange.startLine ? `-${commentAddRange.endLine}` : ''}</div>
                                 <textarea
@@ -5256,7 +6010,8 @@ export default function Page() {
                                  <button className="commentActionBtn approve" onClick={() => void handleCreateComment()} disabled={!commentInput.trim()}>Submit</button>
                                 </div>
                               </div>
-                            )}
+                              );
+                            })()}
                           </div>
                           {visibleComments.length === 0 && !showCommentInput && (
                             <div className="muted" style={{ padding: 20, textAlign: 'center', fontSize: 13 }}>
@@ -5286,15 +6041,22 @@ export default function Page() {
               <h2 className="emptyHomepageTitle">Agents Chat</h2>
               <p className="emptyHomepageSubtitle">Start a new conversation with your agents</p>
               <button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>
-                + New Chat{chatAgentFilter ? ` with ${agents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter}` : ''}
+                + New Chat{chatAgentFilter ? ` with ${chatFilterAgents.find(a => a.id === chatAgentFilter)?.name || chatAgentFilter}` : ''}
               </button>
             </div>
           </div>
           ) : (
           <>
-          <section className="chatContainer" ref={chatContainerRef}>
+          <section
+            className="chatContainer"
+            ref={chatContainerRef}
+            onScroll={(e) => updateChatStickiness(e.currentTarget)}
+            onWheel={(e) => {
+              if (e.deltaY < 0) shouldStickToBottomRef.current = false;
+            }}
+          >
             {visibleMessages.map((message) => (
-              <div key={message.id} className={`message ${message.type} ${message.summary ? 'summaryCard' : ''}`}>
+              <div key={message.id} className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
                 {message.type !== 'user' && (
                   <div className="messageHeader">
                     <span className="agentName">{message.type === 'system' ? 'System' : (agents.find((a) => a.id === message.agentId)?.name || message.agentId || 'agent')}</span>
@@ -5312,6 +6074,8 @@ export default function Page() {
                   const hasParts = message.parts && message.parts.length > 0;
                   const isLong = (message.content || '').length > 400 || (message.content || '').split('\n').length > 12;
                   const isCollapsed = expandedMessages[message.id] === false;
+                  const userSendFailure = renderUserSendFailure(message);
+                  const messageActionsClassName = `messageActions ${userSendFailure ? 'messageActionsWithFailure' : ''}`;
                   return (
                     <>
                       {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{getStatusDisplayText(message.statusText, 'Generating')}</div> : null}
@@ -5365,12 +6129,13 @@ export default function Page() {
                         </div>
                         {renderAttachmentsList(message.attachments)}
                         {renderAgentUserRequest(message)}
-                        <div className="messageActions">
+                        <div className={messageActionsClassName}>
                           {partsLong && !message.pending && (
                             <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
                               {isCollapsed ? 'Expand' : 'Collapse'}
                             </button>
                           )}
+                          {userSendFailure}
                           {message.type !== 'user' && (
                             <button
                               type="button"
@@ -5390,7 +6155,6 @@ export default function Page() {
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
                           </div>
                           {renderAttachmentsList(message.attachments)}
-                          {renderUserSendFailure(message)}
                           {message.pending && message.content && (
                             <div className="streamingIndicator">
                               <span className="streamingPulse" />
@@ -5398,12 +6162,13 @@ export default function Page() {
                             </div>
                           )}
                           {renderAgentUserRequest(message)}
-                          <div className="messageActions">
+                          <div className={messageActionsClassName}>
                             {isLong && (
                               <button className="collapseToggle" onClick={() => setExpandedMessages((prev) => ({ ...prev, [message.id]: prev[message.id] === false ? true : false }))}>
                                 {isCollapsed ? 'Expand' : 'Collapse'}
                               </button>
                             )}
+                            {userSendFailure}
                             {message.type !== 'user' && (
                               <button
                                 type="button"
@@ -5455,7 +6220,10 @@ export default function Page() {
                   {mentionedAgentIds.length > 0 ? (
                     <div className="targetPills">
                       {mentionedAgentIds.map((agentId) => (
-                        <span key={agentId} className="targetPill">@{agentId}</span>
+                        <span key={agentId} className="targetPill modelTargetPill">
+                          <span>@{agentId}</span>
+                          {renderAgentModelSelect(agentId)}
+                        </span>
                       ))}
                       {orchestrationEnabled && (
                         <>
@@ -5497,6 +6265,22 @@ export default function Page() {
                           )}
                         </>
                       )}
+                    </div>
+                  ) : effectiveComposerAgentId ? (
+                    <div className="targetPills">
+                      <span className="targetPill rememberedAgentPill modelTargetPill">
+                        <span>@{effectiveComposerAgentId}</span>
+                        {renderAgentModelSelect(effectiveComposerAgentId)}
+                        {rememberedComposerAgentId ? (
+                          <button
+                            type="button"
+                            className="rememberedAgentRemove"
+                            aria-label={`Remove remembered agent ${effectiveComposerAgentId}`}
+                            title="Use the chat primary/default agent instead"
+                            onClick={() => clearRememberedChatAgent(currentChatId)}
+                          />
+                        ) : null}
+                      </span>
                     </div>
                   ) : null}
                   {renderAttachmentsList(attachments, 'composer')}
@@ -6008,6 +6792,100 @@ export default function Page() {
           color: var(--text);
           transition: background 220ms ease, color 220ms ease;
         }
+        :global(.agentModelSelectWrap) {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+        :global(.agentModelSelect) {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          border: 0;
+          border-radius: 999px;
+          background: transparent;
+          color: inherit;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1;
+          padding: 2px 8px 2px 6px;
+          max-width: 28ch;
+          min-width: 0;
+          width: max-content;
+          cursor: pointer;
+          outline: none;
+          transition: color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+        }
+        :global(.agentModelSelectLabel) {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        :global(.agentModelSelectCaret) {
+          font-size: 9px;
+          opacity: 0.7;
+          line-height: 1;
+        }
+        :global(.agentModelSelect:hover),
+        :global(.agentModelSelectOpen) {
+          background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+          box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+        :global(.agentModelSelect:focus-visible) {
+          background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+          box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
+        }
+        :global(.agentModelDropdown) {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 0;
+          min-width: max(180px, 100%);
+          max-height: 320px;
+          overflow-y: auto;
+          padding: 6px;
+          background: var(--panel-strong, var(--panel, #1d2433));
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: var(--shadow);
+          backdrop-filter: blur(18px);
+          z-index: 40;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        :global(.agentModelOption) {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 7px 10px;
+          background: transparent;
+          border: 0;
+          border-radius: 8px;
+          color: inherit;
+          font: inherit;
+          font-size: 12px;
+          text-align: left;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        :global(.agentModelOption:hover) {
+          background: var(--hover, rgba(255,255,255,0.06));
+        }
+        :global(.agentModelOptionActive) {
+          background: var(--accent-soft, rgba(99,179,237,0.15));
+          color: var(--accent);
+        }
+        :global(.agentModelOptionLabel) {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        :global(.agentModelOptionCheck) {
+          color: var(--accent);
+        }
+        .modelTargetPill {
+          gap: 6px;
+        }
         .header {
           position: relative;
           z-index: 10;
@@ -6033,6 +6911,75 @@ export default function Page() {
           gap: 12px;
           flex-wrap: wrap;
           justify-content: flex-end;
+        }
+        .headerInlineActions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .headerOverflowWrap {
+          position: relative;
+          display: none;
+        }
+        .headerOverflowBtn {
+          font-size: 18px;
+          line-height: 1;
+        }
+        .headerOverflowMenu {
+          position: absolute;
+          top: calc(100% + 8px);
+          right: 0;
+          min-width: 200px;
+          padding: 6px;
+          background: var(--panel-strong, var(--panel, #1d2433));
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: var(--shadow);
+          z-index: 30;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          backdrop-filter: blur(18px);
+        }
+        .headerOverflowItem {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          background: transparent;
+          border: 0;
+          border-radius: 8px;
+          color: inherit;
+          font: inherit;
+          text-align: left;
+          cursor: pointer;
+        }
+        .headerOverflowItem:hover {
+          background: var(--hover, rgba(255,255,255,0.06));
+        }
+        .headerOverflowItem.active {
+          background: var(--accent-soft, rgba(99,179,237,0.15));
+          color: var(--accent);
+        }
+        .headerOverflowEmoji {
+          width: 20px;
+          text-align: center;
+        }
+        .headerOverflowCheck {
+          margin-left: auto;
+          color: var(--accent);
+        }
+        .headerOverflowSeparator {
+          height: 1px;
+          margin: 4px 6px;
+          background: var(--border);
+        }
+        .headerOverflowSectionLabel {
+          padding: 4px 10px 2px;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          opacity: 0.6;
         }
         h1 {
           margin: 0;
@@ -6351,7 +7298,9 @@ export default function Page() {
         }
         .participantsList {
           display: grid;
+          grid-template-columns: minmax(0, 1fr);
           gap: 8px;
+          min-width: 0;
         }
         .chatAgentFilterRow {
           display: flex;
@@ -6360,34 +7309,24 @@ export default function Page() {
           align-items: center;
           flex-shrink: 0;
         }
-        .chatAgentFilterBtn {
-          padding: 4px 10px;
+        .chatAgentFilterSelect {
+          flex: 1 1 auto;
+          min-width: 0;
+          padding: 6px 10px;
           border-radius: 8px;
           border: 1px solid var(--border);
-          background: transparent;
-          color: var(--text-soft);
-          font-size: 11px;
-          cursor: pointer;
-          transition: all 0.15s;
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-        .chatAgentFilterBtn:hover {
+          background: var(--panel-soft);
           color: var(--text);
+          font-size: 12px;
+          cursor: pointer;
+          outline: none;
+          transition: border-color 0.15s, background 0.15s;
+        }
+        .chatAgentFilterSelect:hover {
           border-color: var(--border-strong);
         }
-        .chatAgentFilterBtn.active {
-          background: var(--accent-soft);
-          color: var(--accent);
+        .chatAgentFilterSelect:focus {
           border-color: var(--accent);
-          font-weight: 600;
-        }
-        .chatAgentFilterOverflow {
-          position: relative;
-        }
-        .chatAgentFilterMoreBtn {
-          font-weight: 900;
-          letter-spacing: 1px;
         }
         .newChatRow {
           display: flex;
@@ -6447,7 +7386,7 @@ export default function Page() {
         }
         .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
         .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; word-break: break-word; }
+        .chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
         .chatHistoryMetaRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         .chatHistoryMeta { font-size: 11px; color: var(--muted); }
         .chatStatusBadge {
@@ -6473,6 +7412,7 @@ export default function Page() {
           border-radius: 14px;
           border: 1px solid transparent;
           position: relative;
+          min-width: 0;
           transition: all 0.12s ease;
         }
         .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
@@ -6507,11 +7447,13 @@ export default function Page() {
           justify-content: center;
           transition: all 0.12s ease;
           opacity: 0;
+          pointer-events: none;
         }
         .chatHistoryRow:hover .chatMoreBtn,
         .chatHistoryRow:focus-within .chatMoreBtn,
         .chatMoreBtn.active {
           opacity: 1;
+          pointer-events: auto;
         }
         .chatMoreBtn:hover,
         .chatMoreBtn.active {
@@ -6631,8 +7573,8 @@ export default function Page() {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          background: linear-gradient(135deg, var(--accent), var(--accent-2));
-          color: #fff;
+          background: var(--avatar-bg, linear-gradient(135deg, var(--accent), var(--accent-2)));
+          color: var(--avatar-text, #fff);
           font-weight: 700;
           font-size: 13px;
           flex: 0 0 auto;
@@ -6643,7 +7585,7 @@ export default function Page() {
         .agentListId { font-size: 11px; color: var(--muted); }
         .agentListStatus { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
         .agentListStatus.running { color: var(--success); }
-        .nodeAvatar[data-online] { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+        .nodeAvatar[data-online] { background: var(--avatar-bg, linear-gradient(135deg, var(--accent), var(--accent-2))); }
         .nodeAvatar:not([data-online]) { background: linear-gradient(135deg, #718096, #4a5568) !important; }
         .nodeRemoveBtn {
           font-size: 11px;
@@ -6814,6 +7756,7 @@ export default function Page() {
           min-height: 0;
           overflow-y: auto;
           overflow-x: hidden;
+          overflow-anchor: none;
           padding: 24px;
           display: flex;
           flex-direction: column;
@@ -6886,6 +7829,9 @@ export default function Page() {
           gap: 8px;
           margin-top: 10px;
         }
+        .messageActionsWithFailure {
+          justify-content: space-between;
+        }
         .messageCopyButton,
         :global(.userSendFailureButton) {
           display: inline-flex;
@@ -6917,6 +7863,10 @@ export default function Page() {
           align-self: flex-start;
           background: var(--message-agent);
           border-left: 3px solid var(--accent);
+        }
+        .message.agent.streamingMessage {
+          box-sizing: border-box;
+          width: 80%;
         }
         .message.summaryCard {
           border-left: 3px solid var(--accent-2);
@@ -7042,37 +7992,72 @@ export default function Page() {
         .messageContent.pending { opacity: 0.78; }
         :global(.userSendFailure) {
           display: flex;
-          align-items: center;
-          justify-content: flex-start;
-          gap: 8px;
-          margin-top: 8px;
-          color: #fca5a5;
-          font-size: 12px;
+          justify-content: flex-end;
+          margin-top: 0;
+        }
+        :global(.userSendFailurePill) {
+          display: inline-flex;
+          align-items: stretch;
+          border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+          background: color-mix(in srgb, var(--danger) 10%, var(--panel-soft));
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
         }
         :global(.userSendFailureStatus) {
           display: inline-flex;
           align-items: center;
-          justify-content: center;
-          min-height: 30px;
-          border: 1px solid rgba(252, 165, 165, 0.45);
-          background: rgba(252, 165, 165, 0.1);
-          color: #fecaca;
-          border-radius: 10px;
+          gap: 6px;
           padding: 0 10px;
           font-size: 12px;
+          font-weight: 600;
           line-height: 1;
+          color: var(--danger);
+          letter-spacing: 0.01em;
           cursor: help;
+          user-select: none;
+        }
+        :global(.userSendFailureStatus::before) {
+          content: '⚠';
+          font-size: 13px;
+          line-height: 1;
         }
         :global(.userSendFailureButton) {
-          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-height: 30px;
+          padding: 0 12px;
+          border: none;
+          border-left: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+          border-radius: 0;
+          background: transparent;
+          color: var(--danger);
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 1;
+          cursor: pointer;
+          transition: background 160ms ease, color 160ms ease;
+        }
+        :global(.userSendFailureButton::before) {
+          content: '↻';
+          font-size: 14px;
+          line-height: 1;
+          display: inline-block;
+        }
+        :global(.userSendFailureButton:hover) {
+          background: color-mix(in srgb, var(--danger) 18%, transparent);
+        }
+        :global(.userSendFailureButton:focus-visible) {
+          outline: 2px solid var(--danger);
+          outline-offset: -2px;
         }
         :global(.userSendFailureButton:disabled) {
-          opacity: 0.55;
+          opacity: 0.5;
           cursor: not-allowed;
         }
         :global(.userSendFailureButton:disabled:hover) {
-          border-color: var(--border);
-          background: var(--panel-soft);
+          background: transparent;
         }
         .partsStream { display: flex; flex-direction: column; gap: 6px; }
         .partsStream.collapsed { max-height: 300px; overflow: hidden; position: relative; }
@@ -7624,6 +8609,40 @@ export default function Page() {
           line-height: 1;
           font-weight: 700;
         }
+        .rememberedAgentPill {
+          gap: 6px;
+          border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+          background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel-soft));
+        }
+        .rememberedAgentRemove {
+          width: 16px;
+          height: 16px;
+          padding: 0;
+          border: 0;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--accent) 14%, transparent);
+          color: var(--accent);
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          line-height: 1;
+          opacity: 0;
+          transform: scale(0.9);
+          transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
+        }
+        .rememberedAgentRemove::before {
+          content: 'x';
+        }
+        .rememberedAgentPill:hover .rememberedAgentRemove,
+        .rememberedAgentRemove:focus-visible {
+          opacity: 1;
+          transform: scale(1);
+        }
+        .rememberedAgentRemove:hover {
+          background: color-mix(in srgb, var(--accent) 24%, transparent);
+        }
         .composerHint {
           display: none;
         }
@@ -7656,10 +8675,10 @@ export default function Page() {
           height: 38px;
           padding: 0 !important;
           border-radius: 999px !important;
-          border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent) !important;
-          background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important;
-          color: white !important;
-          box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.22);
+          border: 1px solid var(--send-button-border, color-mix(in srgb, var(--accent) 30%, transparent)) !important;
+          background: var(--send-button-bg, linear-gradient(135deg, var(--accent), var(--accent-2))) !important;
+          color: var(--send-button-color, white) !important;
+          box-shadow: var(--send-button-shadow, 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.22));
           font-weight: 700;
           display: inline-flex;
           align-items: center;
@@ -8162,16 +9181,13 @@ export default function Page() {
 
         @media (max-width: 1100px) {
           .header {
-            align-items: flex-start;
-            flex-direction: column;
             padding: 14px 16px;
           }
-          .headerLeft,
-          .headerRight {
-            width: 100%;
+          .headerInlineActions {
+            display: none;
           }
-          .headerRight {
-            justify-content: space-between;
+          .headerOverflowWrap {
+            display: block;
           }
           .themeMenuWrap {
             flex: none;
@@ -8245,6 +9261,7 @@ export default function Page() {
           }
           .chatMoreBtn {
             opacity: 1;
+            pointer-events: auto;
           }
           .participantsHeader,
           .agentsSidebarHeader {

@@ -1041,6 +1041,31 @@ async function acpApi(body: Record<string, unknown>) {
   return res.json();
 }
 
+function isAcpFailureResult(value: unknown): value is { ok?: unknown; error?: unknown } {
+  return !!value && typeof value === 'object' && 'ok' in value && (value as { ok?: unknown }).ok !== true;
+}
+
+let localAgentsWarmupStarted = false;
+
+function warmLocalAgentsOnce(
+  acpCall: (body: Record<string, unknown>) => Promise<unknown>,
+  loadedAgents: Agent[],
+) {
+  if (localAgentsWarmupStarted) return;
+  if (!loadedAgents.some(agent => !agent.relay)) return;
+
+  localAgentsWarmupStarted = true;
+  void acpCall({ action: 'warm-local-agents' })
+    .then((result) => {
+      if (isAcpFailureResult(result)) {
+        console.error('Failed to warm local agents', result.error || result);
+      }
+    })
+    .catch((err) => {
+      console.error('Failed to warm local agents', err);
+    });
+}
+
 /* ────────── Page Component ────────── */
 
 export default function Page() {
@@ -2216,7 +2241,9 @@ export default function Page() {
         acp({ action: 'get-model-prefs' }).catch(() => null),
       ]);
       if (agentsData.ok && Array.isArray(agentsData.agents)) {
-        setAgents(agentsData.agents);
+        const loadedAgents = agentsData.agents as Agent[];
+        setAgents(loadedAgents);
+        warmLocalAgentsOnce(acp, loadedAgents);
       }
       if (prefsData?.ok && prefsData.prefs && typeof prefsData.prefs === 'object') {
         const prefs = prefsData.prefs as Record<string, string>;

@@ -989,6 +989,40 @@ function getActiveTurnForResume(chatTurn: TurnState | undefined, savedSessionId:
   return chatTurn;
 }
 
+type WarmLocalAgentStatus = 'ready' | 'booting' | 'started' | 'failed' | 'skipped_remote';
+
+type WarmLocalAgentResult = {
+  agentId: string;
+  status: WarmLocalAgentStatus;
+  error?: string;
+};
+
+async function warmLocalAgents(): Promise<WarmLocalAgentResult[]> {
+  const agents = readAgentsConfig();
+  return Promise.all(agents.map(async (agent): Promise<WarmLocalAgentResult> => {
+    if (agent.relay) {
+      return { agentId: agent.id, status: 'skipped_remote' };
+    }
+
+    const proc = getAgentProcess(agent.id, agent);
+    if (proc.ready) {
+      return { agentId: agent.id, status: 'ready' };
+    }
+    if (proc.booting) {
+      return { agentId: agent.id, status: 'booting' };
+    }
+
+    try {
+      await bootAgent(agent.id);
+      return { agentId: agent.id, status: 'started' };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[ACP:${agent.id}] Warmup failed:`, error);
+      return { agentId: agent.id, status: 'failed', error };
+    }
+  }));
+}
+
 /* ─────────────── ACP Lifecycle ─────────────── */
 
 async function bootAgent(agentId: string): Promise<void> {
@@ -2327,6 +2361,12 @@ export async function POST(req: NextRequest) {
         return base;
       });
       return NextResponse.json({ ok: true, agents });
+    }
+
+    if (action === 'warm-local-agents') {
+      const agents = await warmLocalAgents();
+      const warmed = agents.filter(agent => agent.status === 'started').length;
+      return NextResponse.json({ ok: true, warmed, agents });
     }
 
     if (action === 'get-agent-config') {

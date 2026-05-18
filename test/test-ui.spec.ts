@@ -135,6 +135,17 @@ test.describe('Login', () => {
 
 test.describe('Chat UI', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'warm-local-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, warmed: 0, agents: [] }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
     await login(page);
     await deleteAllChats(page);
     await page.reload();
@@ -176,6 +187,175 @@ test.describe('Chat UI', () => {
     expect(styles.backgroundImage).toContain('rgb(201, 106, 75)');
     expect(styles.backgroundImage).not.toContain('rgb(83, 102, 121)');
     expect(styles.color).toBe('rgb(255, 250, 242)');
+  });
+
+  test('warms local agents after loading agents without blocking send', async ({ page }) => {
+    const actions: string[] = [];
+    const sent: any[] = [];
+    let warmupRequested = false;
+    let listAgentsFulfilled = false;
+    let warmupSawListCompleted = false;
+    let warmupCompleted = false;
+    let releaseWarmup: () => void = () => {};
+    const warmupCanFinish = new Promise<void>((resolve) => {
+      releaseWarmup = resolve;
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      actions.push(String(body?.action || ''));
+
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [
+              { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: false, relay: false },
+              { id: 'remote', name: 'Remote Agent', cwd: '', running: false, relay: true, relayConnectionName: 'remote-node' },
+            ],
+          }),
+        });
+        listAgentsFulfilled = true;
+        return;
+      }
+
+      if (body?.action === 'get-model-prefs') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, prefs: {} }) });
+        return;
+      }
+
+      if (body?.action === 'warm-local-agents') {
+        warmupRequested = true;
+        warmupSawListCompleted = listAgentsFulfilled;
+        await warmupCanFinish;
+        warmupCompleted = true;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            warmed: 1,
+            agents: [
+              { agentId: 'alpha', status: 'started' },
+              { agentId: 'remote', status: 'skipped_remote' },
+            ],
+          }),
+        });
+        return;
+      }
+
+      if (body?.action === 'send') {
+        sent.push(body);
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, phase: 'thinking', sessionId: `session-${body.agentId}`, turn: { id: `turn-${body.agentId}` } }),
+        });
+        return;
+      }
+
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            booting: false,
+            activeTurn: {
+              id: `turn-${body.agentId}`,
+              fullText: `reply from ${body.agentId}`,
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: `reply from ${body.agentId}` }],
+            },
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
+
+    await expect.poll(() => warmupRequested).toBe(true);
+    expect(warmupSawListCompleted).toBe(true);
+    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('send while warmup pending');
+    await expect(page.locator('button[aria-label="Send message"]')).toBeEnabled();
+    await page.click('button[aria-label="Send message"]');
+    await expect.poll(() => sent.map((request) => request.agentId)).toEqual(['alpha']);
+    expect(warmupCompleted).toBe(false);
+
+    releaseWarmup();
+    await expect.poll(() => warmupCompleted).toBe(true);
+    expect(actions.indexOf('warm-local-agents')).toBeGreaterThan(actions.indexOf('list-agents'));
+    expect(actions.filter((action) => action === 'warm-local-agents')).toHaveLength(1);
+  });
+
+  test('logs local agent warmup failures returned as JSON', async ({ page }) => {
+    await page.addInitScript(() => {
+      const originalError = console.error.bind(console);
+      (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors = [];
+      console.error = (...args: unknown[]) => {
+        const serialized = args.map((arg) => {
+          if (typeof arg === 'string') return arg;
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        });
+        (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors?.push(serialized);
+        originalError(...args);
+      };
+    });
+
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: false, relay: false }],
+          }),
+        });
+        return;
+      }
+
+      if (body?.action === 'get-model-prefs') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, prefs: {} }) });
+        return;
+      }
+
+      if (body?.action === 'warm-local-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'warm failed' }),
+        });
+        return;
+      }
+
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
+
+    await expect.poll(async () => {
+      const errors = await page.evaluate(() => (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors ?? []);
+      return errors.length;
+    }).toBe(1);
+
+    const errors = await page.evaluate(() => (window as typeof window & { __warmupConsoleErrors?: string[][] }).__warmupConsoleErrors ?? []);
+    expect(errors.some((entry) =>
+      entry[0] === 'Failed to warm local agents' && entry.some((part) => part.includes('warm failed')),
+    )).toBe(true);
+    await expect(page.locator('.chatContainer, .emptyHomepage').first()).not.toContainText('Failed to warm local agents');
   });
 
   test('remembers the first mentioned agent as the next composer target for the same chat', async ({ page }) => {

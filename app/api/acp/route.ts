@@ -1299,6 +1299,47 @@ async function doBootAgent(agentId: string): Promise<void> {
 // MCP servers blocked for non-admin (Microsoft) users
 const ADMIN_ONLY_MCP = new Set(['teams']);
 
+function normalizeMcpStringArray(input: unknown): string[] {
+  return Array.isArray(input) ? input.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function normalizeMcpHeaders(input: unknown): unknown[] {
+  if (Array.isArray(input)) return input;
+  if (input && typeof input === 'object') {
+    return Object.entries(input as Record<string, unknown>).map(([name, value]) => ({ name, value: String(value) }));
+  }
+  return [];
+}
+
+function normalizeMcpServerConfig(name: string, cfg: Record<string, unknown>): Record<string, unknown> | null {
+  const type = typeof cfg.type === 'string' ? cfg.type.trim().toLowerCase() : '';
+  if (type === 'http' || type === 'sse') {
+    const url = typeof cfg.url === 'string' ? cfg.url.trim() : '';
+    if (!url) {
+      console.warn(`[MCP] Skipping ${name}: ${type} server is missing url`);
+      return null;
+    }
+    return {
+      name,
+      type,
+      url,
+      headers: normalizeMcpHeaders(cfg.headers),
+    };
+  }
+
+  const command = typeof cfg.command === 'string' ? cfg.command.trim() : '';
+  if (!command) {
+    console.warn(`[MCP] Skipping ${name}: server is missing command or supported type/url`);
+    return null;
+  }
+  return {
+    name,
+    command,
+    args: normalizeMcpStringArray(cfg.args),
+    env: normalizeMcpStringArray(cfg.env),
+  };
+}
+
 async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>[]> {
   try {
     const mcpConfigPath = path.join(os.homedir(), '.copilot', 'mcp-config.json');
@@ -1308,12 +1349,8 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
       const obj = mcpData.mcpServers as Record<string, Record<string, unknown>>;
       return Object.entries(obj)
         .filter(([name]) => isAdmin || !ADMIN_ONLY_MCP.has(name))
-        .map(([name, cfg]) => ({
-          name,
-          command: cfg.command as string,
-          args: (cfg.args as string[]) || [],
-          env: (cfg.env as string[]) || [],
-        }));
+        .map(([name, cfg]) => normalizeMcpServerConfig(name, cfg))
+        .filter((server): server is Record<string, unknown> => !!server);
     }
   } catch { /* ignore */ }
   return [];

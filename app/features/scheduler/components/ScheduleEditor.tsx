@@ -25,7 +25,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
   const [specKind, setSpecKind] = useState<ScheduleSpec['kind']>('every_minutes');
 
   // Dynamic fields based on kind
-  const [everyMinutesInterval, setEveryMinutesInterval] = useState(60);
+  const [everyMinutesInterval, setEveryMinutesInterval] = useState(30);
   const [everyHoursInterval, setEveryHoursInterval] = useState(1);
   const [everyDaysInterval, setEveryDaysInterval] = useState(1);
   const [dailyHour, setDailyHour] = useState(9);

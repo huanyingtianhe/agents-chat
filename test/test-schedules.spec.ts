@@ -64,12 +64,12 @@ test.describe('Schedules', () => {
       agentId,
       name: 'pw-test-create',
       prompt: 'noop',
-      scheduleSpec: { kind: 'interval', everyMinutes: 60 },
+      scheduleSpec: { kind: 'every_minutes', interval: 30 },
       enabled: false,
     };
 
     const r = await page.request.post(`${BASE}/api/schedules`, { data: payload });
-    expect(r.status()).toBe(200);
+    expect(r.status()).toBe(201);
 
     const body = await r.json();
     expect(body).toHaveProperty('id');
@@ -88,11 +88,11 @@ test.describe('Schedules', () => {
       agentId,
       name: 'pw-test-list',
       prompt: 'noop',
-      scheduleSpec: { kind: 'interval', everyMinutes: 60 },
+      scheduleSpec: { kind: 'every_minutes', interval: 30 },
       enabled: false,
     };
     const createRes = await page.request.post(`${BASE}/api/schedules`, { data: createPayload });
-    expect(createRes.status()).toBe(200);
+    expect(createRes.status()).toBe(201);
     const created = await createRes.json();
     const scheduleId = created.id as string;
     createdIds.push(scheduleId);
@@ -119,11 +119,11 @@ test.describe('Schedules', () => {
       agentId,
       name: 'pw-test-patch',
       prompt: 'noop',
-      scheduleSpec: { kind: 'interval', everyMinutes: 60 },
+      scheduleSpec: { kind: 'every_minutes', interval: 30 },
       enabled: false,
     };
     const createRes = await page.request.post(`${BASE}/api/schedules`, { data: createPayload });
-    expect(createRes.status()).toBe(200);
+    expect(createRes.status()).toBe(201);
     const created = await createRes.json();
     const scheduleId = created.id as string;
     createdIds.push(scheduleId);
@@ -155,11 +155,11 @@ test.describe('Schedules', () => {
       agentId,
       name: 'pw-test-delete',
       prompt: 'noop',
-      scheduleSpec: { kind: 'interval', everyMinutes: 60 },
+      scheduleSpec: { kind: 'every_minutes', interval: 30 },
       enabled: false,
     };
     const createRes = await page.request.post(`${BASE}/api/schedules`, { data: createPayload });
-    expect(createRes.status()).toBe(200);
+    expect(createRes.status()).toBe(201);
     const created = await createRes.json();
     const scheduleId = created.id as string;
 
@@ -180,13 +180,13 @@ test.describe('Schedules', () => {
       agentId,
       name: 'pw-test-invalid',
       prompt: 'noop',
-      scheduleSpec: { kind: 'interval', everyMinutes: 0 }, // Invalid: 0 minutes
+      scheduleSpec: { kind: 'every_minutes', interval: 0 }, // Invalid: 0 minutes
       enabled: false,
     };
 
     const r = await page.request.post(`${BASE}/api/schedules`, { data: invalidPayload });
-    expect(r.status()).not.toBeLessThan(400);
-    expect(r.status()).toBeLessThan(300);
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+    expect(r.status()).toBeLessThan(500);
   });
 
   // ============ UI Tests (Task 18) ============
@@ -229,22 +229,17 @@ test.describe('Schedules', () => {
     await expect(modal).toBeVisible({ timeout: 10000 });
 
     // Fill in the schedule form
-    const nameInput = modal.locator('input[name="name"]');
+    const nameInput = modal.locator('label:has(span:text-is("Name")) input');
     await expect(nameInput).toBeVisible({ timeout: 10000 });
     await nameInput.fill('pw-ui-create');
 
     // Select an agent
-    const agentSelect = modal.locator('select, [role="combobox"]').first();
-    if (await agentSelect.isVisible()) {
-      // Try generic select
-      await agentSelect.selectOption(agentId);
-    }
+    const agentSelect = modal.locator('label:has(span:text-is("Agent")) select');
+    await agentSelect.selectOption(agentId!);
 
     // Fill in the prompt
-    const promptInput = modal.locator('textarea, input[name="prompt"]').first();
-    if (await promptInput.isVisible()) {
-      await promptInput.fill('noop');
-    }
+    const promptInput = modal.locator('label:has(span:text-is("Prompt")) textarea');
+    await promptInput.fill('noop');
 
     // Leave kind as Interval (default should already be selected)
 

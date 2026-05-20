@@ -42,5 +42,5 @@ export async function POST(req: NextRequest) {
     enabled: enabled !== false,
   });
   getRuntime()?.scheduleJob(job);
-  return NextResponse.json({ job }, { status: 201 });
+  return NextResponse.json({ job, id: job.id }, { status: 201 });
 }

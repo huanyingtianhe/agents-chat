@@ -446,7 +446,7 @@
 .chatPageRoot .modal h2 { margin-top: 0; color: var(--accent); }
 .chatPageRoot .modal label { display: block; margin-bottom: 14px; }
 .chatPageRoot .modal label span { display: block; margin-bottom: 6px; color: var(--text-soft); }
-.chatPageRoot .modal input {
+.chatPageRoot .modal input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%;
   padding: 12px 14px;
   background: var(--input-bg);
@@ -463,9 +463,64 @@
   color: var(--text);
 }
 .chatPageRoot .modalActions { display: flex; gap: 10px; justify-content: flex-end; }
-.chatPageRoot .modalActions .secondary { background: transparent; }
-.chatPageRoot .modalActions .danger { background: #d9363e; color: #fff; border: none; }
-.chatPageRoot .modalActions .danger:hover { background: #c22d35; }
+.chatPageRoot .modalActions button,
+.chatPageRoot .modal button.primary,
+.chatPageRoot .modal button.secondary,
+.chatPageRoot .modal button.danger {
+  padding: 8px 18px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+  min-height: 34px;
+}
+.chatPageRoot .modalActions .secondary,
+.chatPageRoot .modal button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong, var(--border));
+}
+.chatPageRoot .modalActions .secondary:hover,
+.chatPageRoot .modal button.secondary:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chatPageRoot .modalActions .primary,
+.chatPageRoot .modal button.primary {
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+}
+.chatPageRoot .modalActions .primary:hover,
+.chatPageRoot .modal button.primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+  border-color: color-mix(in srgb, var(--accent) 85%, #000);
+  color: #fff;
+}
+.chatPageRoot .modalActions .primary:disabled,
+.chatPageRoot .modal button.primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.chatPageRoot .modalActions .danger,
+.chatPageRoot .modal button.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+.chatPageRoot .modalActions .danger:hover,
+.chatPageRoot .modal button.danger:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+.chatPageRoot .inlinePrimary {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 8px;
+  min-height: 30px;
+}
 .chatPageRoot .shareLinkModal {
   width: min(560px, 100%);
 }

@@ -4,6 +4,14 @@
   --text: #e7edf8;
 }
 
+/* Light themes opt into the light color-scheme so native form controls
+   (checkboxes, scrollbars, etc.) render with light defaults instead of
+   inheriting the dark color-scheme above. */
+.page[data-theme="claude"],
+.page[data-theme="chatgpt"] {
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
 }

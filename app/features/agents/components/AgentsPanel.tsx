@@ -187,7 +187,7 @@ export function AgentsPanel({
               <span className="fieldHint">The cwd the copilot agent runs in on that node</span>
             </label>
             <div className="modalActions">
-              <button onClick={() => void createRemoteAgent()} disabled={addAgentLoading || !newRemoteAgentForm.id.trim() || !newRemoteAgentForm.nodeName}>
+              <button className="primary" onClick={() => void createRemoteAgent()} disabled={addAgentLoading || !newRemoteAgentForm.id.trim() || !newRemoteAgentForm.nodeName}>
                 {addAgentLoading ? 'Creating...' : 'Create Remote Agent'}
               </button>
               <button className="secondary" onClick={() => setShowAddRemoteAgent(false)}>Cancel</button>
@@ -261,7 +261,7 @@ export function AgentsPanel({
                       style={{ flex: 1, fontSize: '12px' }}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
                     />
-                    <button onClick={() => void addAccess()} disabled={!newAccessEmail.trim()} style={{ fontSize: '12px', padding: '4px 10px' }}>Grant</button>
+                    <button className="primary inlinePrimary" onClick={() => void addAccess()} disabled={!newAccessEmail.trim()}>Grant</button>
                   </div>
                   {agentAccessList.length > 0 ? (
                     <div style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '12px' }}>
@@ -279,9 +279,9 @@ export function AgentsPanel({
               )}
             </div>
             <div className="modalActions">
-              <button onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
+              <button className="primary" onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={closeAgentSettings}>Cancel</button>
-              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>🗑️ Delete</button>
+              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Delete</button>
             </div>
           </div>
         </div>
@@ -328,7 +328,7 @@ export function AgentsPanel({
               <span>YOLO mode (auto-approve)</span>
             </label>
             <div className="modalActions">
-              <button onClick={() => void createAgent()} disabled={addAgentLoading || !newAgentForm.id.trim()}>
+              <button className="primary" onClick={() => void createAgent()} disabled={addAgentLoading || !newAgentForm.id.trim()}>
                 {addAgentLoading ? 'Creating...' : 'Create Agent'}
               </button>
               <button className="secondary" onClick={closeAddAgent}>Cancel</button>

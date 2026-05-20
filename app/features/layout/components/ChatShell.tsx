@@ -11,8 +11,8 @@ export type ChatShellProps = {
   statusBar: ReactNode;
   shareDialog: ReactNode | null;
   imageLightbox: ReactNode | null;
-  mobilePanel: 'chat' | 'agents' | 'nodes' | null;
-  onMobilePanelChange: (panel: 'chat' | 'agents' | 'nodes' | null) => void;
+  mobilePanel: 'chat' | 'agents' | 'nodes' | 'schedules' | null;
+  onMobilePanelChange: (panel: 'chat' | 'agents' | 'nodes' | 'schedules' | null) => void;
   themeStyle: CSSProperties;
   themeId: string;
   sidebarWidth: number;

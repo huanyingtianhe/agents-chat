@@ -55,10 +55,12 @@ async function ensureActiveChat(page: Page) {
 }
 
 async function expectCompactFailedSendStatus(message: Locator, error = 'Failed to send prompt to agent') {
-  const status = message.locator('.userSendFailureStatus');
-  await expect(status).toHaveText('Failed');
-  await expect(status).toHaveAttribute('title', error);
-  await expect(message.locator('.userSendFailure')).not.toContainText(error);
+  const failure = message.locator('.userSendFailureNotice');
+  const card = failure.locator('.userSendFailureCard');
+  await expect(card.locator('.userSendFailureStatus')).toHaveText(`Failed to send: ${error}`);
+  await expect(card.locator('.userSendFailureMessage')).toHaveCount(0);
+  await expect(card).toHaveAttribute('title', error);
+  await expect(message.getByRole('button', { name: 'Delete' })).toHaveCount(0);
 }
 
 async function mockTwoAgentsAcp(page: Page, sent: any[]) {
@@ -159,6 +161,22 @@ test.describe('Chat UI', () => {
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
+    const filesButton = page.locator('.attachButton');
+    await expect(filesButton.locator('.attachButtonIcon')).toBeVisible();
+    await expect(filesButton.locator('.attachButtonLabel')).toHaveCount(0);
+    const filesButtonStyle = await filesButton.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        borderRadius: style.borderRadius,
+        display: style.display,
+        height: style.height,
+        width: style.width,
+      };
+    });
+    expect(filesButtonStyle.display).toBe('flex');
+    expect(filesButtonStyle.borderRadius).toBe('999px');
+    expect(filesButtonStyle.width).toBe('32px');
+    expect(filesButtonStyle.height).toBe('32px');
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
@@ -783,8 +801,8 @@ test.describe('Chat UI', () => {
     // Open agents panel
     await page.click('button[title="Agents"]');
     await expect(page.locator('.agentsSidebar')).toBeVisible();
-    // Should show at least the copilot agent
-    await expect(page.locator('text=GitHub Copilot CLI')).toBeVisible({ timeout: 10000 });
+    // Should show at least one configured agent, regardless of the local agent names.
+    await expect(page.locator('.agentsSidebar .agentListItem').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('should show remote node display name in agents list', async ({ page }) => {
@@ -1173,17 +1191,17 @@ test.describe('Chat UI', () => {
     await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(1);
     const failedUserMessage = chatArea.locator('.message.user', { hasText: 'trigger a send failure' });
     await expectCompactFailedSendStatus(failedUserMessage);
-    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect(failedUserMessage.getByRole('button', { name: 'Retry' })).toBeVisible();
     await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
     await expect(chatArea.locator('.message.system', { hasText: 'Send failed' })).toHaveCount(0);
 
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(2);
     await expect(failedUserMessage.locator('.userSendFailure')).toHaveCount(0);
     await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
   });
 
-  test('should style failed message resend like message action buttons', async ({ page }) => {
+  test('should style failed message resend as a card with a separate retry action', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const failedText = 'failed message style check';
     const chatId = `ui-resend-style-${Date.now()}`;
@@ -1238,57 +1256,104 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    const resendButton = chatArea.locator('.message.user', { hasText: failedText }).getByRole('button', { name: 'Resend' });
-    const copyButton = chatArea.locator('.message.agent', { hasText: 'normal answer with copy action' }).locator('.messageCopyButton');
+    const resendButton = chatArea.locator('.message.user', { hasText: failedText }).getByRole('button', { name: 'Retry' });
     await expect(resendButton).toBeVisible({ timeout: 15000 });
-    await expect(copyButton).toBeVisible();
 
     const styles = await resendButton.evaluate((button) => {
-      const copyButton = document.querySelector('.message.agent .messageCopyButton') as HTMLElement | null;
-      if (!copyButton) throw new Error('Expected an agent copy button for style comparison');
+      const message = button.closest('.message.user') as HTMLElement | null;
+      const notice = message?.querySelector('.userSendFailureNotice') as HTMLElement | null;
+      const card = notice?.querySelector('.userSendFailureCard') as HTMLElement | null;
+      const actions = button.closest('.userSendFailureActions') as HTMLElement | null;
+      const status = card?.querySelector('.userSendFailureStatus') as HTMLElement | null;
+      const detail = card?.querySelector('.userSendFailureMessage') as HTMLElement | null;
+      if (!notice || !card || !actions || !status) throw new Error('Expected a failed send one-line notice card and retry action row');
       const resendStyle = getComputedStyle(button as HTMLElement);
-      const copyStyle = getComputedStyle(copyButton);
+      const resendBeforeStyle = getComputedStyle(button as HTMLElement, '::before');
+      const noticeStyle = getComputedStyle(notice);
+      const cardStyle = getComputedStyle(card);
+      const actionsStyle = getComputedStyle(actions);
+      const statusStyle = getComputedStyle(status);
       return {
-        resend: {
-          minHeight: resendStyle.minHeight,
-          borderRadius: resendStyle.borderRadius,
-          backgroundColor: resendStyle.backgroundColor,
-          color: resendStyle.color,
-          fontSize: resendStyle.fontSize,
-          lineHeight: resendStyle.lineHeight,
-          paddingLeft: resendStyle.paddingLeft,
-          paddingRight: resendStyle.paddingRight,
-        },
-        copy: {
-          minHeight: copyStyle.minHeight,
-          borderRadius: copyStyle.borderRadius,
-          backgroundColor: copyStyle.backgroundColor,
-          color: copyStyle.color,
-          fontSize: copyStyle.fontSize,
-          lineHeight: copyStyle.lineHeight,
-          paddingLeft: copyStyle.paddingLeft,
-          paddingRight: copyStyle.paddingRight,
-        },
+        noticeDisplay: noticeStyle.display,
+        noticeJustifyContent: noticeStyle.justifyContent,
+        noticeMarginBottom: noticeStyle.marginBottom,
+        cardBorderRadius: cardStyle.borderRadius,
+        cardBackground: cardStyle.backgroundColor,
+        cardBoxShadow: cardStyle.boxShadow,
+        cardWidth: cardStyle.width,
+        cardText: status.textContent?.trim(),
+        detailCount: detail ? 1 : 0,
+        actionsDisplay: actionsStyle.display,
+        actionsJustifyContent: actionsStyle.justifyContent,
+        statusText: status.textContent?.trim(),
+        statusFontWeight: statusStyle.fontWeight,
+        statusWhiteSpace: statusStyle.whiteSpace,
+        resendMinHeight: resendStyle.minHeight,
+        resendFlexDirection: resendStyle.flexDirection,
+        resendBeforeContent: resendBeforeStyle.content,
+        resendBorderRadius: resendStyle.borderRadius,
+        resendBorderStyle: resendStyle.borderStyle,
+        resendFontWeight: resendStyle.fontWeight,
+        resendPaddingLeft: resendStyle.paddingLeft,
+        resendPaddingRight: resendStyle.paddingRight,
+        resendText: button.textContent?.trim(),
       };
     });
-    expect(styles.resend).toEqual(styles.copy);
+    expect(styles.noticeDisplay).toBe('flex');
+    expect(styles.noticeJustifyContent).toBe('flex-start');
+    expect(styles.noticeMarginBottom).toBe('8px');
+    expect(styles.cardBorderRadius).toBe('0px');
+    expect(styles.cardBackground).toBe('rgba(0, 0, 0, 0)');
+    expect(styles.cardBoxShadow).toBe('none');
+    expect(styles.cardText).toBe('Failed to send: Failed to send prompt to agent');
+    expect(styles.detailCount).toBe(0);
+    expect(styles.actionsDisplay).toBe('flex');
+    expect(styles.actionsJustifyContent).toBe('flex-end');
+    expect(styles.statusText).toBe('Failed to send: Failed to send prompt to agent');
+    expect(styles.statusFontWeight).toBe('600');
+    expect(styles.statusWhiteSpace).toBe('nowrap');
+    expect(styles.resendMinHeight).toBe('28px');
+    expect(styles.resendFlexDirection).toBe('row');
+    expect(styles.resendBeforeContent).toBe('none');
+    expect(styles.resendBorderRadius).toBe('6px');
+    expect(styles.resendBorderStyle).toBe('none');
+    expect(styles.resendFontWeight).toBe('500');
+    expect(styles.resendPaddingLeft).toBe(styles.resendPaddingRight);
+    expect(styles.resendText).toBe('Retry');
 
     const alignment = await resendButton.evaluate((button) => {
-      const row = button.closest('.userSendFailure') as HTMLElement | null;
-      const status = row?.querySelector('.userSendFailureStatus') as HTMLElement | null;
-      if (!row || !status) throw new Error('Expected failed-send row and status badge');
-      const rowRect = row.getBoundingClientRect();
-      const statusRect = status.getBoundingClientRect();
+      const message = button.closest('.message.user') as HTMLElement | null;
+      const notice = message?.querySelector('.userSendFailureNotice') as HTMLElement | null;
+      const card = notice?.querySelector('.userSendFailureCard') as HTMLElement | null;
+      const messageContent = message?.querySelector('.messageContent') as HTMLElement | null;
+      const actionRow = button.closest('.userSendFailureActions') as HTMLElement | null;
+      if (!notice || !card || !actionRow || !message || !messageContent) throw new Error('Expected failed-send notice above message text and retry actions below');
+      const noticeRect = notice.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const contentRect = messageContent.getBoundingClientRect();
+      const actionsRect = actionRow.getBoundingClientRect();
       const buttonRect = (button as HTMLElement).getBoundingClientRect();
+      const messageRect = message.getBoundingClientRect();
       return {
-        rowLeft: Math.round(rowRect.left),
-        statusLeft: Math.round(statusRect.left),
-        resendLeft: Math.round(buttonRect.left),
-        statusRight: Math.round(statusRect.right),
+        messageLeft: Math.round(messageRect.left),
+        messageRight: Math.round(messageRect.right),
+        noticeBottom: Math.round(noticeRect.bottom),
+        contentTop: Math.round(contentRect.top),
+        contentBottom: Math.round(contentRect.bottom),
+        cardLeft: Math.round(cardRect.left),
+        cardBottom: Math.round(cardRect.bottom),
+        cardRight: Math.round(cardRect.right),
+        contentLeft: Math.round(contentRect.left),
+        actionsTop: Math.round(actionsRect.top),
+        actionsRight: Math.round(actionsRect.right),
+        retryRight: Math.round(buttonRect.right),
       };
     });
-    expect(alignment.statusLeft).toBe(alignment.rowLeft);
-    expect(alignment.resendLeft).toBeGreaterThan(alignment.statusRight);
+    expect(Math.abs(alignment.cardLeft - alignment.contentLeft)).toBeLessThanOrEqual(1);
+    expect(alignment.noticeBottom).toBeLessThanOrEqual(alignment.contentTop);
+    expect(alignment.actionsTop).toBeGreaterThanOrEqual(alignment.contentBottom);
+    expect(Math.abs(alignment.messageRight - alignment.actionsRight)).toBeLessThan(28);
+    expect(Math.abs(alignment.actionsRight - alignment.retryRight)).toBeLessThanOrEqual(6);
   });
 
   test('should align failed send controls with the collapse action row', async ({ page }) => {
@@ -1352,16 +1417,24 @@ test.describe('Chat UI', () => {
 
     const verticalAlignment = await failedUserMessage.evaluate((message) => {
       const collapse = message.querySelector('.collapseToggle') as HTMLElement | null;
-      const failure = message.querySelector('.userSendFailure') as HTMLElement | null;
-      if (!collapse || !failure) throw new Error('Expected collapse and failed-send controls');
+      const failureActions = message.querySelector('.userSendFailureActions') as HTMLElement | null;
+      if (!collapse || !failureActions) throw new Error('Expected collapse and retry controls');
       const collapseRect = collapse.getBoundingClientRect();
-      const failureRect = failure.getBoundingClientRect();
-      return Math.abs(
-        collapseRect.top + collapseRect.height / 2 -
-        (failureRect.top + failureRect.height / 2),
-      );
+      const failureRect = failureActions.getBoundingClientRect();
+      const messageRect = (message as HTMLElement).getBoundingClientRect();
+      return {
+        verticalDelta: Math.abs(
+          collapseRect.top + collapseRect.height / 2 -
+          (failureRect.top + failureRect.height / 2),
+        ),
+        collapseLeft: Math.round(collapseRect.left),
+        failureRight: Math.round(failureRect.right),
+        messageRight: Math.round(messageRect.right),
+      };
     });
-    expect(verticalAlignment).toBeLessThanOrEqual(2);
+    expect(verticalAlignment.verticalDelta).toBeLessThanOrEqual(2);
+    expect(verticalAlignment.failureRight).toBeGreaterThan(verticalAlignment.collapseLeft);
+    expect(Math.abs(verticalAlignment.messageRight - verticalAlignment.failureRight)).toBeLessThan(28);
   });
 
   test('should keep failed send status on the original chat when user switches before failure returns', async ({ page }) => {
@@ -1498,12 +1571,12 @@ test.describe('Chat UI', () => {
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
-    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeEnabled();
+    await expect(failedUserMessage.getByRole('button', { name: 'Retry' })).toBeEnabled();
 
     await textarea.fill('keep alpha busy');
     await page.click('button[aria-label="Send message"]');
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
-    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeDisabled();
+    await expect(failedUserMessage.getByRole('button', { name: 'Retry' })).toBeDisabled();
   });
 
   test('should mark the source user message failed when an auto orchestration follow-up send fails', async ({ page }) => {
@@ -1739,7 +1812,7 @@ test.describe('Chat UI', () => {
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     const failedUserMessage = chatArea.locator('.message.user', { hasText: pendingText });
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
-    const resendButton = failedUserMessage.getByRole('button', { name: 'Resend' });
+    const resendButton = failedUserMessage.getByRole('button', { name: 'Retry' });
     await expect(resendButton).toBeDisabled();
 
     releaseAgents();
@@ -2117,10 +2190,10 @@ test.describe('Chat UI', () => {
 
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect(failedUserMessage.getByRole('button', { name: 'Retry' })).toBeVisible();
     await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
     await expect(chatArea.locator('.message.system', { hasText: 'Send failed' })).toHaveCount(0);
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
     expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
     await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
@@ -2207,14 +2280,14 @@ test.describe('Chat UI', () => {
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await expect(failedUserMessage.getByRole('button', { name: 'Resend' })).toBeVisible();
+    await expect(failedUserMessage.getByRole('button', { name: 'Retry' })).toBeVisible();
     await expect.poll(async () => page.evaluate(async (chatId) => {
       const response = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await response.json();
       return data.chat?.messages?.[0]?.sendStatus || null;
     }, chatId), { timeout: 5000 }).toBe('failed');
 
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
     expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'alpha', text: pendingText, chatId });
     await expect(chatArea.locator('.message.agent', { hasText: replyText })).toBeVisible({ timeout: 10000 });
@@ -2313,7 +2386,7 @@ test.describe('Chat UI', () => {
     await expect.poll(() => resumeRequests.length, { timeout: 10000 }).toBe(2);
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
 
     expect(sendRequests[0]).toMatchObject({ action: 'send', agentId: 'beta', text: cleanedText, chatId });
@@ -2413,7 +2486,7 @@ test.describe('Chat UI', () => {
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBeGreaterThan(0);
     expect(sendRequests[0].agentId).toBe('scheduler');
     expect(sendRequests[0].text).toContain(cleanedText);
@@ -2510,7 +2583,7 @@ test.describe('Chat UI', () => {
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(1);
     expect(sendRequests[0].agentId).toBe('scheduler');
     expect(sendRequests[0].text).toContain(cleanedText);
@@ -2627,7 +2700,7 @@ test.describe('Chat UI', () => {
     await expect(failedUserMessage).toBeVisible({ timeout: 15000 });
     await expect.poll(() => sendRequests.length, { timeout: 1000 }).toBe(0);
     await expectCompactFailedSendStatus(failedUserMessage);
-    await failedUserMessage.getByRole('button', { name: 'Resend' }).click();
+    await failedUserMessage.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => sendRequests.length, { timeout: 10000 }).toBe(2);
 
     expect(sendRequests[0].agentId).toBe('scheduler');
@@ -4013,7 +4086,7 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 5000 });
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
-    const firstChatRow = page.locator('.chatHistoryRow', { hasText: firstText }).first();
+    const firstChatRow = page.locator('.chatHistoryRow', { hasText: 'Switch source' }).first();
     await expect(firstChatRow.locator('.chatStatusBadge.running')).toBeVisible({ timeout: 5000 });
     await expect(firstChatRow).toContainText('Thinking');
     await expect.poll(() => activeTurns.get(firstChatId)?.pollCount ?? 0, { timeout: 5000 }).toBeGreaterThan(pollCountBeforeSwitch);
@@ -4031,7 +4104,7 @@ test.describe('Chat UI', () => {
     expect(savedPending?.content || '').not.toContain('interrupted by chat switch');
 
     allowFirstTurnToFinish = true;
-    await page.click(`button:has-text("${firstText}")`);
+    await firstChatRow.locator('.chatHistoryItem').click();
     await expect(chatArea.locator(`.message.agent:has-text("${firstFinal}")`)).toBeVisible({ timeout: 15000 });
     await expect(firstChatRow.locator('.chatStatusBadge.done')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('text=interrupted by chat switch')).toHaveCount(0);
@@ -4874,7 +4947,7 @@ test.describe('Comment Review Chat', () => {
 
     const userMessage = page.locator('.message.user', { hasText: 'please change the word' });
     await expect(userMessage).toBeVisible({ timeout: 10000 });
-    await expect(userMessage.getByRole('button', { name: 'Resend' })).toHaveCount(0);
+    await expect(userMessage.getByRole('button', { name: 'Retry' })).toHaveCount(0);
     await expect(userMessage.locator('.userSendFailureStatus')).toHaveCount(0);
 
     // The stored chat must not have been silently re-saved with sendStatus 'failed'

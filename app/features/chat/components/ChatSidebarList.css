@@ -1,0 +1,214 @@
+.newChatRow {
+  display: flex;
+  gap: 6px;
+}
+.participantsList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+.chatAgentFilterRow {
+  display: flex;
+  gap: 4px;
+  padding: 0 0 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chatAgentFilterSelect {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chatAgentFilterSelect:hover {
+  border-color: var(--border-strong);
+}
+.chatAgentFilterSelect:focus {
+  border-color: var(--accent);
+}
+.newChatButton {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.newChatButton:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.newChatButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.chatRenameWrap {
+  flex: 1;
+  padding: 6px 12px;
+}
+.chatRenameInput {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.chatHistoryItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.chatHistoryItem:hover,
+.chatHistoryItem.active {
+  color: var(--text);
+}
+.chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
+.chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chatHistoryMetaRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chatHistoryMeta { font-size: 11px; color: var(--muted); }
+.chatStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 96px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chatStatusBadge.running { color: var(--accent); background: var(--accent-soft); }
+.chatStatusBadge.done { color: var(--success); background: rgba(134, 239, 172, 0.12); }
+.chatStatusBadge.error { color: var(--danger); background: rgba(239, 68, 68, 0.12); }
+.chatHistoryRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  position: relative;
+  min-width: 0;
+  transition: all 0.12s ease;
+}
+.chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
+.chatHistoryRow:hover,
+.chatHistoryRow:focus-within {
+  background: var(--panel-soft);
+  border-color: var(--border);
+  color: var(--text);
+}
+.chatHistoryRow.active { background: var(--panel-soft); border-color: var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
+.chatHistoryRow:hover .chatHistoryItem,
+.chatHistoryRow:focus-within .chatHistoryItem,
+.chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
+.chatActionsWrap {
+  flex: 0 0 auto;
+  position: relative;
+  margin-right: 4px;
+}
+.chatMoreBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+.chatHistoryRow:hover .chatMoreBtn,
+.chatHistoryRow:focus-within .chatMoreBtn,
+.chatMoreBtn.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chatMoreBtn:hover,
+.chatMoreBtn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--border);
+}
+.chatActionsMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 132px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+  z-index: 30;
+}
+.chatActionItem {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+.chatActionItem:hover,
+.chatActionItem:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+.chatActionItem.danger {
+  color: #d53f3f;
+}
+.chatActionItem.danger:hover,
+.chatActionItem.danger:focus-visible {
+  color: #e53e3e;
+  background: rgba(229, 62, 62, 0.1);
+}
+
+@media (max-width: 900px) {
+  .chatMoreBtn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .chatHistoryItem {
+    padding: 10px;
+  }
+}

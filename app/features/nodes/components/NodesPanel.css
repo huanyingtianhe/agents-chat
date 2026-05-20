@@ -1,0 +1,140 @@
+/* ── Node avatar status ── */
+.chatPageRoot .nodeAvatar[data-online] {
+  background: var(--avatar-bg, linear-gradient(135deg, var(--accent), var(--accent-2)));
+}
+.chatPageRoot .nodeAvatar:not([data-online]) {
+  background: linear-gradient(135deg, #718096, #4a5568) !important;
+}
+
+/* ── Node action buttons ── */
+.chatPageRoot .nodeRemoveBtn {
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+  opacity: 0;
+}
+.chatPageRoot .nodeActionBtn {
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+  opacity: 0;
+}
+.chatPageRoot .agentListItem:hover .nodeRemoveBtn,
+.chatPageRoot .agentListItem:hover .nodeActionBtn { opacity: 1; }
+.chatPageRoot .nodeRemoveBtn:hover { color: #e53e3e; background: rgba(229, 62, 62, 0.1); }
+.chatPageRoot .nodeActionBtn:hover { color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+
+/* ── Node inline editing ── */
+.chatPageRoot .nodeEditInput {
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 2px 6px;
+  width: 100%;
+  outline: none;
+}
+
+/* ── Add node form ── */
+.chatPageRoot .nodeAddForm {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+.chatPageRoot .nodeAddFormTitle {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.chatPageRoot .nodeAddInput {
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.chatPageRoot .nodeAddInput:focus { border-color: var(--accent); }
+.chatPageRoot .nodeAddActions { display: flex; gap: 6px; margin-top: 4px; }
+.chatPageRoot .nodeAddBtn { font-size: 12px !important; padding: 4px 10px !important; }
+
+/* ── Setup script modal ── */
+.chatPageRoot .setupScriptModal {
+  max-width: 480px;
+}
+.chatPageRoot .setupScriptDesc {
+  font-size: 13px;
+  color: var(--text-soft);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.chatPageRoot .setupScriptSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.chatPageRoot .setupScriptStep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.chatPageRoot .setupScriptStep code {
+  background: var(--panel-soft);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.chatPageRoot .setupStepNum {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.chatPageRoot .setupScriptActions {
+  display: flex;
+  gap: 8px;
+}
+.chatPageRoot .setupScriptNote {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.chatPageRoot .setupScriptNote code {
+  background: var(--panel-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.chatPageRoot .setupDownloadBtn {
+  background: linear-gradient(135deg, var(--accent-soft), var(--accent-strong)) !important;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+}

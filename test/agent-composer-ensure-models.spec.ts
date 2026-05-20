@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectModelOptions, expectModelPickerSelection } from './model-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
@@ -19,11 +20,8 @@ async function login(page: Page) {
 }
 
 async function ensureActiveChat(page: Page) {
-  const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 3000 }).catch(() => false);
-  if (isEmpty) {
-    await page.locator('button.newChatButton, button.emptyHomepageNewChat').first().click();
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
-  }
+  await page.locator('button.newChatButton, button.emptyHomepageNewChat').first().click();
+  await page.waitForSelector('.chatContainer', { timeout: 10000 });
 }
 
 test('composer creates a chat-bound session to populate empty agent models', async ({ page }) => {
@@ -81,7 +79,6 @@ test('composer creates a chat-bound session to populate empty agent models', asy
   await expect.poll(() => ensureRequests.map((request) => `${request.agentId}:${request.chatId}`)).toEqual([`alpha:${seenChatId}`]);
   expect(seenChatId).toMatch(/^chat-/);
 
-  const composerModelSelect = page.locator('[aria-label="Model for alpha"]');
-  await expect(composerModelSelect).toHaveValue('claude-sonnet-4.6');
-  await expect(composerModelSelect.locator('option')).toHaveCount(2);
+  await expectModelPickerSelection(page, 'alpha', 'Claude Sonnet 4.6');
+  await expectModelOptions(page, 'alpha', ['Claude Sonnet 4.6', 'GPT-5.2']);
 });

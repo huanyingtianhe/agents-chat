@@ -1,0 +1,89 @@
+.userSendFailure {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.userSendFailureNotice {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.userSendFailureCard {
+  width: fit-content;
+  max-width: min(100%, 260px);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.userSendFailureStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--danger);
+  letter-spacing: 0;
+  cursor: help;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.userSendFailureStatus::before {
+  content: '⚠';
+  font-size: 12px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.userSendFailureActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-right: 6px;
+}
+
+.userSendFailureButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.userSendFailureButton:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  transform: translateY(-1px);
+}
+
+.userSendFailureButton:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: -2px;
+}
+
+.userSendFailureButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.userSendFailureButton:disabled:hover {
+  background: transparent;
+  transform: none;
+}

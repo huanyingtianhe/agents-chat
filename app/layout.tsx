@@ -1,4 +1,12 @@
 import './globals.css';
+import './features/composer/components/ChatComposer.css';
+import './features/chat/components/FailedSendControls.css';
+import './features/chat/components/ChatSidebarList.css';
+import './features/messages/components/MessageList.css';
+import './features/layout/components/ChatShell.css';
+import './features/agents/components/AgentsPanel.css';
+import './features/nodes/components/NodesPanel.css';
+import './features/files/components/FileWorkspacePanel.css';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import Providers from './providers';

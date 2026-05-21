@@ -5,6 +5,7 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   timeout: 180000,
   retries: 0,
+  workers: 1,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010',
     headless: true,

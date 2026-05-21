@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 
 const setupTemplateModuleUrl = new URL('../lib/setupNodeTemplate.mjs', import.meta.url);
 const routeSource = readFileSync(new URL('../app/api/acp/route.ts', import.meta.url), 'utf8');
+const typesSource = readFileSync(new URL('../lib/acp/types.ts', import.meta.url), 'utf8');
+const runtimeStateSource = readFileSync(new URL('../lib/acp/runtimeState.ts', import.meta.url), 'utf8');
+const routeAndRuntimeSource = `${routeSource}\n${runtimeStateSource}`;
 const setupRouteSource = readFileSync(new URL('../app/api/nodes/setup/route.ts', import.meta.url), 'utf8');
 const setupTemplateSource = existsSync(setupTemplateModuleUrl) ? readFileSync(setupTemplateModuleUrl, 'utf8') : '';
 const setupNodeScriptSource = readFileSync(new URL('../setup-files/setup-node.ps1', import.meta.url), 'utf8');
@@ -28,6 +31,7 @@ const {
   escapePowerShellDoubleQuotedString,
   renderSetupNodeScript,
 } = await import(setupTemplateModuleUrl.href);
+const combinedAcpSource = `${routeSource}\n${typesSource}`;
 const findTurnBySessionIdSource = routeSource.slice(
   routeSource.indexOf('function findTurnBySessionId'),
   routeSource.indexOf('/* ─────────────── ACP Lifecycle ─────────────── */'),
@@ -55,25 +59,25 @@ const warmLocalAgentsActionSource = warmLocalAgentsActionStart >= 0 && warmLocal
 const runtimeActionsStart = routeSource.indexOf('// ─── Agent runtime actions (require agentId + userId) ───');
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /type\s+PendingUserRequest\s*=/,
-  'route.ts should define a serializable PendingUserRequest type',
+  'ACP types should define a serializable PendingUserRequest type',
 );
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /type\s+PendingUserRequestQuestion\s*=/,
-  'route.ts should define structured user request questions',
+  'ACP types should define structured user request questions',
 );
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /questions\??:\s*PendingUserRequestQuestion\[\]/,
   'PendingUserRequest should preserve structured questions from ACP user-input requests',
 );
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /userRequest\??:\s*PendingUserRequest/,
   'TurnState should expose the pending user request through active turn state',
 );
@@ -121,25 +125,25 @@ assert.match(
 );
 
 assert.match(
-  routeSource,
+  routeAndRuntimeSource,
   /type\s+PendingUserRequestResponder\s*=\s*\{[\s\S]*?createdAt:\s*number;[\s\S]*?\};[\s\S]*?const\s+pendingUserRequestGlobal\s*=\s*globalThis\s+as\s+typeof\s+globalThis\s*&\s*\{[\s\S]*?__acpPendingUserRequestResponders\?:\s*Map<string,\s*PendingUserRequestResponder>;[\s\S]*?\};[\s\S]*?function\s+getPendingUserRequestResponders\(\):\s*Map<string,\s*PendingUserRequestResponder>\s*\{[\s\S]*?pendingUserRequestGlobal\.__acpPendingUserRequestResponders\s*=\s*new\s+Map\(\);[\s\S]*?return\s+pendingUserRequestGlobal\.__acpPendingUserRequestResponders;[\s\S]*?\}[\s\S]*?const\s+pendingUserRequestResponders\s*=\s*getPendingUserRequestResponders\(\);/s,
   'route.ts should persist pending user request responders on globalThis across route reloads',
 );
 
 assert.match(
-  routeSource,
+  routeAndRuntimeSource,
   /const\s+PENDING_USER_REQUEST_TIMEOUT_MS\s*=\s*10\s*\*\s*60_000;/,
   'route.ts should bound pending user requests with a timeout constant',
 );
 
 assert.match(
-  routeSource,
+  routeAndRuntimeSource,
   /type\s+PendingUserRequestResponder\s*=\s*\{[\s\S]*?timeout\?:\s*ReturnType<typeof\s+setTimeout>;[\s\S]*?\}/s,
   'PendingUserRequestResponder should track the timeout handle for cleanup',
 );
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /type\s+UserSession\s*=\s*\{[\s\S]*?alwaysAllowedPermissionSessions:\s*Set<string>;/,
   'UserSession should remember ACP sessions where the user selected Always allow',
 );
@@ -553,7 +557,7 @@ assert.match(
 );
 
 assert.match(
-  routeSource,
+  combinedAcpSource,
   /type\s+WarmLocalAgentStatus\s*=\s*[\s\S]*?['"]ready['"][\s\S]*?['"]booting['"][\s\S]*?['"]started['"][\s\S]*?['"]failed['"][\s\S]*?['"]skipped_remote['"]/,
   'route.ts should define explicit warmup status values for local agent warmup summaries',
 );

@@ -1,3 +1,15 @@
 {
-  "agents": []
+  "agents": [
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "command": "npx",
+      "args": ["@agentclientprotocol/claude-agent-acp@latest"],
+      "cwd": "",
+      "yolo": true,
+      "env": {
+        "ANTHROPIC_API_KEY": ""
+      }
+    }
+  ]
 }

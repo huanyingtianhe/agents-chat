@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const routeSource = readFileSync(new URL('../app/api/markdown/route.ts', import.meta.url), 'utf8');
-const uiSource = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+const fileEditorSource = readFileSync(new URL('../app/features/files/components/FileEditorPanel.tsx', import.meta.url), 'utf8');
+const fileWorkspaceStateSource = readFileSync(new URL('../app/features/files/hooks/useFileWorkspaceState.ts', import.meta.url), 'utf8');
+const fileTypesSource = readFileSync(new URL('../app/features/files/fileWorkspaceTypes.ts', import.meta.url), 'utf8');
 
 assert.match(
   routeSource,
@@ -21,11 +23,21 @@ for (const expected of [
   'mdConflictDialog',
   'mdConflictDiffPage',
 ]) {
-  assert.ok(uiSource.includes(expected), `UI should include conflict resolution support: ${expected}`);
+  const source = expected === 'type MdConflictState'
+    ? fileTypesSource
+    : ['keep server', 'keep mine', 'mdConflictDialog', 'mdConflictDiffPage'].includes(expected)
+      ? fileEditorSource
+      : expected === 'saveMdFile(mdConflictResolvedContent, mdConflict.serverMtime)'
+        ? fileWorkspaceStateSource.replace(/\s+/g, '')
+      : fileWorkspaceStateSource;
+  const needle = expected === 'saveMdFile(mdConflictResolvedContent, mdConflict.serverMtime)'
+    ? expected.replace(/\s+/g, '')
+    : expected;
+  assert.ok(source.includes(needle), `UI should include conflict resolution support: ${expected}`);
 }
 
 assert.match(
-  uiSource,
+  fileEditorSource,
   /File changed on disk[\s\S]*Reload[\s\S]*Handle conflict manually/s,
   'Conflict modal should offer Reload and Handle conflict manually choices',
 );

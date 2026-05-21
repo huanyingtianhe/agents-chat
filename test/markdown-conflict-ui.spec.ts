@@ -7,7 +7,7 @@ async function login(page) {
   await page.fill('input[placeholder="Admin username"]', 'admin');
   await page.fill('input[placeholder="Password"]', 'admin123');
   await page.click('button[type="submit"]');
-  await page.waitForSelector('.chatContainer', { timeout: 30000 });
+  await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
 }
 
 test('Files editor shows conflict choices and manual diff resolver', async ({ page }) => {
@@ -59,8 +59,13 @@ test('Files editor shows conflict choices and manual diff resolver', async ({ pa
   });
 
   await login(page);
-  await page.getByRole('button', { name: /Files/ }).click();
+  const filesTab = page.locator('button.leftSidebarTab', { hasText: 'Files' });
+  await expect(async () => {
+    await filesTab.click();
+    await expect(page.locator('select.remoteAgentSelect')).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 10000 });
   await page.locator('select.remoteAgentSelect').selectOption('test-agent');
+  await page.locator('.mdTreeDir', { hasText: 'docs' }).click();
   await page.getByRole('button', { name: /conflict\.md/ }).click();
   await page.getByRole('button', { name: 'Split' }).click();
   await page.locator('textarea.mdEditorTextarea').fill('base line\nmy line\n');
@@ -70,10 +75,11 @@ test('Files editor shows conflict choices and manual diff resolver', async ({ pa
   await expect(page.getByText('Reload will discard your current unsaved changes.')).toBeVisible();
   await page.getByRole('button', { name: 'Handle conflict manually' }).click();
 
-  await expect(page.locator('.mdConflictDiffPage')).toBeVisible();
-  await expect(page.getByText('Server')).toBeVisible();
-  await expect(page.getByText('Mine')).toBeVisible();
-  await expect(page.getByText('server line')).toBeVisible();
-  await expect(page.getByText('my line')).toBeVisible();
+  const conflictPage = page.locator('.mdConflictDiffPage');
+  await expect(conflictPage).toBeVisible();
+  await expect(conflictPage.getByText('Server', { exact: true })).toBeVisible();
+  await expect(conflictPage.getByText('Mine', { exact: true })).toBeVisible();
+  await expect(conflictPage.getByText('server line', { exact: true })).toBeVisible();
+  await expect(conflictPage.getByText('my line', { exact: true })).toBeVisible();
   await expect(page.locator('#md-conflict-resolved')).toHaveValue('base line\nmy line\n');
 });

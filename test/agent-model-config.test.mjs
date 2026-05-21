@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 const configStoreSource = readFileSync(new URL('../lib/configStore.ts', import.meta.url), 'utf8');
 const routeSource = readFileSync(new URL('../app/api/acp/route.ts', import.meta.url), 'utf8');
+const typesSource = readFileSync(new URL('../lib/acp/types.ts', import.meta.url), 'utf8');
+const modelsSource = readFileSync(new URL('../lib/acp/models.ts', import.meta.url), 'utf8');
 
 assert.match(
   configStoreSource,
@@ -83,9 +85,9 @@ assert.match(
 );
 
 assert.match(
-  routeSource,
+  typesSource,
   /type\s+AgentModel\s*=\s*configStore\.AgentModel/,
-  'route AgentConfig should share the persisted AgentModel type',
+  'lib/acp/types.ts should export AgentModel type from configStore',
 );
 
 assert.match(
@@ -113,9 +115,9 @@ assert.match(
 );
 
 assert.match(
-  routeSource,
-  /function\s+syncAgentModelsFromSessionResult\(agentId:\s*string,\s*sessionResult:\s*unknown\)[\s\S]*?availableModels[\s\S]*?configStore\.updateAgent\(agentId, \{[\s\S]*?models[\s\S]*?defaultModelId/s,
-  'session/new responses with models should sync availableModels/currentModelId back to SQLite',
+  modelsSource,
+  /export\s+function\s+syncAgentModelsFromSessionResult\(agentId:\s*string,\s*sessionResult:\s*unknown\)[\s\S]*?availableModels[\s\S]*?configStore\.updateAgent\(agentId, \{[\s\S]*?models[\s\S]*?defaultModelId/s,
+  'lib/acp/models.ts should export syncAgentModelsFromSessionResult to sync availableModels/currentModelId back to SQLite',
 );
 
 assert.match(

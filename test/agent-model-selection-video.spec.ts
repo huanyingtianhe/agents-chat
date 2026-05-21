@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectModelPickerSelection, getModelPickerButton, selectModelOption } from './model-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const SCHEDULER_AGENT_ID = 'scheduler';
@@ -124,12 +125,12 @@ test('records selecting per-agent ACP models and sending selected modelId', asyn
   await textarea.fill('@alpha compare models for this task');
   await expect(page.locator('[data-testid="agent-model-select"]')).toHaveCount(1);
 
-  const alphaSelect = page.locator('[aria-label="Model for alpha"]');
-  await expect(alphaSelect).toHaveValue('claude-sonnet-4.6');
+  const alphaSelect = getModelPickerButton(page, 'alpha');
+  await expectModelPickerSelection(page, 'alpha', 'Claude Sonnet 4.6');
   const longModelWidth = await alphaSelect.evaluate((node) => node.getBoundingClientRect().width);
 
-  await alphaSelect.selectOption('gpt-5.2');
-  await expect(alphaSelect).toHaveValue('gpt-5.2');
+  await selectModelOption(page, 'alpha', 'GPT-5.2');
+  await expectModelPickerSelection(page, 'alpha', 'GPT-5.2');
   await expect.poll(async () => alphaSelect.evaluate((node) => node.getBoundingClientRect().width)).toBeLessThan(longModelWidth - 20);
   await page.waitForTimeout(700);
 

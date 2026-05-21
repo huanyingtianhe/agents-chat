@@ -8,7 +8,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { createFileComment, deleteFileComment, updateFileCommentStatus } from '../lib/chatStore';
 
-const BASE = process.env.PLAYWRIGHT_BASE_URL || 'https://localhost:3010';
+const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'admin123';
 
@@ -832,7 +832,7 @@ test.describe('File Comments UI', () => {
     await page.click('button.leftSidebarTab:has-text("Files")');
     await page.selectOption('.remoteAgentSelect', agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
-    await expect(page.locator('.mdModeBtn', { hasText: 'Review' })).toHaveCount(0);
+    await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     const commentToggle = page.locator('.mdEditorToolbar button[title="Toggle comments"]');
     if (!(await page.locator('.commentSidebar').isVisible().catch(() => false))) {
       await commentToggle.click();
@@ -2213,7 +2213,11 @@ test.describe('File Comments UI', () => {
       return Math.abs(markerBox.y - currentAlphaBox.y);
     }).toBeLessThan(20);
 
-    await page.locator('.commentCard', { hasText: 'Comment on selected word' }).click();
+    const createdCommentCard = page.locator('.commentCard', { hasText: 'Comment on selected word' });
+    if (!(await createdCommentCard.evaluate((node) => node.classList.contains('selected')))) {
+      await createdCommentCard.click();
+    }
+    await expect(createdCommentCard).toHaveClass(/selected/);
     await expect.poll(async () => {
       const highlightBox = await page.locator('.liveSelectionDraftHighlight').first().boundingBox();
       const omegaBox = await page.evaluate(() => {
@@ -2464,7 +2468,7 @@ test.describe('File Comments UI', () => {
     await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
     await expect(page.locator('.remoteAgentSelect')).toHaveValue('restore-agent');
     await expect(page.locator('.mdEditorFilePath')).toContainText('restore.md');
-    await expect(page.locator('.mdModeBtn', { hasText: 'Review' })).toHaveCount(0);
+    await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     await expect(page.locator('.mdModeBtn.active')).toHaveText('Live Edit');
     await expect(page.locator('.mdEditorLive')).toBeVisible();
   });
@@ -2609,7 +2613,7 @@ test.describe('File Comments UI', () => {
     await page.selectOption('.remoteAgentSelect', 'html-mode-agent');
     await page.locator('.mdTreeFile', { hasText: 'preview-only.html' }).click();
 
-    await expect(page.locator('.mdModeBtn', { hasText: 'Review' })).toHaveCount(0);
+    await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     await expect(page.locator('.mdModeBtn.active')).toHaveText('Preview');
     await expect(page.locator('.mdHtmlPreviewFrame')).toBeVisible();
   });
@@ -2685,8 +2689,6 @@ test.describe('File Comments UI', () => {
     });
 
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
-
     await expect(page.locator('.mdEditorFilePath')).toContainText('switch.md');
     await page.click('button.leftSidebarTab:has-text("Chats")');
     await page.click('button.chatHistoryItem:has-text("Switch Back Chat")');

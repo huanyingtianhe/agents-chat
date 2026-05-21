@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
@@ -8,9 +8,21 @@ import { getToken } from 'next-auth/jwt';
 import { updateChatAgentSession, getChat, saveChat, StoredMessage } from '@/lib/chatStore';
 import { isAdminToken, getUserEmail, canModify, canTalkTo, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
+import type { AcpPromptPart, AgentConfig, AgentModel, AgentProcess, PromptAttachment, StoredContentPart, TurnEvent, TurnPhase, TurnState, UserSession, WarmLocalAgentResult } from '@/lib/acp/types';
+import { AttachmentValidationError, buildPromptParts, normalizePromptAttachments } from '@/lib/acp/attachments';
+import { createNdjsonRpc, createRelayNdjsonRpc } from '@/lib/acp/rpc';
+import { getTerminals, handleTerminalCreate, handleTerminalKill, handleTerminalOutput, handleTerminalRelease, handleTerminalWaitForExit } from '@/lib/acp/terminalTools';
+import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
+import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
+import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+function ts(): string {
+  return new Date().toISOString().slice(11, 23);
+}
+const log = (...args: unknown[]) => console.log(`[${ts()}]`, ...args);
 
 /**
  * ACP (Agent Client Protocol) backend for multiple ACP agents.
@@ -21,770 +33,15 @@ export const runtime = 'nodejs';
 
 /* ─────────────────────── Types ─────────────────────── */
 
-type TurnPhase = 'booting' | 'thinking' | 'tool_exec' | 'replying' | 'done';
+type PendingUserRequestOption = import('@/lib/acp/types').PendingUserRequestOption;
+type PendingUserRequestQuestion = import('@/lib/acp/types').PendingUserRequestQuestion;
+type PendingUserRequestAnswer = import('@/lib/acp/types').PendingUserRequestAnswer;
+type PendingUserRequest = import('@/lib/acp/types').PendingUserRequest;
+type NdjsonRpc = import('@/lib/acp/types').NdjsonRpc;
 
-type TurnEvent = {
-  type: 'thinking' | 'tool_start' | 'tool_complete' | 'text_chunk' | 'user_response';
-  ts: number;
-  toolName?: string;
-  toolCallId?: string;
-  toolArgs?: string;
-  toolResult?: string;
-  text?: string;
-};
-
-type PendingUserRequestOption = {
-  optionId: string;
-  kind?: string;
-  label: string;
-  description?: string;
-  recommended?: boolean;
-};
-
-type PendingUserRequestQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  message?: string;
-  inputKind: 'options' | 'text';
-  multiSelect?: boolean;
-  allowFreeformInput?: boolean;
-  options: PendingUserRequestOption[];
-};
-
-type PendingUserRequestAnswer = {
-  selected: string[];
-  freeText: string | null;
-  skipped: boolean;
-};
-
-type PendingUserRequest = {
-  id: string;
-  method: string;
-  agentId: string;
-  chatId?: string;
-  sessionId?: string;
-  title: string;
-  prompt: string;
-  inputKind: 'options' | 'text';
-  options: PendingUserRequestOption[];
-  questions?: PendingUserRequestQuestion[];
-  createdAt: number;
-};
-
-type TurnState = {
-  id: string;
-  messageId: string;
-  agentId: string;
-  userId: string;
-  chatId?: string;
-  sessionId?: string;
-  prompt: string;
-  startedAt: number;
-  fullText: string;
-  done: boolean;
-  phase: TurnPhase;
-  statusText: string;
-  error?: string;
-  events: TurnEvent[];
-  userRequest?: PendingUserRequest;
-  syntheticQuestionParseOffset?: number;
-  lastPersistedAt: number;
-  persistTimer?: ReturnType<typeof setTimeout>;
-};
-
-type PendingUserRequestResponder = {
-  rpc: NdjsonRpc;
-  rpcRequestId: number | string;
-  agentId: string;
-  turn: TurnState;
-  request: PendingUserRequest;
-  method: string;
-  createdAt: number;
-  timeout?: ReturnType<typeof setTimeout>;
-};
-
-type StoredContentPart =
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool'; toolName: string; args?: string; result?: string; done: boolean }
-  | { kind: 'user_answer'; text: string }
-  | { kind: 'text'; text: string };
-
-const MAX_ATTACHMENTS = 8;
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-
-type PromptAttachment = {
-  id?: string;
-  name: string;
-  mimeType: string;
-  size: number;
-  dataUrl: string;
-  kind?: 'image' | 'file';
-};
-
-type AcpPromptPart =
-  | { type: 'text'; text: string }
-  | { type: 'image'; mimeType: string; data: string; name?: string };
-
-const MAX_INLINE_ATTACHMENT_CHARS = 120_000;
-
-class AttachmentValidationError extends Error {
-  status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.name = 'AttachmentValidationError';
-    this.status = status;
-  }
-}
-
-function formatAttachmentBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${value >= 10 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function isAllowedAttachmentMimeType(mimeType: string): boolean {
-  const allowedAttachmentMimeTypes = new Set([
-    'application/pdf',
-    'application/json',
-    'application/x-pem-file',
-    'application/x-yaml',
-    'application/javascript',
-    'application/typescript',
-  ]);
-  return mimeType.startsWith('image/') || mimeType.startsWith('text/') || allowedAttachmentMimeTypes.has(mimeType);
-}
-
-const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
-  bash: 'text/x-shellscript',
-  bat: 'text/x-bat',
-  c: 'text/x-c',
-  cc: 'text/x-c++',
-  cer: 'application/x-pem-file',
-  cfg: 'text/plain',
-  clj: 'text/x-clojure',
-  cljs: 'text/x-clojure',
-  cmake: 'text/x-cmake',
-  cmd: 'text/x-bat',
-  conf: 'text/plain',
-  cpp: 'text/x-c++',
-  crt: 'application/x-pem-file',
-  cshtml: 'text/html',
-  csproj: 'text/xml',
-  cs: 'text/x-csharp',
-  css: 'text/css',
-  csv: 'text/csv',
-  cjs: 'text/javascript',
-  cts: 'text/typescript',
-  cxx: 'text/x-c++',
-  dart: 'text/x-dart',
-  diff: 'text/x-diff',
-  dockerfile: 'text/x-dockerfile',
-  editorconfig: 'text/plain',
-  env: 'text/plain',
-  erl: 'text/x-erlang',
-  ex: 'text/x-elixir',
-  exs: 'text/x-elixir',
-  fish: 'text/x-shellscript',
-  fs: 'text/x-fsharp',
-  fsproj: 'text/xml',
-  fsi: 'text/x-fsharp',
-  fsx: 'text/x-fsharp',
-  gitignore: 'text/plain',
-  go: 'text/x-go',
-  gql: 'text/graphql',
-  gradle: 'text/x-gradle',
-  graphql: 'text/graphql',
-  h: 'text/x-c',
-  hpp: 'text/x-c++',
-  hrl: 'text/x-erlang',
-  htm: 'text/html',
-  html: 'text/html',
-  hxx: 'text/x-c++',
-  ini: 'text/plain',
-  java: 'text/x-java-source',
-  jpeg: 'image/jpeg',
-  jpg: 'image/jpeg',
-  js: 'text/javascript',
-  json: 'application/json',
-  jsx: 'text/javascript',
-  key: 'application/x-pem-file',
-  kt: 'text/x-kotlin',
-  kts: 'text/x-kotlin',
-  less: 'text/css',
-  lock: 'text/plain',
-  log: 'text/plain',
-  lua: 'text/x-lua',
-  m: 'text/x-objective-c',
-  md: 'text/markdown',
-  mm: 'text/x-objective-c++',
-  mjs: 'text/javascript',
-  mts: 'text/typescript',
-  patch: 'text/x-diff',
-  pem: 'application/x-pem-file',
-  php: 'text/x-php',
-  pl: 'text/x-perl',
-  pm: 'text/x-perl',
-  pdf: 'application/pdf',
-  png: 'image/png',
-  props: 'text/xml',
-  properties: 'text/plain',
-  proto: 'text/x-protobuf',
-  ps1: 'text/x-powershell',
-  psd1: 'text/x-powershell',
-  psm1: 'text/x-powershell',
-  pub: 'application/x-pem-file',
-  py: 'text/x-python',
-  r: 'text/x-r',
-  razor: 'text/html',
-  rb: 'text/x-ruby',
-  rs: 'text/x-rustsrc',
-  sass: 'text/css',
-  scala: 'text/x-scala',
-  scss: 'text/css',
-  sh: 'text/x-shellscript',
-  sln: 'text/plain',
-  sql: 'text/x-sql',
-  svelte: 'text/html',
-  svg: 'image/svg+xml',
-  swift: 'text/x-swift',
-  targets: 'text/xml',
-  toml: 'text/toml',
-  ts: 'text/typescript',
-  tsbuildinfo: 'application/json',
-  tsx: 'text/typescript',
-  txt: 'text/plain',
-  vb: 'text/x-vb',
-  vbproj: 'text/xml',
-  vue: 'text/html',
-  xaml: 'text/xml',
-  xml: 'text/xml',
-  yaml: 'text/yaml',
-  yml: 'text/yaml',
-  zsh: 'text/x-shellscript',
-};
-
-const ATTACHMENT_MIME_BY_BASENAME: Record<string, string> = {
-  '.babelrc': 'application/json',
-  '.dockerignore': 'text/plain',
-  '.editorconfig': 'text/plain',
-  '.env': 'text/plain',
-  '.env.development': 'text/plain',
-  '.env.example': 'text/plain',
-  '.env.local': 'text/plain',
-  '.env.production': 'text/plain',
-  '.env.test': 'text/plain',
-  '.eslintignore': 'text/plain',
-  '.eslintrc': 'application/json',
-  '.gitattributes': 'text/plain',
-  '.gitignore': 'text/plain',
-  '.npmrc': 'text/plain',
-  '.prettierignore': 'text/plain',
-  '.prettierrc': 'application/json',
-  '.yarnrc': 'text/plain',
-  dockerfile: 'text/x-dockerfile',
-  gemfile: 'text/x-ruby',
-  justfile: 'text/plain',
-  makefile: 'text/x-makefile',
-  procfile: 'text/plain',
-  rakefile: 'text/x-ruby',
-};
-
-function getAttachmentFileKey(name: string): string {
-  return name.trim().split(/[\\/]/).pop()?.toLowerCase() || '';
-}
-
-function inferAttachmentMimeType(name: string, mimeType: string): string {
-  const normalized = mimeType.trim().toLowerCase();
-  if (normalized && normalized !== 'application/octet-stream') return normalized;
-  const fileKey = getAttachmentFileKey(name);
-  const exact = ATTACHMENT_MIME_BY_BASENAME[fileKey] || ATTACHMENT_MIME_BY_EXTENSION[fileKey];
-  if (exact) return exact;
-  const extension = fileKey.includes('.') ? fileKey.split('.').pop()?.trim().toLowerCase() : '';
-  return (extension && ATTACHMENT_MIME_BY_EXTENSION[extension]) || normalized || 'application/octet-stream';
-}
-
-function rewriteDataUrlMimeType(dataUrl: string, mimeType: string): string {
-  return dataUrl.replace(/^data:[^;,]*;base64,/, `data:${mimeType};base64,`);
-}
-
-function splitDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
-  const match = /^data:([^;,]*);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(dataUrl);
-  if (!match) return null;
-  return { mimeType: match[1], data: match[2].replace(/[\r\n]/g, '') };
-}
-
-function normalizePromptAttachments(raw: unknown): PromptAttachment[] {
-  if (raw == null) return [];
-  if (!Array.isArray(raw)) throw new AttachmentValidationError('invalid_attachments');
-  if (raw.length > MAX_ATTACHMENTS) throw new AttachmentValidationError('too_many_attachments');
-
-  let totalSize = 0;
-  return raw.map((item) => {
-    if (!item || typeof item !== 'object') throw new AttachmentValidationError('invalid_attachments');
-    const value = item as Record<string, unknown>;
-    const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim().slice(0, 255) : '';
-    const rawMimeType = typeof value.mimeType === 'string' && value.mimeType.trim() ? value.mimeType.trim().slice(0, 120) : 'application/octet-stream';
-    const mimeType = inferAttachmentMimeType(name, rawMimeType);
-    const size = typeof value.size === 'number' ? value.size : Number(value.size);
-    const dataUrl = typeof value.dataUrl === 'string' ? value.dataUrl : '';
-    if (!name || !Number.isFinite(size) || size < 0 || !dataUrl) throw new AttachmentValidationError('invalid_attachments');
-    if (size > MAX_ATTACHMENT_BYTES) throw new AttachmentValidationError('attachment_too_large');
-    totalSize += size;
-    if (totalSize > MAX_TOTAL_ATTACHMENT_BYTES) throw new AttachmentValidationError('attachments_too_large');
-    const parsed = splitDataUrl(dataUrl);
-    const parsedMimeType = parsed ? inferAttachmentMimeType(name, parsed.mimeType) : '';
-    if (!parsed || parsedMimeType !== mimeType || !isAllowedAttachmentMimeType(mimeType)) throw new AttachmentValidationError('invalid_attachments');
-    const decodedBytes = Buffer.byteLength(parsed.data, 'base64');
-    if (decodedBytes > MAX_ATTACHMENT_BYTES || Math.abs(decodedBytes - size) > Math.max(8, Math.ceil(size * 0.05))) {
-      throw new AttachmentValidationError('invalid_attachments');
-    }
-    const kind = value.kind === 'image' || mimeType.startsWith('image/') ? 'image' : 'file';
-    return {
-      id: typeof value.id === 'string' ? value.id : undefined,
-      name,
-      mimeType,
-      size,
-      dataUrl: parsed.mimeType === mimeType ? dataUrl : rewriteDataUrlMimeType(dataUrl, mimeType),
-      kind,
-    };
-  });
-}
-
-function buildAttachmentSummary(attachments: PromptAttachment[]): string {
-  if (attachments.length === 0) return '';
-  return attachments.map((a) => `- ${a.name} (${a.mimeType}, ${formatAttachmentBytes(a.size)})`).join('\n');
-}
-
-function isInlineTextAttachmentMimeType(mimeType: string): boolean {
-  return mimeType.startsWith('text/') || [
-    'application/json',
-    'application/javascript',
-    'application/typescript',
-    'application/x-yaml',
-  ].includes(mimeType);
-}
-
-function buildAttachmentTextBlocks(attachments: PromptAttachment[]): string {
-  const blocks: string[] = [];
-  for (const attachment of attachments) {
-    if (attachment.kind === 'image' || attachment.mimeType.startsWith('image/')) continue;
-    if (!isInlineTextAttachmentMimeType(attachment.mimeType)) continue;
-    const parsed = splitDataUrl(attachment.dataUrl);
-    if (!parsed) continue;
-    const text = Buffer.from(parsed.data, 'base64').toString('utf8');
-    const clipped = text.length > MAX_INLINE_ATTACHMENT_CHARS
-      ? `${text.slice(0, MAX_INLINE_ATTACHMENT_CHARS)}\n\n[Attachment truncated after ${MAX_INLINE_ATTACHMENT_CHARS} characters]`
-      : text;
-    blocks.push(`File: ${attachment.name} (${attachment.mimeType})\n\`\`\`\n${clipped}\n\`\`\``);
-  }
-  return blocks.length ? `Attached file content:\n\n${blocks.join('\n\n')}` : '';
-}
-
-function buildPromptParts(text: string, attachments: PromptAttachment[] = []): AcpPromptPart[] {
-  const parts: AcpPromptPart[] = [];
-  const trimmedText = text.trim();
-  const summary = buildAttachmentSummary(attachments);
-  const textBlocks = buildAttachmentTextBlocks(attachments);
-  const textPart = [
-    trimmedText,
-    summary ? `Attached file(s):\n${summary}` : '',
-    textBlocks,
-  ].filter(Boolean).join('\n\n') || 'Please review the attached file(s).';
-  parts.push({ type: 'text', text: textPart });
-  for (const attachment of attachments) {
-    const parsed = splitDataUrl(attachment.dataUrl);
-    if (!parsed) continue;
-    if ((attachment.kind || (attachment.mimeType.startsWith('image/') ? 'image' : 'file')) === 'image') {
-      parts.push({ type: 'image', mimeType: attachment.mimeType, data: parsed.data, name: attachment.name });
-    }
-  }
-  return parts;
-}
-
-type AgentModel = configStore.AgentModel;
-
-type AgentConfig = {
-  id: string;
-  name: string;
-  command: string;
-  args?: string[];
-  cwd: string;
-  yolo: boolean;
-  noTools?: boolean;
-  relay?: boolean;
-  relayConnectionName?: string;
-  models?: AgentModel[];
-  defaultModelId?: string;
-};
-
-const pendingUserRequestGlobal = globalThis as typeof globalThis & {
-  __acpPendingUserRequestResponders?: Map<string, PendingUserRequestResponder>;
-};
-
-function getPendingUserRequestResponders(): Map<string, PendingUserRequestResponder> {
-  if (!pendingUserRequestGlobal.__acpPendingUserRequestResponders) {
-    pendingUserRequestGlobal.__acpPendingUserRequestResponders = new Map();
-  }
-  return pendingUserRequestGlobal.__acpPendingUserRequestResponders;
-}
-
-const pendingUserRequestResponders = getPendingUserRequestResponders();
+// Eagerly initialize the pending user request responders map.
+void getPendingUserRequestResponders();
 const SYNTHETIC_USER_REQUEST_METHOD = 'client/text_question';
-
-/* ─────────── Minimal NDJSON-RPC over raw Node streams ─────────── */
-
-type PendingRequest = {
-  resolve: (result: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
-  reject: (err: Error) => void;
-};
-
-type NdjsonRpc = {
-  kind: 'local' | 'relay';
-  send: (method: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  respond: (id: number | string, result: Record<string, unknown>) => void;
-  /** Write a raw NDJSON line (for fallback cancel). */
-  writeRaw: (line: string) => void;
-  onNotification: ((method: string, params: any) => void) | null; // eslint-disable-line @typescript-eslint/no-explicit-any
-  onRequest: ((method: string, params: any, id: number | string) => void) | null; // eslint-disable-line @typescript-eslint/no-explicit-any
-  onClose: ((reason: string) => void) | null;
-  destroy: () => void;
-};
-
-function createNdjsonRpc(cp: ChildProcess): NdjsonRpc {
-  let nextId = 0;
-  const pending = new Map<number, PendingRequest>();
-  let buf = '';
-
-  const rpc: NdjsonRpc = {
-    kind: 'local',
-    onNotification: null,
-    onRequest: null,
-    onClose: null,
-
-    send(method, params, timeoutMs?: number) {
-      const id = ++nextId;
-      const msg = JSON.stringify({ jsonrpc: '2.0', method, id, params }) + '\n';
-      console.log(`[ACP] → ${method} (id=${id})`);
-      cp.stdin!.write(msg);
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        const ms = timeoutMs ?? (method === 'session/prompt' ? 0 : 120_000);
-        if (ms > 0) {
-          setTimeout(() => {
-            if (pending.has(id)) {
-              pending.delete(id);
-              reject(new Error(`ACP timeout: ${method}`));
-            }
-          }, ms);
-        }
-      });
-    },
-
-    respond(id, result) {
-      const msg = JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n';
-      cp.stdin!.write(msg);
-    },
-
-    writeRaw(line: string) {
-      cp.stdin!.write(line + '\n');
-    },
-
-    destroy() {
-      for (const p of pending.values()) p.reject(new Error('ACP destroyed'));
-      pending.clear();
-      try { cp.kill(); } catch { /* ignore */ }
-    },
-  };
-
-  cp.stdout!.on('data', (chunk: Buffer) => {
-    buf += chunk.toString();
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      // Force a flat string copy to avoid V8 SlicedString retaining the original large buf
-      if (buf.length > 0) buf = (' ' + buf).slice(1);
-      if (!line) continue;
-      try {
-        const msg = JSON.parse(line);
-        if ('method' in msg && 'id' in msg && msg.id != null) {
-          rpc.onRequest?.(msg.method, msg.params, msg.id);
-        } else if ('method' in msg) {
-          rpc.onNotification?.(msg.method, msg.params);
-        } else if ('id' in msg) {
-          const p = pending.get(msg.id);
-          if (p) {
-            pending.delete(msg.id);
-            if (msg.error) {
-              p.reject(new Error(JSON.stringify(msg.error)));
-            } else {
-              p.resolve(msg.result);
-            }
-          }
-        }
-      } catch { /* skip malformed lines */ }
-    }
-  });
-
-  return rpc;
-}
-
-/* ─────────────── Relay NDJSON-RPC (Azure Relay WebSocket) ─────────────── */
-
-const RELAY_SEND_CONNECTION_STRING = process.env.RELAY_SEND_CONNECTION_STRING || '';
-
-function createRelayNdjsonRpc(connectionName: string): Promise<NdjsonRpc> {
-  // Dynamic import to keep hyco-ws out of client bundles
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const HycoWebSocket = require('hyco-ws');
-
-  const ns = RELAY_SEND_CONNECTION_STRING.match(/Endpoint=sb:\/\/([^/;]+)/)?.[1];
-  const keyName = RELAY_SEND_CONNECTION_STRING.match(/SharedAccessKeyName=([^;]+)/)?.[1];
-  const key = RELAY_SEND_CONNECTION_STRING.match(/SharedAccessKey=([^;]+)/)?.[1];
-  if (!ns || !keyName || !key) throw new Error('Invalid RELAY_SEND_CONNECTION_STRING');
-
-  const uri = HycoWebSocket.createRelaySendUri(ns, connectionName);
-  const token = HycoWebSocket.createRelayToken(uri, keyName, key);
-
-  return new Promise((resolveRpc, rejectRpc) => {
-    let nextId = 0;
-    const pending = new Map<number, PendingRequest>();
-    let buf = '';
-    let connected = false;
-
-    const ws = HycoWebSocket.relayedConnect(uri, token);
-
-    function processBuffer() {
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (buf.length > 0) buf = (' ' + buf).slice(1);
-        if (!line) continue;
-        try {
-          const msg = JSON.parse(line);
-          if ('method' in msg && 'id' in msg && msg.id != null) {
-            rpc.onRequest?.(msg.method, msg.params, msg.id);
-          } else if ('method' in msg) {
-            rpc.onNotification?.(msg.method, msg.params);
-          } else if ('id' in msg) {
-            const p = pending.get(msg.id);
-            if (p) {
-              pending.delete(msg.id);
-              if (msg.error) {
-                p.reject(new Error(JSON.stringify(msg.error)));
-              } else {
-                p.resolve(msg.result);
-              }
-            }
-          }
-        } catch { /* skip malformed lines */ }
-      }
-    }
-
-    const rpc: NdjsonRpc = {
-      kind: 'relay',
-      onNotification: null,
-      onRequest: null,
-      onClose: null,
-
-      send(method, params, timeoutMs?: number) {
-        const id = ++nextId;
-        const msg = JSON.stringify({ jsonrpc: '2.0', method, id, params }) + '\n';
-        console.log(`[ACP-RELAY] → ${method} (id=${id})`);
-        ws.send(msg);
-        return new Promise((resolve, reject) => {
-          pending.set(id, { resolve, reject });
-          const ms = timeoutMs ?? (method === 'session/prompt' ? 0 : 120_000);
-          if (ms > 0) {
-            setTimeout(() => {
-              if (pending.has(id)) {
-                pending.delete(id);
-                reject(new Error(`ACP relay timeout: ${method}`));
-              }
-            }, ms);
-          }
-        });
-      },
-
-      respond(id, result) {
-        const msg = JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n';
-        ws.send(msg);
-      },
-
-      writeRaw(line: string) {
-        ws.send(line + '\n');
-      },
-
-      destroy() {
-        for (const p of pending.values()) p.reject(new Error('ACP relay destroyed'));
-        pending.clear();
-        try { ws.close(); } catch { /* ignore */ }
-      },
-    };
-
-    ws.on('open', () => {
-      connected = true;
-      console.log(`[ACP-RELAY] Connected to ${connectionName}`);
-      resolveRpc(rpc);
-    });
-
-    ws.on('message', (data: Buffer | string) => {
-      buf += data.toString();
-      processBuffer();
-    });
-
-    ws.on('close', () => {
-      console.log(`[ACP-RELAY] Connection closed: ${connectionName}`);
-      for (const p of pending.values()) p.reject(new Error('Relay connection closed'));
-      pending.clear();
-      rpc.onClose?.('connection closed');
-    });
-
-    ws.on('error', (err: Error) => {
-      console.error(`[ACP-RELAY] Error: ${err.message}`);
-      if (!connected) {
-        rejectRpc(err);
-      }
-      for (const p of pending.values()) p.reject(new Error(`Relay error: ${err.message}`));
-      pending.clear();
-      rpc.onClose?.(`error: ${err.message}`);
-    });
-  });
-}
-
-/* ─────────────── Terminal Management ─────────────── */
-
-type ManagedTerminal = {
-  cp: ChildProcess;
-  output: string;
-  exitCode: number | null;
-  signal: string | null;
-  done: boolean;
-  waiters: Array<(info: { exitCode: number | null; signal: string | null }) => void>;
-};
-
-const globalTerminals = globalThis as typeof globalThis & {
-  __acpTerminals?: Map<string, ManagedTerminal>;
-  __acpNextTermId?: number;
-};
-
-function getTerminals(): Map<string, ManagedTerminal> {
-  if (!globalTerminals.__acpTerminals) {
-    globalTerminals.__acpTerminals = new Map();
-  }
-  return globalTerminals.__acpTerminals;
-}
-
-function handleTerminalCreate(params: Record<string, unknown>, cwd: string): { terminalId: string } {
-  const id = `term-${(globalTerminals.__acpNextTermId = (globalTerminals.__acpNextTermId ?? 0) + 1)}`;
-  const command = String(params.command ?? (process.platform === 'win32' ? 'cmd' : 'bash'));
-  const args = (params.args as string[] | undefined) ?? [];
-  const termCwd = String(params.cwd ?? cwd ?? process.cwd());
-  console.log(`[ACP-TERM] create ${id}: ${command} ${args.join(' ')} (cwd: ${termCwd})`);
-
-  const cp = spawn(command, args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: termCwd,
-    env: process.env,
-    windowsHide: true,
-    shell: true,
-  });
-
-  const terminal: ManagedTerminal = { cp, output: '', exitCode: null, signal: null, done: false, waiters: [] };
-
-  const MAX_TERM_OUTPUT = 100_000; // 100KB cap per terminal
-  cp.stdout?.on('data', (chunk: Buffer) => {
-    terminal.output += chunk.toString();
-    if (terminal.output.length > MAX_TERM_OUTPUT) terminal.output = terminal.output.slice(-MAX_TERM_OUTPUT);
-  });
-  cp.stderr?.on('data', (chunk: Buffer) => {
-    terminal.output += chunk.toString();
-    if (terminal.output.length > MAX_TERM_OUTPUT) terminal.output = terminal.output.slice(-MAX_TERM_OUTPUT);
-  });
-  cp.on('exit', (code, signal) => {
-    terminal.exitCode = code;
-    terminal.signal = signal;
-    terminal.done = true;
-    for (const w of terminal.waiters) w({ exitCode: code, signal });
-    terminal.waiters = [];
-    console.log(`[ACP-TERM] ${id} exited (code=${code})`);
-    // Auto-cleanup finished terminal after 5 min to prevent memory leak
-    setTimeout(() => { getTerminals().delete(id); }, 5 * 60_000);
-  });
-  cp.on('error', (err) => {
-    console.error(`[ACP-TERM] ${id} spawn error:`, err.message);
-    terminal.done = true;
-    terminal.exitCode = -1;
-    for (const w of terminal.waiters) w({ exitCode: -1, signal: null });
-    terminal.waiters = [];
-  });
-
-  getTerminals().set(id, terminal);
-  return { terminalId: id };
-}
-
-function handleTerminalOutput(params: Record<string, unknown>): { output: string; done: boolean; exitCode: number | null } {
-  const id = String(params.terminalId ?? '');
-  const terminal = getTerminals().get(id);
-  if (!terminal) return { output: '', done: true, exitCode: -1 };
-  const out = terminal.output;
-  terminal.output = '';
-  return { output: out, done: terminal.done, exitCode: terminal.exitCode };
-}
-
-async function handleTerminalWaitForExit(params: Record<string, unknown>): Promise<{ exitCode: number | null; signal: string | null }> {
-  const id = String(params.terminalId ?? '');
-  const terminal = getTerminals().get(id);
-  if (!terminal) return { exitCode: -1, signal: null };
-  if (terminal.done) return { exitCode: terminal.exitCode, signal: terminal.signal };
-  return new Promise((resolve) => { terminal.waiters.push(resolve); });
-}
-
-function handleTerminalRelease(params: Record<string, unknown>): Record<string, unknown> {
-  const id = String(params.terminalId ?? '');
-  getTerminals().delete(id);
-  return {};
-}
-
-function handleTerminalKill(params: Record<string, unknown>): Record<string, unknown> {
-  const id = String(params.terminalId ?? '');
-  const terminal = getTerminals().get(id);
-  if (terminal && !terminal.done) {
-    try { terminal.cp.kill(); } catch { /* ignore */ }
-  }
-  return {};
-}
-
-/* ─────────────── File System Handlers ─────────────── */
-
-async function handleReadTextFile(params: Record<string, unknown>): Promise<{ content: string }> {
-  const filePath = String(params.path ?? '');
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    return { content };
-  } catch {
-    return { content: '' };
-  }
-}
-
-async function handleWriteTextFile(params: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const filePath = String(params.path ?? '');
-  const content = String(params.content ?? '');
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, 'utf-8');
-  } catch { /* ignore */ }
-  return {};
-}
 
 /* ─────────────── agents.json Config (now backed by SQLite via configStore) ─────────────── */
 
@@ -819,35 +76,11 @@ function getAgentById(agentId: string): AgentConfig | null {
     relayConnectionName: a.relayConnectionName,
     models: a.models,
     defaultModelId: a.defaultModelId,
+    env: JSON.stringify(a.env || {}),
   };
 }
 
 /* ─────────────── Per-Agent ACP State (Multi-User) ─────────────── */
-
-// Shared per-agent: the process, RPC, and boot state
-type AgentProcess = {
-  rpc: NdjsonRpc | null;
-  ready: boolean;
-  booting: boolean;
-  error: string | null;
-  config: AgentConfig;
-  cachedCwd: string;
-  supportsLoadSession: boolean;
-  knownSessions: Set<string>; // sessions active in agent memory (no need to session/load)
-};
-
-// Per-user per-agent: isolated session and turn state
-type UserSession = {
-  sessionId: string | null;
-  /** Map of chatId → list of sessionIds (append-only). Last element is the current session. */
-  chatSessions: Map<string, string[]>;
-  /** Map of chatId → active turn for that chat. Allows concurrent turns across different chats. */
-  activeTurns: Map<string, TurnState>;
-  alwaysAllowedPermissionSessions: Set<string>;
-  phase: 'idle' | 'busy' | 'booting';
-  turnCount: number;
-  lastActive: number;
-};
 
 /** Append a sessionId to a chat's session list (skip if already the last entry). */
 function pushChatSession(sess: UserSession, chatId: string, sessionId: string): void {
@@ -865,101 +98,9 @@ function getChatSession(sess: UserSession, chatId: string): string | null {
   return list && list.length > 0 ? list[list.length - 1] : null;
 }
 
-const globalStore = globalThis as typeof globalThis & {
-  __acpAgents?: Map<string, AgentProcess>;
-  __acpUserSessions?: Map<string, UserSession>;
-  __acpBootPromises?: Map<string, Promise<void>>;
-  /** Collects replayed messages during session/load (keyed by sessionId) */
-  __acpReplayBuffers?: Map<string, { role: 'user' | 'agent'; text: string }[]>;
-};
-
-function getAgentProcesses(): Map<string, AgentProcess> {
-  if (!globalStore.__acpAgents) globalStore.__acpAgents = new Map();
-  return globalStore.__acpAgents;
-}
-
-function getUserSessions(): Map<string, UserSession> {
-  if (!globalStore.__acpUserSessions) globalStore.__acpUserSessions = new Map();
-  return globalStore.__acpUserSessions;
-}
-
 // Periodically clean up stale user sessions (inactive > 30 min)
-const STALE_SESSION_MS = 30 * 60_000;
-const PENDING_USER_REQUEST_TIMEOUT_MS = 10 * 60_000;
-function cleanupStaleSessions() {
-  const now = Date.now();
-  for (const [key, sess] of getUserSessions()) {
-    if (now - sess.lastActive > STALE_SESSION_MS && sess.activeTurns.size === 0) {
-      getUserSessions().delete(key);
-    }
-  }
-}
 if (!(globalThis as any).__acpCleanupTimer) {
   (globalThis as any).__acpCleanupTimer = setInterval(cleanupStaleSessions, 5 * 60_000);
-}
-
-function getBootPromises(): Map<string, Promise<void>> {
-  if (!globalStore.__acpBootPromises) globalStore.__acpBootPromises = new Map();
-  return globalStore.__acpBootPromises;
-}
-
-function getReplayBuffers(): Map<string, { role: 'user' | 'agent'; text: string }[]> {
-  if (!globalStore.__acpReplayBuffers) globalStore.__acpReplayBuffers = new Map();
-  return globalStore.__acpReplayBuffers;
-}
-
-function userSessionKey(agentId: string, userId: string): string {
-  return `${agentId}:${userId}`;
-}
-
-function getAgentProcess(agentId: string, config: AgentConfig): AgentProcess {
-  const procs = getAgentProcesses();
-  let proc = procs.get(agentId);
-  if (!proc) {
-    proc = {
-      rpc: null,
-      ready: false,
-      booting: false,
-      error: null,
-      config,
-      cachedCwd: config.cwd || process.cwd(),
-      supportsLoadSession: false,
-      knownSessions: new Set(),
-    };
-    procs.set(agentId, proc);
-  }
-  return proc;
-}
-
-function getUserSession(agentId: string, userId: string): UserSession {
-  const sessions = getUserSessions();
-  const key = userSessionKey(agentId, userId);
-  let sess = sessions.get(key);
-  if (!sess) {
-    sess = {
-      sessionId: null,
-      chatSessions: new Map(),
-      activeTurns: new Map(),
-      alwaysAllowedPermissionSessions: new Set(),
-      phase: 'idle',
-      turnCount: 0,
-      lastActive: Date.now(),
-    };
-    sessions.set(key, sess);
-  }
-  sess.lastActive = Date.now();
-  // Ensure chatSessions and activeTurns exist for sessions created before these fields were added
-  if (!sess.chatSessions) sess.chatSessions = new Map();
-  if (!sess.activeTurns) sess.activeTurns = new Map();
-  if (!sess.alwaysAllowedPermissionSessions) sess.alwaysAllowedPermissionSessions = new Set();
-  // Migrate legacy activeTurn to activeTurns map
-  if ((sess as any).activeTurn) {
-    const legacyTurn = (sess as any).activeTurn as TurnState;
-    const key = legacyTurn.chatId || '__default';
-    sess.activeTurns.set(key, legacyTurn);
-    delete (sess as any).activeTurn;
-  }
-  return sess;
 }
 
 /** Find the active turn for a notification's sessionId. */
@@ -988,14 +129,6 @@ function getActiveTurnForResume(chatTurn: TurnState | undefined, savedSessionId:
   if (!chatTurn.sessionId) chatTurn.sessionId = savedSessionId;
   return chatTurn;
 }
-
-type WarmLocalAgentStatus = 'ready' | 'booting' | 'started' | 'failed' | 'skipped_remote';
-
-type WarmLocalAgentResult = {
-  agentId: string;
-  status: WarmLocalAgentStatus;
-  error?: string;
-};
 
 async function warmLocalAgents(): Promise<WarmLocalAgentResult[]> {
   const agents = readAgentsConfig();
@@ -1053,12 +186,12 @@ async function doBootAgent(agentId: string): Promise<void> {
       // ── Relay agent: connect via Azure Relay WebSocket ──
       const connName = config.relayConnectionName || agentId;
       proc.cachedCwd = config.cwd || '/';
-      console.log(`[ACP:${agentId}] Connecting via Azure Relay: ${connName}`);
+      log(`[ACP:${agentId}] Connecting via Azure Relay: ${connName}`);
       rpc = await createRelayNdjsonRpc(connName);
 
       // Treat relay disconnect as agent death
       rpc.onClose = (reason) => {
-        console.log(`[ACP:${agentId}] Relay disconnected: ${reason}`);
+        log(`[ACP:${agentId}] Relay disconnected: ${reason}`);
         proc.rpc = null;
         proc.ready = false;
         proc.booting = false;
@@ -1094,11 +227,17 @@ async function doBootAgent(agentId: string): Promise<void> {
         throw new Error(`Agent working directory does not exist: ${cwd}`);
       }
 
-      console.log(`[ACP:${agentId}] Spawning ${command} ${args.join(' ')} (cwd: ${cwd})`);
+      // Parse per-agent env vars and merge with process.env
+      let agentEnv: Record<string, string> = {};
+      try {
+        if (config.env) agentEnv = JSON.parse(config.env);
+      } catch { /* ignore parse errors */ }
+
+      log(`[ACP:${agentId}] Spawning ${command} ${args.join(' ')} (cwd: ${cwd})`);
       const cp = spawn(command, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
-        env: process.env,
+        env: { ...process.env, ...agentEnv },
         windowsHide: true,
         shell: true,
       });
@@ -1106,7 +245,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       cp.stderr?.on('data', () => {});
 
       cp.on('exit', (code) => {
-        console.log(`[ACP:${agentId}] Process exited (code ${code})`);
+        log(`[ACP:${agentId}] Process exited (code ${code})`);
         proc.rpc = null;
         proc.ready = false;
         proc.booting = false;
@@ -1134,7 +273,7 @@ async function doBootAgent(agentId: string): Promise<void> {
     proc.rpc = rpc;
 
     rpc.onRequest = (method, params, id) => {
-      console.log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
+      log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
 
       if (method === 'session/request_input' || method === 'session/request_user_input') {
         const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
@@ -1184,7 +323,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       } else if (method === 'fs/write_text_file') {
         handleWriteTextFile(params ?? {}).then(r => rpc.respond(id, r));
       } else {
-        console.log(`[ACP:${agentId}] Unknown request: ${method}`);
+        log(`[ACP:${agentId}] Unknown request: ${method}`);
         rpc.respond(id, {});
       }
     };
@@ -1197,7 +336,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       notifCount++;
       const now = Date.now();
       if (now - lastNotifLog >= 10_000) {
-        console.log(`[ACP:${agentId}] notifications: ${notifCount} in last ${((now - lastNotifLog) / 1000).toFixed(0)}s (${method})`);
+        log(`[ACP:${agentId}] notifications: ${notifCount} in last ${((now - lastNotifLog) / 1000).toFixed(0)}s (${method})`);
         notifCount = 0;
         lastNotifLog = now;
       }
@@ -1272,15 +411,15 @@ async function doBootAgent(agentId: string): Promise<void> {
       scheduleTurnPersist(turn);
     };
 
-    console.log(`[ACP:${agentId}] Initializing...`);
+    log(`[ACP:${agentId}] Initializing...`);
     const initResult = await rpc.send('initialize', { protocolVersion: 1, clientCapabilities: {} });
     proc.supportsLoadSession = !!initResult?.agentCapabilities?.loadSession;
-    console.log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
+    log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
 
     // No longer create a session at boot — sessions are created per-user on first send
     proc.ready = true;
     proc.booting = false;
-    console.log(`[ACP:${agentId}] Ready. Awaiting user sessions.`);
+    log(`[ACP:${agentId}] Ready. Awaiting user sessions.`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[ACP:${agentId}] Boot failed:`, msg);
@@ -1299,6 +438,47 @@ async function doBootAgent(agentId: string): Promise<void> {
 // MCP servers blocked for non-admin (Microsoft) users
 const ADMIN_ONLY_MCP = new Set(['teams']);
 
+function normalizeMcpStringArray(input: unknown): string[] {
+  return Array.isArray(input) ? input.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function normalizeMcpHeaders(input: unknown): unknown[] {
+  if (Array.isArray(input)) return input;
+  if (input && typeof input === 'object') {
+    return Object.entries(input as Record<string, unknown>).map(([name, value]) => ({ name, value: String(value) }));
+  }
+  return [];
+}
+
+function normalizeMcpServerConfig(name: string, cfg: Record<string, unknown>): Record<string, unknown> | null {
+  const type = typeof cfg.type === 'string' ? cfg.type.trim().toLowerCase() : '';
+  if (type === 'http' || type === 'sse') {
+    const url = typeof cfg.url === 'string' ? cfg.url.trim() : '';
+    if (!url) {
+      console.warn(`[MCP] Skipping ${name}: ${type} server is missing url`);
+      return null;
+    }
+    return {
+      name,
+      type,
+      url,
+      headers: normalizeMcpHeaders(cfg.headers),
+    };
+  }
+
+  const command = typeof cfg.command === 'string' ? cfg.command.trim() : '';
+  if (!command) {
+    console.warn(`[MCP] Skipping ${name}: server is missing command or supported type/url`);
+    return null;
+  }
+  return {
+    name,
+    command,
+    args: normalizeMcpStringArray(cfg.args),
+    env: normalizeMcpStringArray(cfg.env),
+  };
+}
+
 async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>[]> {
   try {
     const mcpConfigPath = path.join(os.homedir(), '.copilot', 'mcp-config.json');
@@ -1308,12 +488,8 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
       const obj = mcpData.mcpServers as Record<string, Record<string, unknown>>;
       return Object.entries(obj)
         .filter(([name]) => isAdmin || !ADMIN_ONLY_MCP.has(name))
-        .map(([name, cfg]) => ({
-          name,
-          command: cfg.command as string,
-          args: (cfg.args as string[]) || [],
-          env: (cfg.env as string[]) || [],
-        }));
+        .map(([name, cfg]) => normalizeMcpServerConfig(name, cfg))
+        .filter((server): server is Record<string, unknown> => !!server);
     }
   } catch { /* ignore */ }
   return [];
@@ -1329,74 +505,9 @@ async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise
   return params;
 }
 
-function normalizeSessionModels(input: unknown): AgentModel[] {
-  if (!Array.isArray(input)) return [];
-  const seen = new Set<string>();
-  const models: AgentModel[] = [];
-  for (const item of input) {
-    if (!item || typeof item !== 'object') continue;
-    const raw = item as Record<string, unknown>;
-    const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : '';
-    if (!modelId || seen.has(modelId)) continue;
-    seen.add(modelId);
-    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
-    const description = typeof raw.description === 'string' ? raw.description.trim() : '';
-    models.push({
-      modelId,
-      ...(name ? { name } : {}),
-      ...(description ? { description } : {}),
-    });
-  }
-  return models;
-}
-
-function syncAgentModelsFromSessionResult(agentId: string, sessionResult: unknown): { models: AgentModel[]; defaultModelId: string } | null {
-  const session = sessionResult && typeof sessionResult === 'object' ? sessionResult as Record<string, any> : null;
-  const modelState = session?.models && typeof session.models === 'object' ? session.models as Record<string, unknown> : null;
-  const availableModels = normalizeSessionModels(modelState?.availableModels);
-  if (availableModels.length === 0) return null;
-  const currentModelId = typeof modelState?.currentModelId === 'string' ? modelState.currentModelId.trim() : '';
-  const defaultModelId = currentModelId && availableModels.some(model => model.modelId === currentModelId)
-    ? currentModelId
-    : availableModels[0].modelId;
-  configStore.updateAgent(agentId, { models: availableModels, defaultModelId });
-  const proc = getAgentProcesses().get(agentId);
-  if (proc) {
-    proc.config = { ...proc.config, models: availableModels, defaultModelId };
-  }
-  console.log(`[ACP:${agentId}] Synced ${availableModels.length} model(s) from session/new; default=${defaultModelId}`);
-  return { models: availableModels, defaultModelId };
-}
-
-function validateRequestedModel(config: AgentConfig, requested: unknown): string | undefined {
-  const modelId = typeof requested === 'string' ? requested.trim() : '';
-  if (!modelId) return undefined;
-  const models = config.models || [];
-  if (models.length > 0 && !models.some(model => model.modelId === modelId)) {
-    throw new Error(`Unknown modelId "${modelId}" for agent "${config.id}"`);
-  }
-  return modelId;
-}
-
-async function applySessionModelIfRequested(proc: AgentProcess, sessionId: string | null, requestedModelId: string | undefined): Promise<void> {
-  if (!requestedModelId) return;
-  if (!sessionId) throw new Error('Cannot set model before session is created');
-  if (!proc.rpc) throw new Error('Agent process not ready');
-  try {
-    await proc.rpc.send('session/set_model', { sessionId, modelId: requestedModelId });
-  } catch (firstErr: any) {
-    const firstMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-    try {
-      await proc.rpc.send('unstable_setSessionModel', { sessionId, modelId: requestedModelId });
-    } catch (secondErr: any) {
-      const secondMsg = secondErr instanceof Error ? secondErr.message : String(secondErr);
-      throw new Error(`Agent does not support switching to model "${requestedModelId}" for this session (${firstMsg}; ${secondMsg})`);
-    }
-  }
-}
 
 function logSessionLoadFallback(agentId: string, userId: string, chatId: string | undefined, savedSessionId: string, reason: string): void {
-  console.log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
+  log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
 }
 
 function getLastStoredSessionId(value: unknown): string | null {
@@ -1429,7 +540,7 @@ async function loadSavedChatSessionForSend(
     sess.sessionId = savedSessionId;
     pushChatSession(sess, chatId, savedSessionId);
     sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
-    console.log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
     return true;
   }
   if (!proc.supportsLoadSession) {
@@ -1447,7 +558,7 @@ async function loadSavedChatSessionForSend(
     pushChatSession(sess, chatId, savedSessionId);
     if (sess.activeTurns.size === 0) sess.phase = 'idle';
     proc.knownSessions.add(savedSessionId);
-    console.log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
     return true;
   } catch (loadErr: any) {
     replayBuffers.delete(savedSessionId);
@@ -1460,7 +571,7 @@ async function loadSavedChatSessionForSend(
       pushChatSession(sess, chatId, savedSessionId);
       sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
       proc.knownSessions.add(savedSessionId);
-      console.log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
+      log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
       return true;
     }
     logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
@@ -1472,12 +583,12 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
   const sessionParams = await buildSessionParams(proc, isAdmin);
-  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
+  log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
   const result = await proc.rpc.send('session/new', sessionParams);
   syncAgentModelsFromSessionResult(agentId, result);
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);
-  console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
+  log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
 function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
@@ -1636,7 +747,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     .then(async (result: Record<string, unknown> | undefined) => {
       const stopReason = result?.stopReason ?? 'unknown';
       const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
-      console.log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
+      log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
       if (!turn.done) {
         finishTurnAfterPromptResult(turn, result);
         if (sess.activeTurns.size === 0) sess.phase = 'idle';
@@ -1653,7 +764,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     .catch(async (err: Error) => {
       // If session/prompt fails, the session may be truly invalid — try to recover
       const errMsg = err.message || '';
-      console.log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
+      log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
       try {
         const sessionParams = await buildSessionParams(proc, isAdmin);
         const session = await proc.rpc!.send('session/new', sessionParams);
@@ -1661,7 +772,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
-        console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
+        log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
 
         // Persist the new sessionId to SQLite so chat history references stay current
         if (chatId) {
@@ -1677,7 +788,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
             return `${role}: ${m.content.slice(0, 500)}`;
           }).join('\n');
           retryText = `[Previous conversation context — the session was lost, please continue naturally based on this history]\n${contextLines}\n\n[Current message]\n${prompt}`;
-          console.log(`[ACP:${agentId}] Injected ${recent.length} messages as context for recovery`);
+          log(`[ACP:${agentId}] Injected ${recent.length} messages as context for recovery`);
         }
         // Retry prompt parts include the attachment summary via buildPromptParts().
 
@@ -1695,7 +806,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         });
         const stopReason = retryResult?.stopReason ?? 'unknown';
         const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
-        console.log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
+        log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
         if (!turn.done) {
           finishTurnAfterPromptResult(turn, retryResult as Record<string, unknown> | undefined);
           if (sess.activeTurns.size === 0) sess.phase = 'idle';
@@ -2284,7 +1395,7 @@ async function compareAndRecover(
       });
       chat.ts = ts;
       await saveChat(userId, chat);
-      console.log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
+      log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
       return { recoveredMessages: recovered };
     }
   }
@@ -2373,7 +1484,10 @@ export async function POST(req: NextRequest) {
       if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
       const agent = getAgentById(agentId);
       if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
-      return NextResponse.json({ ok: true, agent });
+      // Return env as parsed object for the UI
+      let envObj: Record<string, string> = {};
+      try { if (agent.env) envObj = JSON.parse(agent.env); } catch { /* ignore */ }
+      return NextResponse.json({ ok: true, agent: { ...agent, env: envObj } });
     }
 
     if (action === 'get-sessions') {
@@ -2411,13 +1525,14 @@ export async function POST(req: NextRequest) {
         public: (body?.updates as any)?.public,
         models: updates.models,
         defaultModelId: updates.defaultModelId,
+        env: (body?.updates as any)?.env,
       });
 
       // Only restart the agent process when fields that affect spawn/runtime change.
       // Model selection is applied per-session via session/set_model, so changing
       // `defaultModelId` (or just refreshing `models`) must not kill the process.
       const updateKeys = Object.keys(updates).filter(k => (updates as any)[k] !== undefined);
-      const restartRequiringKeys = new Set(['name', 'command', 'args', 'cwd', 'yolo', 'public']);
+      const restartRequiringKeys = new Set(['name', 'command', 'args', 'cwd', 'yolo', 'public', 'env']);
       const needsRestart = updateKeys.some(k => restartRequiringKeys.has(k));
 
       let restarted = false;
@@ -2455,6 +1570,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'agent_id_already_exists' }, { status: 409 });
       }
 
+      const rawEnv = (body?.agent as any)?.env;
+      const parsedEnv: Record<string, string> = (typeof rawEnv === 'object' && rawEnv !== null && !Array.isArray(rawEnv))
+        ? Object.fromEntries(
+            Object.entries(rawEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+          )
+        : {};
+
       const entry = configStore.createAgent({
         id: newAgent.id,
         name: newAgent.name || newAgent.id,
@@ -2466,6 +1588,7 @@ export async function POST(req: NextRequest) {
         relayConnectionName: newAgent.relayConnectionName || (newAgent.relay ? newAgent.id : ''),
         models: newAgent.models,
         defaultModelId: newAgent.defaultModelId,
+        env: parsedEnv,
         owner: ownerEmail,
       });
 
@@ -2698,7 +1821,7 @@ export async function POST(req: NextRequest) {
         updateChatAgentSession(userId, chatId, agentId, sess.sessionId).catch(() => { /* ignore */ });
       }
 
-      console.log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
+      log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
 
       const turnChatKey = chatId || '__default';
       const existingTurn = sess.activeTurns.get(turnChatKey);
@@ -2858,7 +1981,7 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
         }
-        console.log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
+        log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2910,7 +2033,7 @@ export async function POST(req: NextRequest) {
           // Don't remove other chats' turns
         }
         sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
-        console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
+        log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
         return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
       }
       // Try session/load if the agent supports it
@@ -2930,7 +2053,7 @@ export async function POST(req: NextRequest) {
           // Extract replay buffer and compare with SQLite
           const replayMessages = replayBuffers.get(savedSessionId) || [];
           replayBuffers.delete(savedSessionId);
-          console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
+          log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
           // Compare with stored chat to find recovered messages
           const recovery = await compareAndRecover(userId, chatId, agentId, replayMessages);
           const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
@@ -2948,7 +2071,7 @@ export async function POST(req: NextRequest) {
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
             sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
             proc.knownSessions.add(savedSessionId);
-            console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
+            log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
             return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
           }
           logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
@@ -2970,7 +2093,7 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
         }
-        console.log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
+        log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
       } catch (newErr) {
         const msg = newErr instanceof Error ? newErr.message : String(newErr);

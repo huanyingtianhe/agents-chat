@@ -14,6 +14,8 @@ export function useComposerState() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputHistoryIndexRef = useRef(-1);
   const inputDraftRef = useRef('');
+  // Stores link mappings from rich text paste: linkText → href
+  const pastedLinksRef = useRef<Array<{ text: string; href: string }>>([]);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false);
@@ -31,6 +33,7 @@ export function useComposerState() {
 
   const setInputProgrammatic = useCallback((value: string) => {
     inputRef.current = value;
+    if (!value) pastedLinksRef.current = [];
     if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
     setInput(value);
     if (composerRef.current) {
@@ -82,9 +85,33 @@ export function useComposerState() {
 
   function handleAttachmentPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = getFilesFromClipboard(event);
-    if (!files.length) return;
-    event.preventDefault();
-    void addFilesToComposer(files);
+    if (files.length > 0) {
+      event.preventDefault();
+      void addFilesToComposer(files);
+      return;
+    }
+    // Store hyperlink mappings from rich text paste (links applied on send)
+    const html = event.clipboardData.getData('text/html');
+    if (html) {
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      const anchors = container.querySelectorAll('a[href]');
+      if (anchors.length > 0) {
+        const newLinks: Array<{ text: string; href: string }> = [];
+        anchors.forEach((a) => {
+          const href = (a as HTMLAnchorElement).href || a.getAttribute('href') || '';
+          const linkText = (a.textContent || '').trim().replace(/\s+/g, ' ');
+          if (!href || !linkText) return;
+          if (linkText === href || linkText === href.replace(/\/$/, '')) return;
+          if (!/^(https?:|mailto:)/i.test(href)) return;
+          newLinks.push({ text: linkText, href });
+        });
+        if (newLinks.length > 0) {
+          pastedLinksRef.current = [...pastedLinksRef.current, ...newLinks];
+        }
+      }
+    }
+    // Let browser handle default paste (plain text into textarea)
   }
 
   function dataTransferHasFiles(event: DragEvent<HTMLElement>) { return Array.from(event.dataTransfer.types || []).includes('Files'); }
@@ -113,7 +140,7 @@ export function useComposerState() {
   }, [input, mounted]);
 
   return {
-    input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef,
+    input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef,
     attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic,
     composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments,
     handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop,

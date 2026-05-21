@@ -46,9 +46,9 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
         <span className="schedulerAgentPickerCaret" aria-hidden="true">▾</span>
       </button>
       {open && !disabled && (
-        <div className="agentModelDropdown schedulerAgentPickerDropdown" role="listbox" aria-label="Agent">
+        <div className="schedulerAgentPickerDropdown" role="listbox" aria-label="Agent">
           {agents.length === 0 ? (
-            <div className="agentModelOption" style={{ opacity: 0.7, cursor: 'default' }}>No agents available</div>
+            <div className="schedulerAgentPickerEmpty">No agents available</div>
           ) : (
             agents.map((a) => {
               const isSelected = a.id === value;
@@ -58,12 +58,15 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
                   type="button"
                   role="option"
                   aria-selected={isSelected}
-                  className={`agentModelOption ${isSelected ? 'agentModelOptionActive' : ''}`}
+                  className={`schedulerAgentPickerOption ${isSelected ? 'schedulerAgentPickerOptionActive' : ''}`}
                   onClick={() => { onChange(a.id); setOpen(false); }}
                   title={`@${a.id}`}
                 >
-                  <span className="agentModelOptionLabel">{a.name} <span style={{ opacity: 0.6 }}>({a.id})</span></span>
-                  {isSelected ? <span className="agentModelOptionCheck">✓</span> : null}
+                  <span className="schedulerAgentPickerOptionLabel">
+                    {a.name}
+                    <span className="schedulerAgentPickerOptionId"> ({a.id})</span>
+                  </span>
+                  {isSelected ? <span className="schedulerAgentPickerOptionCheck">✓</span> : null}
                 </button>
               );
             })

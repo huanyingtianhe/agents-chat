@@ -1,4 +1,4 @@
-# ACP Chat
+# Agents Chat
 
 A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. Direct communication with ACP-compatible CLI tools — GitHub Copilot CLI, Claude Code, and any ACP-compliant agent.
 
@@ -83,6 +83,7 @@ Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.lo
 - **Chat history** — Persistent message history in SQLite (`.data/chats.db`) with sidebar run status.
 - **Session resume** — Reloading a chat restores agent session context via `session/load`.
 - **Shared chats** — Generate a read-only share link for any conversation.
+- **Mobile responsive** — Full-featured UI on phones and tablets with swipeable panels and touch-friendly controls.
 - **Authentication** — Azure AD SSO or local credentials login; admin/user roles.
 
 ## Using the app

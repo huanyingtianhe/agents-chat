@@ -1,4 +1,4 @@
-# ACP Chat
+# Agents Chat
 
 A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. No gateway, no openclaw — just direct communication with ACP-compatible CLI tools like GitHub Copilot CLI, Claude Code, etc.
 
@@ -40,6 +40,7 @@ npm start            # serves on port 3000
 - **Chat history** — Persistent message history stored in SQLite (`.data/chats.db`) with sidebar run status.
 - **Session resume** — Reloading a chat reloads the agent session context via `session/load`.
 - **Shared chats** — Generate a read-only share link for any conversation.
+- **Mobile responsive** — Full-featured UI on phones and tablets with swipeable panels and touch-friendly controls.
 
 ## Using the app
 

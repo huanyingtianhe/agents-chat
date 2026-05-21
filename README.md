@@ -148,6 +148,56 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 > **Important:** Leave the model picker on the model you set in env after starting the agent. The `ANTHROPIC_MODEL` env var controls which model is used. Selecting a model from the picker will override the env var with an incompatible internal name, causing "model not supported" errors.
 
+#### Other supported ACP agents
+
+Any ACP-compatible tool can be added. Here are common examples:
+
+**Gemini CLI**
+```json
+{
+  "id": "gemini",
+  "name": "Gemini CLI",
+  "command": "npx",
+  "args": ["@google/gemini-cli@latest", "--experimental-acp"],
+  "cwd": ""
+}
+```
+
+**Codex CLI**
+```json
+{
+  "id": "codex",
+  "name": "Codex CLI",
+  "command": "npx",
+  "args": ["@zed-industries/codex-acp@latest"],
+  "cwd": ""
+}
+```
+
+**OpenClaw**
+```json
+{
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "command": "npx",
+  "args": ["openclaw", "acp"],
+  "cwd": ""
+}
+```
+
+**Hermes Agent**
+```json
+{
+  "id": "hermes",
+  "name": "Hermes Agent",
+  "command": "hermes",
+  "args": ["acp"],
+  "cwd": ""
+}
+```
+
+For any `npx`-based agent, set **Command** to `npx` and **Arguments** to the package name + flags.
+
 #### Add a remote/relay agent from the UI
 
 Remote agents run on a registered node and connect through Azure Relay.

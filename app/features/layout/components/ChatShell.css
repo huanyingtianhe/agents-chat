@@ -478,6 +478,15 @@
 }
 
 /* ── Scheduler agent picker: modal-styled trigger + themed popover ── */
+.chatPageRoot .modalField {
+  display: block;
+  margin-bottom: 14px;
+}
+.chatPageRoot .modalFieldLabel {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-soft);
+}
 .chatPageRoot .schedulerAgentPickerWrap {
   position: relative;
   display: block;

@@ -210,8 +210,8 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
           />
         </label>
 
-        <label>
-          <span>Agent</span>
+        <div className="modalField">
+          <span className="modalFieldLabel">Agent</span>
           <AgentPicker
             agents={agents}
             value={agentId}
@@ -219,7 +219,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
             onChange={setAgentId}
           />
           {jobId !== 'new' && <span className="fieldHint">Agent cannot be changed after creation</span>}
-        </label>
+        </div>
 
         <label>
           <span>Prompt</span>

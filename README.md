@@ -10,6 +10,11 @@ A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. Dir
 - **npm** >= 10
 - At least one ACP-compatible agent installed (GitHub Copilot CLI, Claude Code, etc.)
 
+<p align="center">
+  <img src="docs/images/screenshot-aurora-theme.png" width="49%" alt="Aurora theme" />
+  <img src="docs/images/screenshot-claude-theme.png" width="49%" alt="Claude theme" />
+</p>
+
 ## Quick Start
 
 ```bash
@@ -30,6 +35,32 @@ npm start            # serves on port 3000
 .\start.ps1          # builds + serves with a Dev Tunnel (permanent URL)
 .\start.ps1 -Cloudflare  # builds + serves with a Cloudflare quick tunnel
 ```
+
+### Deployment (Windows Scheduled Task)
+
+For persistent deployment on a Windows machine, use `deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot:
+
+```powershell
+# Deploy (pulls latest code, restarts the service, waits for readiness)
+.\deploy.ps1
+
+# Deploy without git pull
+.\deploy.ps1 -SkipGitPull
+
+# Deploy with AtStartup trigger (runs even without login)
+.\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
+
+# Remove the scheduled task entirely
+.\deploy.ps1 -RemoveTask
+```
+
+The deploy script:
+1. Pulls latest code from git (unless `-SkipGitPull`)
+2. Stops the existing Scheduled Task and cleans up port 3000
+3. Starts the task (which runs `service-watchdog.ps1` → `start.ps1`)
+4. Waits up to 180s for `localhost:3000` to respond
+
+Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.log`.
 
 ## Features
 
@@ -172,6 +203,56 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 > **Important:** Leave the model picker on the model you set in env after starting the agent. The `ANTHROPIC_MODEL` env var controls which model is used. Selecting a model from the picker will override the env var with an incompatible internal name, causing "model not supported" errors.
+
+#### Other supported ACP agents
+
+Any ACP-compatible tool can be added. Here are common examples:
+
+**Gemini CLI**
+```json
+{
+  "id": "gemini",
+  "name": "Gemini CLI",
+  "command": "npx",
+  "args": ["@google/gemini-cli@latest", "--experimental-acp"],
+  "cwd": ""
+}
+```
+
+**Codex CLI**
+```json
+{
+  "id": "codex",
+  "name": "Codex CLI",
+  "command": "npx",
+  "args": ["@zed-industries/codex-acp@latest"],
+  "cwd": ""
+}
+```
+
+**OpenClaw**
+```json
+{
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "command": "npx",
+  "args": ["openclaw", "acp"],
+  "cwd": ""
+}
+```
+
+**Hermes Agent**
+```json
+{
+  "id": "hermes",
+  "name": "Hermes Agent",
+  "command": "hermes",
+  "args": ["acp"],
+  "cwd": ""
+}
+```
+
+For any `npx`-based agent, set **Command** to `npx` and **Arguments** to the package name + flags.
 
 #### Add a remote/relay agent from the UI
 

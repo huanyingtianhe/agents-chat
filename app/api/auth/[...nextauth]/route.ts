@@ -136,6 +136,17 @@ export const authOptions: AuthOptions = {
           const userEmail = (user.email || token.email || '').toString().toLowerCase();
           token.role = adminEmails.includes(userEmail) ? 'admin' : 'user';
         }
+      } else {
+        // Re-evaluate admin role on every request so ADMIN_EMAILS changes
+        // take effect without requiring the user to sign out and back in.
+        if (token.sub !== 'admin' && token.email) {
+          const adminEmails = (process.env.ADMIN_EMAILS || '')
+            .split(',')
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+          const email = (token.email as string).toLowerCase();
+          token.role = adminEmails.includes(email) ? 'admin' : 'user';
+        }
       }
       return token;
     },

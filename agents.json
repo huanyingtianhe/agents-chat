@@ -1,6 +1,14 @@
 {
   "agents": [
     {
+      "id": "copilot",
+      "name": "GitHub Copilot",
+      "command": "copilot.exe",
+      "args": ["--acp"],
+      "cwd": "",
+      "yolo": true
+    },
+    {
       "id": "claude-code",
       "name": "Claude Code",
       "command": "npx",
@@ -10,6 +18,14 @@
       "env": {
         "ANTHROPIC_API_KEY": ""
       }
+    },
+    {
+      "id": "scheduler",
+      "name": "Scheduler",
+      "command": "copilot.exe",
+      "args": ["--acp"],
+      "cwd": "",
+      "noTools": true
     }
   ]
 }

@@ -102,7 +102,7 @@ export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps)
               title={`${job.name} — Click to edit`}
               style={{ justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span className="agentListAvatar">{(job.name || job.id).slice(0, 1).toUpperCase()}</span>
                 <span className="agentListInfo">
                   <span className="agentListName">{job.name}</span>

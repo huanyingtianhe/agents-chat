@@ -2,6 +2,11 @@
 
 A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. No gateway, no openclaw — just direct communication with ACP-compatible CLI tools like GitHub Copilot CLI, Claude Code, etc.
 
+<p align="center">
+  <img src="docs/images/screenshot-aurora-theme.png" width="49%" alt="Aurora theme" />
+  <img src="docs/images/screenshot-claude-theme.png" width="49%" alt="Claude theme" />
+</p>
+
 ## Quick Start
 
 ```bash

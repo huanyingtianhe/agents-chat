@@ -28,6 +28,32 @@ npm start            # serves on port 3000
 .\start.ps1 -Cloudflare  # builds + serves with a Cloudflare quick tunnel
 ```
 
+### Deployment (Windows Scheduled Task)
+
+For persistent deployment on a Windows machine, use `deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot:
+
+```powershell
+# Deploy (pulls latest code, restarts the service, waits for readiness)
+.\deploy.ps1
+
+# Deploy without git pull
+.\deploy.ps1 -SkipGitPull
+
+# Deploy with AtStartup trigger (runs even without login)
+.\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
+
+# Remove the scheduled task entirely
+.\deploy.ps1 -RemoveTask
+```
+
+The deploy script:
+1. Pulls latest code from git (unless `-SkipGitPull`)
+2. Stops the existing Scheduled Task and cleans up port 3000
+3. Starts the task (which runs `service-watchdog.ps1` → `start.ps1`)
+4. Waits up to 180s for `localhost:3000` to respond
+
+Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.log`.
+
 ## Features
 
 - **Multi-agent chat** — Talk to one ACP agent or mention multiple agents in one message.

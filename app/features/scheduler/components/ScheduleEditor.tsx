@@ -5,6 +5,15 @@ import type { CronJob, ScheduleSpec } from '../scheduleTypes';
 import { validateSpec, nextFires } from '../scheduleSpec';
 import { useSchedules } from '../hooks/useSchedules';
 import { AgentPicker } from './AgentPicker';
+import { SelectPicker } from './SelectPicker';
+
+const SCHEDULE_KIND_OPTIONS: Array<{ value: ScheduleSpec['kind']; label: string }> = [
+  { value: 'every_minutes', label: 'Every N minutes' },
+  { value: 'every_hours', label: 'Every N hours' },
+  { value: 'every_days', label: 'Every N days at time' },
+  { value: 'daily', label: 'Daily at time' },
+  { value: 'weekly', label: 'Weekly on days at time' },
+];
 
 export interface ScheduleEditorProps {
   jobId: string | 'new';
@@ -232,16 +241,16 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
           />
         </label>
 
-        <label>
-          <span>Schedule Type</span>
-          <select value={specKind} onChange={(e) => setSpecKind(e.target.value as ScheduleSpec['kind'])} disabled={saving}>
-            <option value="every_minutes">Every N minutes</option>
-            <option value="every_hours">Every N hours</option>
-            <option value="every_days">Every N days at time</option>
-            <option value="daily">Daily at time</option>
-            <option value="weekly">Weekly on days at time</option>
-          </select>
-        </label>
+        <div className="modalField">
+          <span className="modalFieldLabel">Schedule Type</span>
+          <SelectPicker<ScheduleSpec['kind']>
+            options={SCHEDULE_KIND_OPTIONS}
+            value={specKind}
+            disabled={saving}
+            ariaLabel="Schedule Type"
+            onChange={(v) => setSpecKind(v)}
+          />
+        </div>
 
         {specKind === 'every_minutes' && (
           <label>

@@ -1,6 +1,14 @@
 # ACP Chat
 
-A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. No gateway, no openclaw — just direct communication with ACP-compatible CLI tools like GitHub Copilot CLI, Claude Code, etc.
+A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. Direct communication with ACP-compatible CLI tools — GitHub Copilot CLI, Claude Code, and any ACP-compliant agent.
+
+![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![React 19](https://img.shields.io/badge/React-19-blue) ![SQLite](https://img.shields.io/badge/Storage-SQLite-green) ![ACP Protocol](https://img.shields.io/badge/Protocol-ACP-purple)
+
+## Prerequisites
+
+- **Node.js** >= 20
+- **npm** >= 10
+- At least one ACP-compatible agent installed (GitHub Copilot CLI, Claude Code, etc.)
 
 ## Quick Start
 
@@ -27,19 +35,24 @@ npm start            # serves on port 3000
 
 - **Multi-agent chat** — Talk to one ACP agent or mention multiple agents in one message.
 - **@mention routing** — Type `@agent-id` to target specific agents; messages without mentions go to the currently selected/default agent.
-- **Auto agent orchestration** — When multiple agents are mentioned, Auto mode uses the scheduler agent to decide which agent should act next, evaluate results, and produce a final summary.
-- **Discussion orchestration** — Mention multiple agents and run them in parallel for one or more rounds, then summarize the discussion.
-- **Pipeline orchestration** — Mention multiple agents and run them sequentially, passing each agent's output to the next one.
+- **Auto agent orchestration** — A scheduler agent decides which agent should act next, evaluates results, and produces a final summary.
+- **Discussion orchestration** — Run multiple agents in parallel for configurable rounds, then summarize.
+- **Pipeline orchestration** — Run agents sequentially, passing each output to the next.
+- **File attachments** — Drag-and-drop or click to attach images and files to messages (up to 8 files, 10 MB each).
 - **Files tab** — Browse an agent's working directory, filter to changed files, open files inline, edit Markdown with split preview or live editing, and save changes back to disk.
-- **Message actions** — Copy an assistant answer from the action bar below the message without copying thinking or tool-call details.
-- **Multi-turn queue** — Send follow-up messages while an agent is still processing; turns are queued and executed in order.
-- **Streaming responses** — Real-time response streaming with phase indicators for thinking, tool execution, and replying.
+- **Model selection** — Per-agent model picker synced from the agent's available models.
+- **Environment variables** — Per-agent KEY=VALUE configuration for API keys and agent settings.
+- **Themes** — 5 built-in themes (Aurora, Sunset, VS Code Dark, Claude, ChatGPT).
+- **Message actions** — Copy, retry, or branch from any message.
+- **Multi-turn queue** — Send follow-up messages while an agent is processing; turns are queued and executed in order.
+- **Streaming responses** — Real-time streaming with phase indicators for thinking, tool execution, and replying.
 - **Agent management** — Add, configure, remove, and permission agents from the UI.
-- **Relay agents** — Connect to remote agents running on other machines via Azure Relay.
-- **Node registry** — Register and discover remote agent nodes; auto-discovers Azure Relay hybrid connections when Azure Relay environment variables are configured.
-- **Chat history** — Persistent message history stored in SQLite (`.data/chats.db`) with sidebar run status.
-- **Session resume** — Reloading a chat reloads the agent session context via `session/load`.
+- **Relay agents** — Connect to remote agents on other machines via Azure Relay.
+- **Node registry** — Register and discover remote agent nodes; auto-discovers Azure Relay hybrid connections.
+- **Chat history** — Persistent message history in SQLite (`.data/chats.db`) with sidebar run status.
+- **Session resume** — Reloading a chat restores agent session context via `session/load`.
 - **Shared chats** — Generate a read-only share link for any conversation.
+- **Authentication** — Azure AD SSO or local credentials login; admin/user roles.
 
 ## Using the app
 
@@ -123,6 +136,18 @@ Agents are stored in SQLite (`.data/config.db`) and managed through the UI. On f
    - **Working Directory** — project folder where the agent should run.
    - **YOLO mode** — auto-approve mode; the backend appends the relevant yolo flag where supported.
 5. Click **Create Agent**.
+
+#### Add a GitHub Copilot CLI agent
+
+1. Open the right **Agents** panel → **+** → **Add Agent in Server**.
+2. Fill in:
+   - **Agent ID** — e.g. `copilot`
+   - **Display Name** — e.g. `GitHub Copilot`
+   - **Command** — `copilot.exe` (or full path to the Copilot CLI binary)
+   - **Arguments** — `--acp`
+   - **Working Directory** — project folder
+   - **YOLO mode** — check to auto-approve tool calls
+3. Click **Create Agent**.
 
 #### Add a Claude Code agent
 
@@ -239,10 +264,11 @@ The kit includes `setup-node.ps1` and `relay-listener.js`. Prerequisites shown i
 
 ## Architecture
 
-- **Frontend**: Next.js 16 (App Router) with React 19, styled-jsx, react-markdown, and a monolithic chat page component.
-- **Backend**: Next.js API routes managing ACP processes, relay WebSockets, chat persistence, files, config, and auth.
+- **Frontend**: Next.js 16 (App Router), React 19, CSS modules + styled-jsx, react-markdown.
+- **Backend**: Next.js API routes managing ACP agent processes, relay WebSockets, chat persistence, file browsing, config, and auth.
 - **Protocol**: NDJSON-RPC over stdio for local agents; WebSocket for relay agents.
-- **Storage**: SQLite — `.data/chats.db` for chat history and shared chats, `.data/config.db` for agent/node config.
+- **Storage**: SQLite via better-sqlite3 — `.data/chats.db` for chat history and shared chats, `.data/config.db` for agent/node config.
+- **Auth**: NextAuth.js with Azure AD SSO or local credentials providers.
 
 ## ACP Protocol Flow
 
@@ -287,3 +313,7 @@ PLAYWRIGHT_BASE_URL=https://localhost:3010 NODE_TLS_REJECT_UNAUTHORIZED=0 \
 npx playwright test --config test/playwright.config.ts test/test-ui.spec.ts
 npx playwright test --config test/playwright.config.ts -g "test name"
 ```
+
+## License
+
+MIT

@@ -257,7 +257,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const newName = 'New Chat';
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     ctx.currentChatIdRef.current = newId;
-    clearChatMessages();
+    clearChatMessages({ clearAgentFilter: false });
     ctx.setChatName(newName);
     ctx.setChatCounter(prev => prev + 1);
     ctx.currentAgentSessionsRef.current = {};
@@ -331,7 +331,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         ctx.setCurrentChatId('');
         ctx.setActiveSidebarChatId('');
         ctx.setChatName('New Chat');
-        clearChatMessages();
+        clearChatMessages({ clearAgentFilter: false });
         ctx.currentAgentSessionsRef.current = {};
       }
     } catch { /* ignore */ }

@@ -462,6 +462,20 @@
   border-radius: 12px;
   color: var(--text);
 }
+.chatPageRoot .modal textarea {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 80px;
+  box-sizing: border-box;
+}
 .chatPageRoot .modalActions { display: flex; gap: 10px; justify-content: flex-end; }
 .chatPageRoot .modalActions button,
 .chatPageRoot .modal button.primary,

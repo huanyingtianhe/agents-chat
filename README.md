@@ -118,11 +118,35 @@ Agents are stored in SQLite (`.data/config.db`) and managed through the UI. On f
 4. Fill in:
    - **Agent ID** — unique lowercase identifier, used for `@mentions`.
    - **Display Name** — human-friendly name in the UI.
-   - **Command** — ACP-compatible executable, for example `copilot.exe`, `claude`, or an absolute path.
+   - **Command** — ACP-compatible executable, for example `copilot.exe`, or an absolute path.
    - **Arguments** — space-separated arguments, commonly `--acp`.
    - **Working Directory** — project folder where the agent should run.
    - **YOLO mode** — auto-approve mode; the backend appends the relevant yolo flag where supported.
 5. Click **Create Agent**.
+
+#### Add a Claude Code agent
+
+Claude Code can be added as an ACP agent using the `@agentclientprotocol/claude-agent-acp` package:
+
+1. Open the right **Agents** panel → **+** → **Add Agent in Server**.
+2. Fill in:
+   - **Agent ID** — e.g. `claude-code`
+   - **Display Name** — e.g. `claude-code`
+   - **Command** — `npx`
+   - **Arguments** — `@agentclientprotocol/claude-agent-acp@latest`
+   - **Working Directory** — project folder where Claude should operate
+   - **YOLO mode** — check to auto-approve tool calls
+3. Click **Create Agent**.
+
+##### Using with an Anthropic API key
+
+Set the following in the agent's **Environment Variables** textarea (in Settings):
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+> **Important:** Leave the model picker on the model you set in env after starting the agent. The `ANTHROPIC_MODEL` env var controls which model is used. Selecting a model from the picker will override the env var with an incompatible internal name, causing "model not supported" errors.
 
 #### Add a remote/relay agent from the UI
 
@@ -176,6 +200,7 @@ To seed agents without the UI, create `agents.json` at the project root before f
 | `noTools` | Disable tool calls; agent responds as chat-only, usually faster |
 | `relay` | Connect via Azure Relay WebSocket instead of local process |
 | `relayConnectionName` | Azure Relay hybrid connection/node name, required when `relay: true` |
+| `env` | Environment variables passed to the agent process (KEY=VALUE per line in UI, JSON object in `agents.json`) |
 | `public` | Allow all authenticated users to talk to this agent; default is owner-only |
 
 ### Nodes

@@ -19,6 +19,11 @@ import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFr
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+function ts(): string {
+  return new Date().toISOString().slice(11, 23);
+}
+const log = (...args: unknown[]) => console.log(`[${ts()}]`, ...args);
+
 /**
  * ACP (Agent Client Protocol) backend for multiple ACP agents.
  *
@@ -71,6 +76,7 @@ function getAgentById(agentId: string): AgentConfig | null {
     relayConnectionName: a.relayConnectionName,
     models: a.models,
     defaultModelId: a.defaultModelId,
+    env: JSON.stringify(a.env || {}),
   };
 }
 
@@ -180,12 +186,12 @@ async function doBootAgent(agentId: string): Promise<void> {
       // ── Relay agent: connect via Azure Relay WebSocket ──
       const connName = config.relayConnectionName || agentId;
       proc.cachedCwd = config.cwd || '/';
-      console.log(`[ACP:${agentId}] Connecting via Azure Relay: ${connName}`);
+      log(`[ACP:${agentId}] Connecting via Azure Relay: ${connName}`);
       rpc = await createRelayNdjsonRpc(connName);
 
       // Treat relay disconnect as agent death
       rpc.onClose = (reason) => {
-        console.log(`[ACP:${agentId}] Relay disconnected: ${reason}`);
+        log(`[ACP:${agentId}] Relay disconnected: ${reason}`);
         proc.rpc = null;
         proc.ready = false;
         proc.booting = false;
@@ -221,11 +227,17 @@ async function doBootAgent(agentId: string): Promise<void> {
         throw new Error(`Agent working directory does not exist: ${cwd}`);
       }
 
-      console.log(`[ACP:${agentId}] Spawning ${command} ${args.join(' ')} (cwd: ${cwd})`);
+      // Parse per-agent env vars and merge with process.env
+      let agentEnv: Record<string, string> = {};
+      try {
+        if (config.env) agentEnv = JSON.parse(config.env);
+      } catch { /* ignore parse errors */ }
+
+      log(`[ACP:${agentId}] Spawning ${command} ${args.join(' ')} (cwd: ${cwd})`);
       const cp = spawn(command, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
-        env: process.env,
+        env: { ...process.env, ...agentEnv },
         windowsHide: true,
         shell: true,
       });
@@ -233,7 +245,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       cp.stderr?.on('data', () => {});
 
       cp.on('exit', (code) => {
-        console.log(`[ACP:${agentId}] Process exited (code ${code})`);
+        log(`[ACP:${agentId}] Process exited (code ${code})`);
         proc.rpc = null;
         proc.ready = false;
         proc.booting = false;
@@ -261,7 +273,7 @@ async function doBootAgent(agentId: string): Promise<void> {
     proc.rpc = rpc;
 
     rpc.onRequest = (method, params, id) => {
-      console.log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
+      log(`[ACP:${agentId}] ← request: ${method} (id=${id})`);
 
       if (method === 'session/request_input' || method === 'session/request_user_input') {
         const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
@@ -311,7 +323,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       } else if (method === 'fs/write_text_file') {
         handleWriteTextFile(params ?? {}).then(r => rpc.respond(id, r));
       } else {
-        console.log(`[ACP:${agentId}] Unknown request: ${method}`);
+        log(`[ACP:${agentId}] Unknown request: ${method}`);
         rpc.respond(id, {});
       }
     };
@@ -324,7 +336,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       notifCount++;
       const now = Date.now();
       if (now - lastNotifLog >= 10_000) {
-        console.log(`[ACP:${agentId}] notifications: ${notifCount} in last ${((now - lastNotifLog) / 1000).toFixed(0)}s (${method})`);
+        log(`[ACP:${agentId}] notifications: ${notifCount} in last ${((now - lastNotifLog) / 1000).toFixed(0)}s (${method})`);
         notifCount = 0;
         lastNotifLog = now;
       }
@@ -399,15 +411,15 @@ async function doBootAgent(agentId: string): Promise<void> {
       scheduleTurnPersist(turn);
     };
 
-    console.log(`[ACP:${agentId}] Initializing...`);
+    log(`[ACP:${agentId}] Initializing...`);
     const initResult = await rpc.send('initialize', { protocolVersion: 1, clientCapabilities: {} });
     proc.supportsLoadSession = !!initResult?.agentCapabilities?.loadSession;
-    console.log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
+    log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
 
     // No longer create a session at boot — sessions are created per-user on first send
     proc.ready = true;
     proc.booting = false;
-    console.log(`[ACP:${agentId}] Ready. Awaiting user sessions.`);
+    log(`[ACP:${agentId}] Ready. Awaiting user sessions.`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[ACP:${agentId}] Boot failed:`, msg);
@@ -495,7 +507,7 @@ async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise
 
 
 function logSessionLoadFallback(agentId: string, userId: string, chatId: string | undefined, savedSessionId: string, reason: string): void {
-  console.log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
+  log(`[ACP:${agentId}] session/load fallback: chat=${chatId || '(none)'}, savedSession=${savedSessionId}, user=${userId}, reason=${reason}; falling back to session/new`);
 }
 
 function getLastStoredSessionId(value: unknown): string | null {
@@ -528,7 +540,7 @@ async function loadSavedChatSessionForSend(
     sess.sessionId = savedSessionId;
     pushChatSession(sess, chatId, savedSessionId);
     sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
-    console.log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    log(`[ACP:${agentId}] Reusing saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
     return true;
   }
   if (!proc.supportsLoadSession) {
@@ -546,7 +558,7 @@ async function loadSavedChatSessionForSend(
     pushChatSession(sess, chatId, savedSessionId);
     if (sess.activeTurns.size === 0) sess.phase = 'idle';
     proc.knownSessions.add(savedSessionId);
-    console.log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
+    log(`[ACP:${agentId}] Loaded saved chat session ${savedSessionId} for send: chat=${chatId}, user=${userId}`);
     return true;
   } catch (loadErr: any) {
     replayBuffers.delete(savedSessionId);
@@ -559,7 +571,7 @@ async function loadSavedChatSessionForSend(
       pushChatSession(sess, chatId, savedSessionId);
       sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
       proc.knownSessions.add(savedSessionId);
-      console.log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
+      log(`[ACP:${agentId}] Saved chat session ${savedSessionId} already loaded for send: chat=${chatId}, user=${userId}`);
       return true;
     }
     logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
@@ -571,12 +583,12 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
   const sessionParams = await buildSessionParams(proc, isAdmin);
-  console.log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
+  log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
   const result = await proc.rpc.send('session/new', sessionParams);
   syncAgentModelsFromSessionResult(agentId, result);
   sess.sessionId = result.sessionId;
   proc.knownSessions.add(result.sessionId);
-  console.log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
+  log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
 }
 
 function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
@@ -735,7 +747,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     .then(async (result: Record<string, unknown> | undefined) => {
       const stopReason = result?.stopReason ?? 'unknown';
       const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
-      console.log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
+      log(`[ACP:${agentId}] prompt done: reason=${stopReason}, ${elapsed}s, ${turn.fullText.length} chars`);
       if (!turn.done) {
         finishTurnAfterPromptResult(turn, result);
         if (sess.activeTurns.size === 0) sess.phase = 'idle';
@@ -752,7 +764,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
     .catch(async (err: Error) => {
       // If session/prompt fails, the session may be truly invalid — try to recover
       const errMsg = err.message || '';
-      console.log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
+      log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
       try {
         const sessionParams = await buildSessionParams(proc, isAdmin);
         const session = await proc.rpc!.send('session/new', sessionParams);
@@ -760,7 +772,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         sess.sessionId = session.sessionId;
         proc.knownSessions.add(session.sessionId);
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
-        console.log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
+        log(`[ACP:${agentId}] Recovered with new session ${session.sessionId} for user ${userId}`);
 
         // Persist the new sessionId to SQLite so chat history references stay current
         if (chatId) {
@@ -776,7 +788,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
             return `${role}: ${m.content.slice(0, 500)}`;
           }).join('\n');
           retryText = `[Previous conversation context — the session was lost, please continue naturally based on this history]\n${contextLines}\n\n[Current message]\n${prompt}`;
-          console.log(`[ACP:${agentId}] Injected ${recent.length} messages as context for recovery`);
+          log(`[ACP:${agentId}] Injected ${recent.length} messages as context for recovery`);
         }
         // Retry prompt parts include the attachment summary via buildPromptParts().
 
@@ -794,7 +806,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         });
         const stopReason = retryResult?.stopReason ?? 'unknown';
         const elapsed = ((Date.now() - turn.startedAt) / 1000).toFixed(1);
-        console.log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
+        log(`[ACP:${agentId}] retry prompt done: reason=${stopReason}, ${elapsed}s`);
         if (!turn.done) {
           finishTurnAfterPromptResult(turn, retryResult as Record<string, unknown> | undefined);
           if (sess.activeTurns.size === 0) sess.phase = 'idle';
@@ -1383,7 +1395,7 @@ async function compareAndRecover(
       });
       chat.ts = ts;
       await saveChat(userId, chat);
-      console.log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
+      log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
       return { recoveredMessages: recovered };
     }
   }
@@ -1472,7 +1484,10 @@ export async function POST(req: NextRequest) {
       if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
       const agent = getAgentById(agentId);
       if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
-      return NextResponse.json({ ok: true, agent });
+      // Return env as parsed object for the UI
+      let envObj: Record<string, string> = {};
+      try { if (agent.env) envObj = JSON.parse(agent.env); } catch { /* ignore */ }
+      return NextResponse.json({ ok: true, agent: { ...agent, env: envObj } });
     }
 
     if (action === 'get-sessions') {
@@ -1510,13 +1525,14 @@ export async function POST(req: NextRequest) {
         public: (body?.updates as any)?.public,
         models: updates.models,
         defaultModelId: updates.defaultModelId,
+        env: (body?.updates as any)?.env,
       });
 
       // Only restart the agent process when fields that affect spawn/runtime change.
       // Model selection is applied per-session via session/set_model, so changing
       // `defaultModelId` (or just refreshing `models`) must not kill the process.
       const updateKeys = Object.keys(updates).filter(k => (updates as any)[k] !== undefined);
-      const restartRequiringKeys = new Set(['name', 'command', 'args', 'cwd', 'yolo', 'public']);
+      const restartRequiringKeys = new Set(['name', 'command', 'args', 'cwd', 'yolo', 'public', 'env']);
       const needsRestart = updateKeys.some(k => restartRequiringKeys.has(k));
 
       let restarted = false;
@@ -1554,6 +1570,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'agent_id_already_exists' }, { status: 409 });
       }
 
+      const rawEnv = (body?.agent as any)?.env;
+      const parsedEnv: Record<string, string> = (typeof rawEnv === 'object' && rawEnv !== null && !Array.isArray(rawEnv))
+        ? Object.fromEntries(
+            Object.entries(rawEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+          )
+        : {};
+
       const entry = configStore.createAgent({
         id: newAgent.id,
         name: newAgent.name || newAgent.id,
@@ -1565,6 +1588,7 @@ export async function POST(req: NextRequest) {
         relayConnectionName: newAgent.relayConnectionName || (newAgent.relay ? newAgent.id : ''),
         models: newAgent.models,
         defaultModelId: newAgent.defaultModelId,
+        env: parsedEnv,
         owner: ownerEmail,
       });
 
@@ -1797,7 +1821,7 @@ export async function POST(req: NextRequest) {
         updateChatAgentSession(userId, chatId, agentId, sess.sessionId).catch(() => { /* ignore */ });
       }
 
-      console.log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
+      log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
 
       const turnChatKey = chatId || '__default';
       const existingTurn = sess.activeTurns.get(turnChatKey);
@@ -1957,7 +1981,7 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
         }
-        console.log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
+        log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2009,7 +2033,7 @@ export async function POST(req: NextRequest) {
           // Don't remove other chats' turns
         }
         sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
-        console.log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
+        log(`[ACP:${agentId}] Session ${savedSessionId} already known for user ${userId}, switching without load`);
         return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
       }
       // Try session/load if the agent supports it
@@ -2029,7 +2053,7 @@ export async function POST(req: NextRequest) {
           // Extract replay buffer and compare with SQLite
           const replayMessages = replayBuffers.get(savedSessionId) || [];
           replayBuffers.delete(savedSessionId);
-          console.log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
+          log(`[ACP:${agentId}] Loaded session ${savedSessionId} for user ${userId}, replayed ${replayMessages.length} message chunks`);
           // Compare with stored chat to find recovered messages
           const recovery = await compareAndRecover(userId, chatId, agentId, replayMessages);
           const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
@@ -2047,7 +2071,7 @@ export async function POST(req: NextRequest) {
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
             sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
             proc.knownSessions.add(savedSessionId);
-            console.log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
+            log(`[ACP:${agentId}] Session ${savedSessionId} already loaded for user ${userId}, reusing`);
             return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn) });
           }
           logSessionLoadFallback(agentId, userId, chatId, savedSessionId, code ? `${errStr} (code=${code})` : errStr);
@@ -2069,7 +2093,7 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
         }
-        console.log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
+        log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
       } catch (newErr) {
         const msg = newErr instanceof Error ? newErr.message : String(newErr);

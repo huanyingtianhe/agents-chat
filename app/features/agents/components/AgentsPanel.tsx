@@ -62,6 +62,8 @@ export function AgentsPanel({
     settingsAgentId,
     settingsAgentConfig,
     setSettingsAgentConfig,
+    settingsEnvText,
+    setSettingsEnvText,
     agentSettingsLoading,
     agentAccessList,
     newAccessEmail,
@@ -242,6 +244,30 @@ export function AgentsPanel({
                   <input type="checkbox" checked={settingsAgentConfig.yolo} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, yolo: e.target.checked } : c)} />
                   <span>YOLO mode (auto-approve)</span>
                 </label>
+                {!settingsAgentConfig.relay && (
+                  <label>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      Environment Variables
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          const textarea = (e.currentTarget.closest('label') as HTMLElement)?.querySelector('textarea');
+                          if (textarea) textarea.style.filter = textarea.style.filter ? '' : 'blur(4px)';
+                        }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: 0 }}
+                        title="Toggle visibility"
+                      >👁</button>
+                    </span>
+                    <textarea
+                      value={settingsEnvText}
+                      onChange={(e) => setSettingsEnvText(e.target.value)}
+                      placeholder={"ANTHROPIC_API_KEY=sk-ant-...\nOTHER_VAR=value"}
+                      rows={3}
+                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                    />
+                    <span className="fieldHint">One per line: KEY=VALUE. Used for API keys and agent config.</span>
+                  </label>
+                )}
               </>
             )}
             <div style={{ marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px' }}>
@@ -326,6 +352,28 @@ export function AgentsPanel({
             <label className="checkboxLabel">
               <input type="checkbox" checked={newAgentForm.yolo} onChange={(e) => setNewAgentForm((f) => ({ ...f, yolo: e.target.checked }))} />
               <span>YOLO mode (auto-approve)</span>
+            </label>
+            <label>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Environment Variables
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    const textarea = (e.currentTarget.closest('label') as HTMLElement)?.querySelector('textarea');
+                    if (textarea) textarea.style.filter = textarea.style.filter ? '' : 'blur(4px)';
+                  }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: 0 }}
+                  title="Toggle visibility"
+                >👁</button>
+              </span>
+              <textarea
+                value={newAgentForm.env}
+                onChange={(e) => setNewAgentForm((f) => ({ ...f, env: e.target.value }))}
+                placeholder={"ANTHROPIC_API_KEY=sk-ant-...\nOTHER_VAR=value"}
+                rows={3}
+                style={{ fontFamily: 'monospace', fontSize: '12px' }}
+              />
+              <span className="fieldHint">One per line: KEY=VALUE. Used for API keys and agent config.</span>
             </label>
             <div className="modalActions">
               <button className="primary" onClick={() => void createAgent()} disabled={addAgentLoading || !newAgentForm.id.trim()}>

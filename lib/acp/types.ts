@@ -105,6 +105,7 @@ export type AgentConfig = {
   relayConnectionName?: string;
   models?: AgentModel[];
   defaultModelId?: string;
+  env?: string; // JSON string: '{"KEY":"value"}'
 };
 
 export type PendingRequest = {

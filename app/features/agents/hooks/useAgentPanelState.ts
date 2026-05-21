@@ -52,7 +52,7 @@ export function useAgentPanelState({
   // Add local agent
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [newAgentForm, setNewAgentForm] = useState({
-    id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true,
+    id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '',
   });
   const [addAgentLoading, setAddAgentLoading] = useState(false);
 
@@ -66,6 +66,7 @@ export function useAgentPanelState({
   const [showAgentSettings, setShowAgentSettings] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [settingsAgentConfig, setSettingsAgentConfig] = useState<Agent | null>(null);
+  const [settingsEnvText, setSettingsEnvText] = useState('');
   const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
   const [agentAccessList, setAgentAccessList] = useState<AccessEntry[]>([]);
   const [newAccessEmail, setNewAccessEmail] = useState('');
@@ -77,15 +78,24 @@ export function useAgentPanelState({
 
   function closeAddAgent() {
     setShowAddAgent(false);
-    setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true });
+    setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' });
   }
 
   async function createAgent() {
-    const { id, name, command, args, cwd, yolo } = newAgentForm;
+    const { id, name, command, args, cwd, yolo, env } = newAgentForm;
     const trimmedId = id.trim();
     if (!trimmedId) return;
     setAddAgentLoading(true);
     try {
+      const envObj: Record<string, string> = {};
+      for (const line of env.split('\n')) {
+        const eqIdx = line.indexOf('=');
+        if (eqIdx <= 0) continue;
+        const key = line.slice(0, eqIdx).trim();
+        const value = line.slice(eqIdx + 1).trim();
+        if (key) envObj[key] = value;
+      }
+
       const data = await acp({
         action: 'create-agent',
         agent: {
@@ -95,13 +105,14 @@ export function useAgentPanelState({
           args: args.trim() ? args.trim().split(/\s+/) : ['--acp'],
           cwd: cwd.trim(),
           yolo,
+          env: envObj,
         },
       });
       if (data.ok) {
         await loadAgents();
         addMessage({ type: 'system', content: `✅ Agent "${name.trim() || trimmedId}" created` });
         setShowAddAgent(false);
-        setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true });
+        setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' });
       } else {
         addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
       }
@@ -156,6 +167,7 @@ export function useAgentPanelState({
   async function openAgentSettings(agentId: string) {
     setSettingsAgentId(agentId);
     setSettingsAgentConfig(null);
+    setSettingsEnvText('');
     setShowAgentSettings(true);
     setAgentSettingsLoading(true);
     setAgentAccessList([]);
@@ -165,7 +177,11 @@ export function useAgentPanelState({
         acp({ action: 'get-agent-config', agentId }),
         acp({ action: 'list-agent-access', agentId }),
       ]);
-      if (configData.ok) setSettingsAgentConfig(configData.agent);
+      if (configData.ok) {
+        setSettingsAgentConfig(configData.agent);
+        const env = configData.agent.env || {};
+        setSettingsEnvText(Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n'));
+      }
       if (accessData.ok) setAgentAccessList(accessData.access || []);
     } catch (err) {
       console.error('Failed to load agent config', err);
@@ -193,6 +209,16 @@ export function useAgentPanelState({
     if (!settingsAgentId || !settingsAgentConfig) return;
     setAgentSettingsLoading(true);
     try {
+      // Parse env text to object on save
+      const envObj: Record<string, string> = {};
+      for (const line of settingsEnvText.split('\n')) {
+        const eqIdx = line.indexOf('=');
+        if (eqIdx <= 0) continue;
+        const key = line.slice(0, eqIdx).trim();
+        const value = line.slice(eqIdx + 1).trim();
+        if (key) envObj[key] = value;
+      }
+
       const data = await acp({
         action: 'update-agent-config', agentId: settingsAgentId,
         updates: {
@@ -202,6 +228,7 @@ export function useAgentPanelState({
           cwd: settingsAgentConfig.cwd,
           yolo: settingsAgentConfig.yolo,
           public: settingsAgentConfig.public,
+          env: envObj,
         },
       });
       if (data.ok) {
@@ -250,7 +277,7 @@ export function useAgentPanelState({
       if (event.key !== 'Escape') return;
       if (openModelMenuAgentId) { setOpenModelMenuAgentId(null); return; }
       if (showAgentSettings) { setShowAgentSettings(false); return; }
-      if (showAddAgent) { setShowAddAgent(false); setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true }); return; }
+      if (showAddAgent) { setShowAddAgent(false); setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' }); return; }
       if (showAddRemoteAgent) { setShowAddRemoteAgent(false); return; }
       if (showAgentAddMenu) { setShowAgentAddMenu(false); return; }
     }
@@ -313,6 +340,8 @@ export function useAgentPanelState({
     settingsAgentId,
     settingsAgentConfig,
     setSettingsAgentConfig,
+    settingsEnvText,
+    setSettingsEnvText,
     agentSettingsLoading,
     agentAccessList,
     newAccessEmail,

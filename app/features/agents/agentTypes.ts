@@ -11,6 +11,7 @@ export type Agent = {
   args?: string[];
   cwd?: string;
   yolo?: boolean;
+  env?: Record<string, string>;
   relay?: boolean;
   relayConnectionName?: string;
   relayConnectionLabel?: string;

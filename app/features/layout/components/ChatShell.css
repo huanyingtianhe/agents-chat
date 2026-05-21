@@ -446,13 +446,16 @@
 .chatPageRoot .modal h2 { margin-top: 0; color: var(--accent); }
 .chatPageRoot .modal label { display: block; margin-bottom: 14px; }
 .chatPageRoot .modal label span { display: block; margin-bottom: 6px; color: var(--text-soft); }
-.chatPageRoot .modal input:not([type="checkbox"]):not([type="radio"]) {
+.chatPageRoot .modal input:not([type="checkbox"]):not([type="radio"]),
+.chatPageRoot .modal textarea {
   width: 100%;
   padding: 12px 14px;
   background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   color: var(--text);
+  font: inherit;
+  resize: vertical;
 }
 .chatPageRoot .modal select {
   width: 100%;

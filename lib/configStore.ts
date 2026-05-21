@@ -33,6 +33,7 @@ export type AgentRecord = {
   public: boolean;
   models: AgentModel[];
   defaultModelId: string;
+  env: Record<string, string>;
   owner: string;
   createdAt: string;
   updatedAt: string;
@@ -73,6 +74,7 @@ function getDb(): ReturnType<typeof Database> {
       public INTEGER NOT NULL DEFAULT 0,
       models TEXT NOT NULL DEFAULT '[]',
       default_model_id TEXT NOT NULL DEFAULT '',
+      env TEXT NOT NULL DEFAULT '{}',
       owner TEXT NOT NULL DEFAULT 'system',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -119,8 +121,8 @@ function runMigrations(): void {
       const defaultOwner = getDefaultOwner();
 
       const insert = db.prepare(`
-        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, owner)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, env, owner)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const tx = db.transaction(() => {
@@ -139,6 +141,7 @@ function runMigrations(): void {
             a.id === 'copilot' ? 1 : 0,
             JSON.stringify(models),
             normalizeDefaultModelId(a.defaultModelId, models),
+            JSON.stringify(a.env || {}),
             defaultOwner,
           );
         }
@@ -207,6 +210,16 @@ function runMigrations(): void {
     }
     db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('add_agent_model_columns');
   }
+
+  const envColMigrated = db.prepare('SELECT 1 FROM migrations WHERE key = ?').get('add_env_column');
+  if (!envColMigrated) {
+    try {
+      db.exec(`ALTER TABLE agents ADD COLUMN env TEXT NOT NULL DEFAULT '{}'`);
+    } catch {
+      // Column already exists if DB was created fresh with the new schema
+    }
+    db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('add_env_column');
+  }
 }
 
 function normalizeAgentModels(input: unknown): AgentModel[] {
@@ -255,6 +268,21 @@ function getDefaultOwner(): string {
   return adminEmails[0] || 'system';
 }
 
+function parseEnv(raw: unknown): Record<string, string> {
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string') result[k] = v;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 // ─── Agent CRUD ───
 
 function rowToAgent(row: any): AgentRecord {
@@ -272,6 +300,7 @@ function rowToAgent(row: any): AgentRecord {
     public: !!row.public,
     models,
     defaultModelId: normalizeDefaultModelId(row.default_model_id, models),
+    env: parseEnv(row.env),
     owner: row.owner,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -303,14 +332,15 @@ export function createAgent(agent: {
   public?: boolean;
   models?: AgentModel[];
   defaultModelId?: string;
+  env?: Record<string, string>;
   owner: string;
 }): AgentRecord {
   const db = getDb();
   const models = normalizeAgentModels(agent.models);
   const defaultModelId = normalizeDefaultModelId(agent.defaultModelId, models);
   db.prepare(`
-    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, owner)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO agents (id, name, command, args, cwd, yolo, no_tools, relay, relay_connection_name, public, models, default_model_id, env, owner)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agent.id,
     agent.name || agent.id,
@@ -324,6 +354,7 @@ export function createAgent(agent: {
     agent.public ? 1 : 0,
     JSON.stringify(models),
     defaultModelId,
+    JSON.stringify(agent.env || {}),
     agent.owner,
   );
   return getAgentById(agent.id)!;
@@ -339,6 +370,7 @@ export function updateAgent(agentId: string, updates: Partial<{
   relay: boolean;
   relayConnectionName: string;
   public: boolean;
+  env: Record<string, string>;
   models: AgentModel[];
   defaultModelId: string;
 }>): AgentRecord | null {
@@ -358,6 +390,7 @@ export function updateAgent(agentId: string, updates: Partial<{
   if (updates.relay !== undefined) { fields.push('relay = ?'); values.push(updates.relay ? 1 : 0); }
   if (updates.relayConnectionName !== undefined) { fields.push('relay_connection_name = ?'); values.push(updates.relayConnectionName); }
   if (updates.public !== undefined) { fields.push('public = ?'); values.push(updates.public ? 1 : 0); }
+  if (updates.env !== undefined) { fields.push('env = ?'); values.push(JSON.stringify(updates.env)); }
   if (updates.models !== undefined) {
     const models = normalizeAgentModels(updates.models);
     fields.push('models = ?');

@@ -26,7 +26,7 @@ export function SelectPicker<V extends string = string>({
   onChange,
 }: SelectPickerProps<V>) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -48,7 +48,7 @@ export function SelectPicker<V extends string = string>({
   const label = selected ? selected.label : placeholder;
 
   return (
-    <span className="themedPickerWrap" ref={wrapRef}>
+    <div className="themedPickerWrap" ref={wrapRef}>
       <button
         type="button"
         className={`themedPickerTrigger ${open ? 'themedPickerOpen' : ''}`}
@@ -88,6 +88,6 @@ export function SelectPicker<V extends string = string>({
           )}
         </div>
       )}
-    </span>
+    </div>
   );
 }

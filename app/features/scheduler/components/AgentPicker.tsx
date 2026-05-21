@@ -11,7 +11,7 @@ export interface AgentPickerProps {
 
 export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerProps) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -33,7 +33,7 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
   const label = selected ? `${selected.name} (${selected.id})` : '— Select an agent —';
 
   return (
-    <span className="themedPickerWrap" ref={wrapRef}>
+    <div className="themedPickerWrap" ref={wrapRef}>
       <button
         type="button"
         className={`themedPickerTrigger ${open ? 'themedPickerOpen' : ''}`}
@@ -73,6 +73,6 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
           )}
         </div>
       )}
-    </span>
+    </div>
   );
 }

@@ -33,22 +33,22 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
   const label = selected ? `${selected.name} (${selected.id})` : '— Select an agent —';
 
   return (
-    <span className="schedulerAgentPickerWrap" ref={wrapRef}>
+    <span className="themedPickerWrap" ref={wrapRef}>
       <button
         type="button"
-        className={`schedulerAgentPickerTrigger ${open ? 'schedulerAgentPickerOpen' : ''}`}
+        className={`themedPickerTrigger ${open ? 'themedPickerOpen' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((p) => !p)}
       >
-        <span className="schedulerAgentPickerLabel">{label}</span>
-        <span className="schedulerAgentPickerCaret" aria-hidden="true">▾</span>
+        <span className="themedPickerLabel">{label}</span>
+        <span className="themedPickerCaret" aria-hidden="true">▾</span>
       </button>
       {open && !disabled && (
-        <div className="schedulerAgentPickerDropdown" role="listbox" aria-label="Agent">
+        <div className="themedPickerDropdown" role="listbox" aria-label="Agent">
           {agents.length === 0 ? (
-            <div className="schedulerAgentPickerEmpty">No agents available</div>
+            <div className="themedPickerEmpty">No agents available</div>
           ) : (
             agents.map((a) => {
               const isSelected = a.id === value;
@@ -58,15 +58,15 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
                   type="button"
                   role="option"
                   aria-selected={isSelected}
-                  className={`schedulerAgentPickerOption ${isSelected ? 'schedulerAgentPickerOptionActive' : ''}`}
+                  className={`themedPickerOption ${isSelected ? 'themedPickerOptionActive' : ''}`}
                   onClick={() => { onChange(a.id); setOpen(false); }}
                   title={`@${a.id}`}
                 >
-                  <span className="schedulerAgentPickerOptionLabel">
+                  <span className="themedPickerOptionLabel">
                     {a.name}
-                    <span className="schedulerAgentPickerOptionId"> ({a.id})</span>
+                    <span className="themedPickerOptionId"> ({a.id})</span>
                   </span>
-                  {isSelected ? <span className="schedulerAgentPickerOptionCheck">✓</span> : null}
+                  {isSelected ? <span className="themedPickerOptionCheck">✓</span> : null}
                 </button>
               );
             })

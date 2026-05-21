@@ -7,6 +7,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { createFileComment, deleteFileComment, updateFileCommentStatus } from '../lib/chatStore';
+import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
@@ -670,7 +671,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
 
@@ -830,7 +831,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     const commentToggle = page.locator('.mdEditorToolbar button[title="Toggle comments"]');
@@ -946,7 +947,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     const commentToggle = page.locator('.mdEditorToolbar button[title="Toggle comments"]');
     if (!(await page.locator('.commentSidebar').isVisible().catch(() => false))) {
@@ -1102,7 +1103,7 @@ test.describe('File Comments UI', () => {
       await expect(page.locator('.message.user', { hasText: 'ordinary current chat' })).toBeVisible();
 
       await page.click('button.leftSidebarTab:has-text("Files")');
-      await page.selectOption('.remoteAgentSelect', agentId);
+      await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await expect(page.locator('.mdEditorFilePath')).toContainText(filePath);
 
@@ -1221,7 +1222,7 @@ test.describe('File Comments UI', () => {
       await page.reload();
       await page.waitForSelector('.chatContainer', { timeout: 30000 });
       await page.click('button.leftSidebarTab:has-text("Files")');
-      await page.selectOption('.remoteAgentSelect', agentId);
+      await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
 
@@ -1427,7 +1428,7 @@ test.describe('File Comments UI', () => {
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
 
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await expect(page.locator('.mdEditorFilePath')).toContainText(filePath);
 
@@ -1628,7 +1629,7 @@ test.describe('File Comments UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
 
@@ -1792,7 +1793,7 @@ test.describe('File Comments UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
 
@@ -1929,7 +1930,7 @@ test.describe('File Comments UI', () => {
       await page.reload();
       await page.waitForSelector('.chatContainer', { timeout: 30000 });
       await page.click('button.leftSidebarTab:has-text("Files")');
-      await page.selectOption('.remoteAgentSelect', agentId);
+      await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await page.click('button.leftSidebarTab:has-text("Chats")');
       await page.click('button.chatHistoryItem:has-text("Review: ui-legacy-review.md")');
@@ -2049,7 +2050,7 @@ test.describe('File Comments UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
 
@@ -2130,7 +2131,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'test-md-agent');
+    await selectFilesAgent(page, 'test-md-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-selection.md' }).click();
 
     const liveEditor = page.locator('.mdLiveEditable');
@@ -2284,7 +2285,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'test-md-multi-select-agent');
+    await selectFilesAgent(page, 'test-md-multi-select-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-multi-selection.md' }).click();
 
     await expect(page.locator('.mdLiveEditable')).toBeVisible();
@@ -2374,7 +2375,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'test-md-triple-select-agent');
+    await selectFilesAgent(page, 'test-md-triple-select-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-triple-selection.md' }).click();
 
     const paragraph = page.locator('.mdLiveEditable p', { hasText: 'Paragraph with bold selected phrase' });
@@ -2466,7 +2467,7 @@ test.describe('File Comments UI', () => {
     await page.click('button[type="submit"]');
 
     await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
-    await expect(page.locator('.remoteAgentSelect')).toHaveValue('restore-agent');
+    await expect(filesAgentTrigger(page)).toHaveValue('restore-agent');
     await expect(page.locator('.mdEditorFilePath')).toContainText('restore.md');
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     await expect(page.locator('.mdModeBtn.active')).toHaveText('Live Edit');
@@ -2518,7 +2519,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', agentId);
+    await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
 
     await page.locator('.mdLiveEditable').evaluate(el => {
@@ -2610,7 +2611,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'html-mode-agent');
+    await selectFilesAgent(page, 'html-mode-agent');
     await page.locator('.mdTreeFile', { hasText: 'preview-only.html' }).click();
 
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
@@ -2740,7 +2741,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'live-preserve-agent');
+    await selectFilesAgent(page, 'live-preserve-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-preserve.md' }).click();
     await page.locator('.mdModeBtn', { hasText: 'Live Edit' }).click();
 
@@ -2799,7 +2800,7 @@ test.describe('File Comments UI', () => {
 
     await login(page);
     await page.click('button.leftSidebarTab:has-text("Files")');
-    await page.selectOption('.remoteAgentSelect', 'live-caret-agent');
+    await selectFilesAgent(page, 'live-caret-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-caret.md' }).click();
 
     const liveEditor = page.locator('.mdLiveEditable');

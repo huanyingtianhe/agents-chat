@@ -5,7 +5,7 @@ import type { CronJob, ScheduleSpec } from '../scheduleTypes';
 import { validateSpec, nextFires } from '../scheduleSpec';
 import { useSchedules } from '../hooks/useSchedules';
 import { AgentPicker } from './AgentPicker';
-import { SelectPicker } from './SelectPicker';
+import { SelectPicker } from '../../ui/SelectPicker';
 
 const SCHEDULE_KIND_OPTIONS: Array<{ value: ScheduleSpec['kind']; label: string }> = [
   { value: 'every_minutes', label: 'Every N minutes' },

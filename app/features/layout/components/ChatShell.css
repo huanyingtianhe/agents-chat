@@ -487,12 +487,12 @@
   margin-bottom: 6px;
   color: var(--text-soft);
 }
-.chatPageRoot .schedulerAgentPickerWrap {
+.chatPageRoot .themedPickerWrap {
   position: relative;
   display: block;
   width: 100%;
 }
-.chatPageRoot .schedulerAgentPickerTrigger {
+.chatPageRoot .themedPickerTrigger {
   width: 100%;
   display: inline-flex;
   align-items: center;
@@ -508,27 +508,27 @@
   cursor: pointer;
   transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
 }
-.chatPageRoot .schedulerAgentPickerTrigger:hover:not(:disabled),
-.chatPageRoot .schedulerAgentPickerOpen {
+.chatPageRoot .themedPickerTrigger:hover:not(:disabled),
+.chatPageRoot .themedPickerOpen {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
-.chatPageRoot .schedulerAgentPickerTrigger:disabled {
+.chatPageRoot .themedPickerTrigger:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.chatPageRoot .schedulerAgentPickerLabel {
+.chatPageRoot .themedPickerLabel {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chatPageRoot .schedulerAgentPickerCaret {
+.chatPageRoot .themedPickerCaret {
   font-size: 10px;
   opacity: 0.7;
   line-height: 1;
 }
-.chatPageRoot .schedulerAgentPickerDropdown {
+.chatPageRoot .themedPickerDropdown {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
@@ -547,7 +547,7 @@
   gap: 2px;
   box-sizing: border-box;
 }
-.chatPageRoot .schedulerAgentPickerOption {
+.chatPageRoot .themedPickerOption {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -564,17 +564,17 @@
   min-height: 36px;
   line-height: 1.3;
 }
-.chatPageRoot .schedulerAgentPickerOption:hover,
-.chatPageRoot .schedulerAgentPickerOption:focus-visible {
+.chatPageRoot .themedPickerOption:hover,
+.chatPageRoot .themedPickerOption:focus-visible {
   background-color: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
   outline: none;
 }
-.chatPageRoot .schedulerAgentPickerOptionActive {
+.chatPageRoot .themedPickerOptionActive {
   background: var(--accent-soft, rgba(99,179,237,0.15));
   color: var(--accent);
 }
-.chatPageRoot .schedulerAgentPickerOptionLabel {
+.chatPageRoot .themedPickerOptionLabel {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -583,17 +583,17 @@
   margin: 0;
   color: inherit;
 }
-.chatPageRoot .schedulerAgentPickerOptionId {
+.chatPageRoot .themedPickerOptionId {
   opacity: 0.6;
   display: inline;
   margin: 0;
 }
-.chatPageRoot .schedulerAgentPickerOptionCheck {
+.chatPageRoot .themedPickerOptionCheck {
   color: var(--accent);
   display: inline;
   margin: 0;
 }
-.chatPageRoot .schedulerAgentPickerEmpty {
+.chatPageRoot .themedPickerEmpty {
   padding: 10px 12px;
   color: var(--text-soft);
   font-size: 13px;

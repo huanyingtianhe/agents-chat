@@ -476,6 +476,57 @@
   min-height: 80px;
   box-sizing: border-box;
 }
+
+/* ── Scheduler agent picker: modal-styled trigger + themed popover ── */
+.chatPageRoot .schedulerAgentPickerWrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.chatPageRoot .schedulerAgentPickerTrigger {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.chatPageRoot .schedulerAgentPickerTrigger:hover:not(:disabled),
+.chatPageRoot .schedulerAgentPickerOpen {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.chatPageRoot .schedulerAgentPickerTrigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.chatPageRoot .schedulerAgentPickerLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chatPageRoot .schedulerAgentPickerCaret {
+  font-size: 10px;
+  opacity: 0.7;
+  line-height: 1;
+}
+.chatPageRoot .schedulerAgentPickerDropdown {
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: 100%;
+  min-width: 0;
+}
 .chatPageRoot .modalActions { display: flex; gap: 10px; justify-content: flex-end; }
 .chatPageRoot .modalActions button,
 .chatPageRoot .modal button.primary,

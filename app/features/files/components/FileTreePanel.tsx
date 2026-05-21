@@ -50,8 +50,8 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
 
   return (
     <div className="mdFilesTab">
-      <div style={{ padding: '4px 0 8px', display: 'flex', gap: 6, alignItems: 'center' }}>
-        <div className="remoteAgentPickerSlot" style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ padding: '4px 0 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="remoteAgentPickerSlot">
           <SelectPicker
             options={[
               { value: '', label: 'Select agent…' },

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthToken, isAdminToken } from "../../../../lib/auth";
 import { openScheduleStore } from "../../../../lib/scheduler/scheduleStore";
-import { getRuntime } from "../../../../lib/scheduler/schedulerRuntime";
+import { getRuntime, ensureRuntime } from "../../../../lib/scheduler/schedulerRuntime";
 import { specToCron, validateSpec } from "../../../../app/features/scheduler/scheduleSpec";
 
 function authorize(token: any, ownerEmail: string) {
@@ -38,6 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
   const updated = store.updateJob(id, patch)!;
   getRuntime()?.scheduleJob(updated);
+  void ensureRuntime().then((rt) => rt?.scheduleJob(updated));
   return NextResponse.json({ job: updated });
 }
 
@@ -49,6 +50,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   if (!job) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (!authorize(token, job.ownerEmail)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   getRuntime()?.unscheduleJob(id);
+  void ensureRuntime().then((rt) => rt?.unscheduleJob(id));
   store.deleteJob(id);
   return NextResponse.json({ ok: true });
 }

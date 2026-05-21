@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthToken, isAdminToken } from '../../../lib/auth';
 import { openScheduleStore } from '../../../lib/scheduler/scheduleStore';
-import { getRuntime } from '../../../lib/scheduler/schedulerRuntime';
+import { getRuntime, ensureRuntime } from '../../../lib/scheduler/schedulerRuntime';
 import { specToCron, validateSpec } from '../../../app/features/scheduler/scheduleSpec';
 import { getAllAgents } from '../../../lib/configStore';
 
@@ -42,5 +42,8 @@ export async function POST(req: NextRequest) {
     enabled: enabled !== false,
   });
   getRuntime()?.scheduleJob(job);
+  // Ensure the singleton is initialized in the background so the cron triggers
+  // start firing even if instrumentation didn't run yet.
+  void ensureRuntime().then((rt) => rt?.scheduleJob(job));
   return NextResponse.json({ job, id: job.id }, { status: 201 });
 }

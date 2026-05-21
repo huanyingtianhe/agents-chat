@@ -91,3 +91,32 @@ export function createRuntime(deps: { store: ScheduleStore; runner: Runner; cron
 let singleton: SchedulerRuntime | null = null;
 export function getRuntime(): SchedulerRuntime | null { return singleton; }
 export function setRuntime(rt: SchedulerRuntime | null) { singleton = rt; }
+
+let ensurePromise: Promise<SchedulerRuntime | null> | null = null;
+export async function ensureRuntime(): Promise<SchedulerRuntime | null> {
+  if (singleton) return singleton;
+  if (ensurePromise) return ensurePromise;
+  ensurePromise = (async () => {
+    try {
+      const cron = await import("node-cron");
+      const { openScheduleStore } = await import("./scheduleStore");
+      const { runAgentOnce } = await import("./agentRunner");
+      if (singleton) return singleton;
+      const store = openScheduleStore();
+      const rt = createRuntime({
+        store,
+        runner: { runAgentOnce },
+        cron: { schedule: (expr, fn, opts) => cron.schedule(expr, fn, opts as any) },
+        now: () => Date.now(),
+      });
+      singleton = rt;
+      await rt.start();
+      return rt;
+    } catch (err) {
+      console.error("[scheduler] ensureRuntime failed:", err);
+      ensurePromise = null;
+      return null;
+    }
+  })();
+  return ensurePromise;
+}

@@ -95,35 +95,37 @@ export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps)
         </div>
         <div className="agentsSidebarSection">
           {jobs.map((job) => (
-            <button
+            <div
               key={job.id}
-              className="agentListItem"
-              onClick={() => setEditingJobId(job.id)}
-              title={`${job.name} — Click to edit`}
-              style={{ justifyContent: 'space-between', alignItems: 'center' }}
+              className="agentListItem scheduleListItem"
+              style={{ justifyContent: 'space-between', alignItems: 'center', padding: 0 }}
             >
-              <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                type="button"
+                className="scheduleListMain"
+                onClick={() => setEditingJobId(job.id)}
+                title={`${job.name} — Click to edit`}
+                style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 0, color: 'inherit', font: 'inherit', textAlign: 'left', padding: '9px 10px', cursor: 'pointer', borderRadius: 12 }}
+              >
                 <span className="agentListAvatar">{(job.name || job.id).slice(0, 1).toUpperCase()}</span>
                 <span className="agentListInfo">
                   <span className="agentListName">{job.name}</span>
                   <span className="agentListId">{summarizeSpec(job.scheduleSpec)}</span>
                 </span>
-              </span>
+              </button>
               <button
+                type="button"
                 className="sidebarToggle"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setViewingRunsJobId(job.id);
-                }}
+                onClick={() => setViewingRunsJobId(job.id)}
                 title="View run history"
-                style={{ marginLeft: '8px', flexShrink: 0 }}
+                style={{ marginLeft: '4px', flexShrink: 0 }}
               >
                 📜
               </button>
-              <span className={`agentListStatus ${job.enabled ? 'running' : ''}`} style={{ marginLeft: '4px' }}>
+              <span className={`agentListStatus ${job.enabled ? 'running' : ''}`} style={{ marginLeft: '4px', marginRight: '10px' }}>
                 {job.enabled ? '●' : '○'}
               </span>
-            </button>
+            </div>
           ))}
           {jobs.length === 0 && (
             <div className="muted" style={{ padding: 20, textAlign: 'center' }}>

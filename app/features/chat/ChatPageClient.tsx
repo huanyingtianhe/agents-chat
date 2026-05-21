@@ -107,7 +107,7 @@ export function ChatPageClient() {
 
   function updateChatStickiness(container: HTMLElement) { const previous = lastChatScrollTopRef.current, distance = container.scrollHeight - container.scrollTop - container.clientHeight; shouldStickToBottomRef.current = container.scrollTop < previous - 1 ? false : distance <= 4; lastChatScrollTopRef.current = container.scrollTop; }
   function switchAgentFilter(agentId: string | null) { if (agentId === registry.selectedAgentFilter) return; void saveCurrentChatToHistory(); registry.setSelectedAgentFilter(agentId); currentChatIdRef.current = ''; setCurrentChatId(''); setActiveSidebarChatId(''); setChatName('New Chat'); clearChatMessages({ clearAgentFilter: false }); currentAgentSessionsRef.current = {}; }
-  async function loadChat(chatId: string) { if (chatId === currentChatId) { setOpenChatMenuId(null); setShowChatsPanel(false); return; } setOpenChatMenuId(null); shouldStickToBottomRef.current = true; await runtimeLoadChat(chatId); }
+  async function loadChat(chatId: string) { if (chatId === currentChatId) { setOpenChatMenuId(null); setShowChatsPanel(false); return; } setOpenChatMenuId(null); shouldStickToBottomRef.current = true; await runtimeLoadChat(chatId); requestAnimationFrame(() => { const el = chatContainerRef.current; if (el) el.scrollTop = el.scrollHeight; }); }
   async function createNewChat() { setOpenChatMenuId(null); await runtimeCreateNewChat(registry.selectedAgentFilter); }
   async function renameChatById(chatId: string, newName: string) { await runtimeRenameChatById(chatId, newName, () => { setRenamingChatId(null); setRenameValue(''); }); }
   async function deleteChatById(chatId: string) { await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }

@@ -1,6 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { ChatHistoryEntry, ChatMessage, ShareDialog } from '../chatTypes';
 import { getPersistableMessages, migrateFailedSendWarnings, normalizeChatHistory, lastSessionId } from '../chatHelpers';
+import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type PersistenceContext = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -26,6 +27,7 @@ export type PersistenceContext = {
   onClearAgentFilter?: () => void;
   onCloseChatsPanel?: () => void;
   onCloseAgentsPanel?: () => void;
+  inputHistoryRef?: MutableRefObject<Record<string, string[]>>;
 };
 
 export function createPersistenceHandlers(ctx: PersistenceContext) {
@@ -189,7 +191,18 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.setCurrentChatId(chatId);
     ctx.setExpandedMessages({});
     ctx.onClearInput?.();
-    ctx.onClearAgentFilter?.();
+
+    // Backfill input history from loaded messages if none exists for this chat
+    if (ctx.inputHistoryRef && !ctx.inputHistoryRef.current[chatId]) {
+      const userTexts = targetMessages
+        .filter(m => m.type === 'user' && m.content)
+        .map(m => m.content as string)
+        .filter(t => t.trim().length > 0);
+      if (userTexts.length > 0) {
+        ctx.inputHistoryRef.current[chatId] = userTexts.slice(-100);
+        try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(ctx.inputHistoryRef.current)); } catch { /* ignore */ }
+      }
+    }
     if (migratedFailedSendState) {
       void persistLoadedChatMigration(chatId, targetName, targetTs, targetMessages, agentSessions);
     }

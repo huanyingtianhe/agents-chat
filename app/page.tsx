@@ -1085,9 +1085,12 @@ export default function Page() {
   const [input, setInput] = useState('');
   const inputRef = useRef('');
   const inputDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Stores link mappings from rich text paste: linkText → href
+  const pastedLinksRef = useRef<Array<{ text: string; href: string }>>([]);
   // For programmatic updates (clear, history, mention select) — sync DOM + state immediately
   const setInputProgrammatic = useCallback((value: string) => {
     inputRef.current = value;
+    if (!value) pastedLinksRef.current = [];
     if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
     setInput(value);
     if (composerRef.current) {
@@ -4426,9 +4429,35 @@ export default function Page() {
 
   function handleAttachmentPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = getFilesFromClipboard(event);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void addFilesToComposer(files);
+    if (files.length > 0) {
+      event.preventDefault();
+      void addFilesToComposer(files);
+      return;
+    }
+    // Store hyperlink mappings from rich text paste (links applied on send)
+    const html = event.clipboardData.getData('text/html');
+    if (html) {
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      const anchors = container.querySelectorAll('a[href]');
+      if (anchors.length > 0) {
+        const newLinks: Array<{ text: string; href: string }> = [];
+        anchors.forEach((a) => {
+          const href = (a as HTMLAnchorElement).href || a.getAttribute('href') || '';
+          const linkText = (a.textContent || '').trim().replace(/\s+/g, ' ');
+          if (!href || !linkText) return;
+          // Skip if link text is already the URL
+          if (linkText === href || linkText === href.replace(/\/$/, '')) return;
+          // Only allow http/https/mailto protocols
+          if (!/^(https?:|mailto:)/i.test(href)) return;
+          newLinks.push({ text: linkText, href });
+        });
+        if (newLinks.length > 0) {
+          pastedLinksRef.current = [...pastedLinksRef.current, ...newLinks];
+        }
+      }
+    }
+    // Let browser handle default paste (plain text into textarea)
   }
 
   function dataTransferHasFiles(event: DragEvent<HTMLElement>) {
@@ -4541,9 +4570,20 @@ export default function Page() {
   }
 
   async function handleSend() {
-    const text = (inputRef.current || composerRef.current?.value || '').trim();
+    let text = (inputRef.current || composerRef.current?.value || '').trim();
     const sendAttachments = attachments;
     if ((!text && sendAttachments.length === 0) || agents.length === 0) return;
+
+    // Embed any pasted hyperlinks as markdown into the message text
+    if (pastedLinksRef.current.length > 0) {
+      for (const { text: linkText, href } of pastedLinksRef.current) {
+        const idx = text.indexOf(linkText);
+        if (idx !== -1) {
+          text = text.substring(0, idx) + `[${linkText}](${href})` + text.substring(idx + linkText.length);
+        }
+      }
+      pastedLinksRef.current = [];
+    }
 
     const textForAgent = text || 'Please review the attached file(s).';
     // Auto-create a chat if none is active (empty homepage state)
@@ -4950,6 +4990,7 @@ export default function Page() {
     }
 
     currentChatIdRef.current = chatId;
+    shouldStickToBottomRef.current = true;
     setMessagesForChat(chatId, targetMessages);
     setChatName(targetName);
     setCurrentChatId(chatId);

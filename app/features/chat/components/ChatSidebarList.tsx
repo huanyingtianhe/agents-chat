@@ -74,9 +74,10 @@ export function ChatSidebarList({
     ? [{ id: currentChatId, name: chatName, ts: chatHistory[0]?.ts ? chatHistory[0].ts + 1 : Date.now() }, ...chatHistory]
     : chatHistory;
   const uniqueChats = normalizeChatHistory(allChats);
-  const filteredChats = chatAgentFilter
+  const filteredChats = (chatAgentFilter
     ? uniqueChats.filter((chat) => chat.agentId === chatAgentFilter || (!chat.agentId && chat.id === currentChatId))
-    : uniqueChats;
+    : uniqueChats
+  ).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const selectedAgentName = chatAgentFilter
     ? chatFilterAgents.find((agent) => agent.id === chatAgentFilter)?.name || chatAgentFilter
     : '';

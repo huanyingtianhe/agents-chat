@@ -352,10 +352,15 @@ async function doBootAgent(agentId: string): Promise<void> {
         const normalized: import('@/lib/acp/types').SlashCommand[] = [];
         for (const cmd of update.availableCommands) {
           if (!cmd || typeof cmd.name !== 'string' || !cmd.name) continue;
+          // Per ACP spec, the input hint lives at `input.hint`. Older/alternate
+          // payloads may surface it directly as `hint` — accept either.
+          const inputHint = cmd.input && typeof cmd.input === 'object' && typeof cmd.input.hint === 'string'
+            ? cmd.input.hint
+            : (typeof cmd.hint === 'string' ? cmd.hint : undefined);
           normalized.push({
             name: cmd.name,
             description: typeof cmd.description === 'string' ? cmd.description : '',
-            hint: typeof cmd.hint === 'string' ? cmd.hint : undefined,
+            hint: inputHint,
           });
         }
         proc.availableCommandsBySession.set(notifSessionId, normalized);

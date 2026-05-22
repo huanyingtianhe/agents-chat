@@ -32,9 +32,10 @@ export function SlashCommandPalette({ commands, selectedIndex, onSelect }: Slash
           className={`mentionItem slashCommandItem ${selectedIndex === idx ? 'selected' : ''}`}
           onClick={() => onSelect(cmd)}
         >
-          <span className="mentionId slashCommandName">/{cmd.name}</span>
+          <span className="mentionId slashCommandName">
+            /{cmd.name}{cmd.hint ? <span className="slashCommandHintInline"> {cmd.hint}</span> : null}
+          </span>
           {cmd.description ? <span className="mentionDesc slashCommandDesc">{cmd.description}</span> : null}
-          {cmd.hint ? <span className="mentionDesc slashCommandHint">{cmd.hint}</span> : null}
         </button>
       ))}
     </div>

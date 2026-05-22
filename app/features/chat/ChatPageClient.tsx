@@ -99,8 +99,19 @@ export function ChatPageClient() {
   const filteredSlashCommands = useMemo(() => {
     if (!slashMatch) return [];
     const q = slashMatch[1].toLowerCase();
-    return slashCommandsState.commands.filter((cmd) => cmd.name.toLowerCase().startsWith(q));
-  }, [slashMatch, slashCommandsState.commands]);
+    const targetAgent = singleComposerAgentId ? agents.find((a) => a.id === singleComposerAgentId) : null;
+    const modelIds = (targetAgent?.models || []).map((m) => m.modelId).filter(Boolean);
+    return slashCommandsState.commands
+      .filter((cmd) => cmd.name.toLowerCase().startsWith(q))
+      .map((cmd) => {
+        // The agent's hint for `/model` is typically just "model" which isn't useful.
+        // If we already know the agent's supported models, surface them as the hint.
+        if (cmd.name.toLowerCase() === 'model' && modelIds.length > 0) {
+          return { ...cmd, hint: modelIds.join(' | ') };
+        }
+        return cmd;
+      });
+  }, [slashMatch, slashCommandsState.commands, singleComposerAgentId, agents]);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const slashTriggerActiveRef = useRef(false);
   useEffect(() => { setSlashSelectedIndex(0); }, [input, singleComposerAgentId]);

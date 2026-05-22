@@ -7,6 +7,7 @@
  */
 
 import { test, expect, Locator, Page } from '@playwright/test';
+import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
@@ -4597,11 +4598,11 @@ test.describe('Agent Filter Tabs', () => {
   });
 
   test('should show agent filter dropdown in sidebar', async ({ page }) => {
-    const select = page.locator('select.chatAgentFilterSelect');
-    await expect(select).toBeVisible();
-    // Default selection is "All" (empty value)
-    await expect(select).toHaveValue('');
-    await expect(select.locator('option').first()).toHaveText(/All/);
+    const slot = page.locator('.chatAgentFilterPickerSlot');
+    const trigger = slot.locator('button.themedPickerTrigger');
+    await expect(trigger).toBeVisible();
+    // Default selection is "All agents"
+    await expect(trigger.locator('.themedPickerLabel')).toHaveText(/All/);
   });
 
   test('should hide scheduler from agent filter dropdown', async ({ page }) => {
@@ -4627,10 +4628,13 @@ test.describe('Agent Filter Tabs', () => {
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
-    const select = page.locator('select.chatAgentFilterSelect');
-    await expect(select).toHaveValue('');
-    await expect(select.locator('option', { hasText: 'Alpha Agent' })).toHaveCount(1);
-    await expect(select.locator('option', { hasText: 'Scheduler' })).toHaveCount(0);
+    const slot = page.locator('.chatAgentFilterPickerSlot');
+    const trigger = slot.locator('button.themedPickerTrigger');
+    await expect(trigger.locator('.themedPickerLabel')).toHaveText(/All/);
+    await trigger.click();
+    const dropdown = page.locator('.themedPickerDropdown[aria-label="Filter chats by primary agent"]');
+    await expect(dropdown.locator('button.themedPickerOption', { hasText: 'Alpha Agent' })).toHaveCount(1);
+    await expect(dropdown.locator('button.themedPickerOption', { hasText: 'Scheduler' })).toHaveCount(0);
   });
 
   test('should switch agent filter and show empty homepage', async ({ page }) => {
@@ -4638,42 +4642,47 @@ test.describe('Agent Filter Tabs', () => {
     await page.click('button.emptyHomepageNewChat');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
-    const select = page.locator('select.chatAgentFilterSelect');
-    const options = await select.locator('option').all();
-    if (options.length > 1) {
-      const value = await options[1].getAttribute('value');
-      if (value) {
-        await select.selectOption(value);
-        await page.waitForTimeout(500);
+    const slot = page.locator('.chatAgentFilterPickerSlot');
+    const trigger = slot.locator('button.themedPickerTrigger');
+    await trigger.click();
+    const dropdown = page.locator('.themedPickerDropdown[aria-label="Filter chats by primary agent"]');
+    const options = dropdown.locator('button.themedPickerOption');
+    const count = await options.count();
+    if (count > 1) {
+      // Pick first non-"All agents" option
+      await options.nth(1).click();
+      await page.waitForTimeout(500);
 
-        // Should show empty homepage since there are no chats for that agent
-        await expect(page.locator('.emptyHomepage')).toBeVisible();
+      // Should show empty homepage since there are no chats for that agent
+      await expect(page.locator('.emptyHomepage')).toBeVisible();
 
-        // Switch back to All — should show the chat we created
-        await select.selectOption('');
-        await page.waitForTimeout(500);
-        await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
-      }
+      // Switch back to All
+      await trigger.click();
+      await dropdown.locator('button.themedPickerOption', { hasText: 'All agents' }).click();
+      await page.waitForTimeout(500);
+      await expect(page.locator('.chatHistoryRow')).toHaveCount(1);
     }
   });
 
   test('should persist agent filter selection after reload', async ({ page }) => {
-    const select = page.locator('select.chatAgentFilterSelect');
-    const options = await select.locator('option').all();
-    if (options.length > 1) {
-      const value = await options[1].getAttribute('value');
-      if (value) {
-        await select.selectOption(value);
-        await page.waitForTimeout(500);
-        await expect(select).toHaveValue(value);
+    const slot = page.locator('.chatAgentFilterPickerSlot');
+    const trigger = slot.locator('button.themedPickerTrigger');
+    await trigger.click();
+    const dropdown = page.locator('.themedPickerDropdown[aria-label="Filter chats by primary agent"]');
+    const options = dropdown.locator('button.themedPickerOption');
+    const count = await options.count();
+    if (count > 1) {
+      const targetLabel = (await options.nth(1).locator('.themedPickerOptionLabel').textContent())?.trim() || '';
+      await options.nth(1).click();
+      await page.waitForTimeout(500);
+      await expect(trigger.locator('.themedPickerLabel')).toHaveText(targetLabel);
 
-        // Reload
-        await page.reload();
-        await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
+      // Reload
+      await page.reload();
+      await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
-        // The same agent should still be selected
-        await expect(page.locator('select.chatAgentFilterSelect')).toHaveValue(value);
-      }
+      // The same agent should still be selected
+      await expect(page.locator('.chatAgentFilterPickerSlot button.themedPickerTrigger .themedPickerLabel')).toHaveText(targetLabel);
     }
   });
 });
@@ -4863,7 +4872,7 @@ test.describe('Theme', () => {
     ]);
 
     await page.getByRole('button', { name: /Files/ }).click();
-    await page.locator('select.remoteAgentSelect').selectOption('selection-agent');
+    await selectFilesAgent(page, 'selection-agent');
     await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
     await expect(page.locator('.mdLiveEditable')).toBeVisible();
 

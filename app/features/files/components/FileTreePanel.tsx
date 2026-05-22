@@ -5,6 +5,7 @@ import type { Agent } from '../../agents/agentTypes';
 import { getFileIcon } from '../fileWorkspaceHelpers';
 import type { FileTreeNode } from '../fileWorkspaceTypes';
 import type { UseFileWorkspaceStateResult } from '../hooks/useFileWorkspaceState';
+import { SelectPicker } from '../../ui/SelectPicker';
 
 type FileTreePanelProps = {
   workspace: UseFileWorkspaceStateResult;
@@ -49,17 +50,20 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
 
   return (
     <div className="mdFilesTab">
-      <div style={{ padding: '4px 0 8px' }}>
-        <select
-          className="remoteAgentSelect"
-          value={workspace.mdSelectedAgentId || ''}
-          onChange={(e) => workspace.selectMdAgent(e.target.value || null)}
-        >
-          <option value="">Select agent…</option>
-          {agents.filter(a => a.cwd && !a.relay && a.id !== schedulerAgentId).map(a => (
-            <option key={a.id} value={a.id}>{a.canTalk === false ? '🔒 ' : ''}{a.name || a.id}</option>
-          ))}
-        </select>
+      <div style={{ padding: '4px 0 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="remoteAgentPickerSlot">
+          <SelectPicker
+            options={[
+              { value: '', label: 'Select agent…' },
+              ...agents
+                .filter(a => a.cwd && !a.relay && a.id !== schedulerAgentId)
+                .map(a => ({ value: a.id, label: `${a.canTalk === false ? '🔒 ' : ''}${a.name || a.id}` })),
+            ]}
+            value={workspace.mdSelectedAgentId || ''}
+            ariaLabel="Files agent"
+            onChange={(v) => workspace.selectMdAgent(v || null)}
+          />
+        </div>
         <button
           className={`mdDiffToggle ${workspace.mdDiffOnly ? 'active' : ''}`}
           title={workspace.mdDiffOnly ? 'Showing changed files (git diff)' : 'Show only changed files'}

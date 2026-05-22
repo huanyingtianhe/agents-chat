@@ -81,6 +81,7 @@ export function getAgentProcess(agentId: string, config: AgentConfig): AgentProc
       cachedCwd: config.cwd || process.cwd(),
       supportsLoadSession: false,
       knownSessions: new Set(),
+      availableCommandsBySession: new Map(),
     };
     procs.set(agentId, proc);
   }

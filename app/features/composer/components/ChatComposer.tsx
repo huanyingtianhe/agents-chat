@@ -3,8 +3,10 @@
 import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
 import type { Agent } from '../../agents/agentTypes';
 import type { ChatAttachment } from '../attachmentTypes';
+import type { SlashCommand } from '../slashCommandTypes';
 import { ATTACHMENT_ACCEPT } from '../attachmentHelpers';
 import { AttachmentList } from './AttachmentList';
+import { SlashCommandPalette } from './SlashCommandPalette';
 
 type ChatComposerProps = {
   composerRef: RefObject<HTMLTextAreaElement | null>;
@@ -15,10 +17,13 @@ type ChatComposerProps = {
   isDraggingAttachment: boolean;
   mentionAgents: Agent[];
   mentionSelectedIndex: number;
+  slashCommands: SlashCommand[];
+  slashSelectedIndex: number;
   targetControls: ReactNode;
   isSending: boolean;
   sendDisabled: boolean;
   onMentionSelect: (agentId: string) => void;
+  onSlashCommandSelect: (command: SlashCommand) => void;
   onFilesSelected: (files: FileList) => void;
   onRemoveAttachment: (id: string) => void;
   onPreviewAttachment: (dataUrl: string) => void;
@@ -41,10 +46,13 @@ export function ChatComposer({
   isDraggingAttachment,
   mentionAgents,
   mentionSelectedIndex,
+  slashCommands,
+  slashSelectedIndex,
   targetControls,
   isSending,
   sendDisabled,
   onMentionSelect,
+  onSlashCommandSelect,
   onFilesSelected,
   onRemoveAttachment,
   onPreviewAttachment,
@@ -73,6 +81,13 @@ export function ChatComposer({
               </button>
             ))}
           </div>
+        )}
+        {mentionAgents.length === 0 && slashCommands.length > 0 && (
+          <SlashCommandPalette
+            commands={slashCommands}
+            selectedIndex={slashSelectedIndex}
+            onSelect={onSlashCommandSelect}
+          />
         )}
         <div className="inputArea">
           <div

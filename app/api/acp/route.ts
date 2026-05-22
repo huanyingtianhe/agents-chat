@@ -347,6 +347,20 @@ async function doBootAgent(agentId: string): Promise<void> {
       // Route notification to correct user session by sessionId
       const notifSessionId = params?.sessionId as string | undefined;
 
+      // Slash commands advertised by the agent — cache per-session, regardless of active turn.
+      if (kind === 'available_commands_update' && notifSessionId && Array.isArray(update?.availableCommands)) {
+        const normalized: import('@/lib/acp/types').SlashCommand[] = [];
+        for (const cmd of update.availableCommands) {
+          if (!cmd || typeof cmd.name !== 'string' || !cmd.name) continue;
+          normalized.push({
+            name: cmd.name,
+            description: typeof cmd.description === 'string' ? cmd.description : '',
+            hint: typeof cmd.hint === 'string' ? cmd.hint : undefined,
+          });
+        }
+        proc.availableCommandsBySession.set(notifSessionId, normalized);
+      }
+
       // During session/load, capture replayed messages into the replay buffer
       if (notifSessionId) {
         const replayBuf = getReplayBuffers().get(notifSessionId);
@@ -1677,6 +1691,18 @@ export async function POST(req: NextRequest) {
     const isAdmin = isAdminToken(token);
     const proc = getAgentProcess(agentId, config);
     const sess = getUserSession(agentId, userId);
+
+    if (action === 'get-slash-commands') {
+      const chatId = body?.chatId as string | undefined;
+      // Resolve a sessionId for this user+agent+chat. Prefer the chat's most-recent
+      // session, fall back to the per-user current session, then any saved sessionId.
+      let sessionId: string | null = null;
+      if (chatId) sessionId = getChatSession(sess, chatId);
+      if (!sessionId) sessionId = sess.sessionId;
+      if (!sessionId && chatId) sessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+      const commands = sessionId ? (proc.availableCommandsBySession.get(sessionId) || []) : [];
+      return NextResponse.json({ ok: true, commands, sessionId: sessionId || null });
+    }
 
     if (action === 'ensure-agent-models') {
       if ((config.models || []).length > 0) {

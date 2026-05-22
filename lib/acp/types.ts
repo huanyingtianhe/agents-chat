@@ -125,6 +125,12 @@ export type NdjsonRpc = {
   destroy: () => void;
 };
 
+export type SlashCommand = {
+  name: string;
+  description: string;
+  hint?: string;
+};
+
 export type AgentProcess = {
   rpc: NdjsonRpc | null;
   ready: boolean;
@@ -134,6 +140,8 @@ export type AgentProcess = {
   cachedCwd: string;
   supportsLoadSession: boolean;
   knownSessions: Set<string>; // sessions active in agent memory (no need to session/load)
+  /** Slash commands advertised by the agent via `session/update` notifications, keyed by sessionId. */
+  availableCommandsBySession: Map<string, SlashCommand[]>;
 };
 
 // Per-user per-agent: isolated session and turn state

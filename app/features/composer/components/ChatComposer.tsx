@@ -122,7 +122,7 @@ export function ChatComposer({
                 defaultValue={input}
                 onPaste={onPaste}
                 onKeyDown={onKeyDown}
-                placeholder="Message Agents Chat"
+                placeholder="Message Agents Chat — type / for commands, @ to mention an agent"
                 rows={1}
                 spellCheck={false}
                 onInput={onInput}

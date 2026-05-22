@@ -170,6 +170,33 @@
   color: var(--muted);
 }
 
+.slashCommandDropdown {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.slashCommandItem {
+  align-items: baseline;
+}
+
+.slashCommandName {
+  min-width: 100px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.slashCommandHintInline {
+  margin-left: 6px;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.slashCommandHint {
+  margin-left: auto;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
 .inputArea {
   display: block;
 }

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -62,9 +63,9 @@ test('Files editor shows conflict choices and manual diff resolver', async ({ pa
   const filesTab = page.locator('button.leftSidebarTab', { hasText: 'Files' });
   await expect(async () => {
     await filesTab.click();
-    await expect(page.locator('select.remoteAgentSelect')).toBeVisible({ timeout: 1000 });
+    await expect(filesAgentTrigger(page)).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 10000 });
-  await page.locator('select.remoteAgentSelect').selectOption('test-agent');
+  await selectFilesAgent(page, 'test-agent');
   await page.locator('.mdTreeDir', { hasText: 'docs' }).click();
   await page.getByRole('button', { name: /conflict\.md/ }).click();
   await page.getByRole('button', { name: 'Split' }).click();

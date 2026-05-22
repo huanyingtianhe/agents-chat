@@ -15,24 +15,9 @@
   align-items: center;
   flex-shrink: 0;
 }
-.chatAgentFilterSelect {
+.chatAgentFilterPickerSlot {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel-soft);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s, background 0.15s;
-}
-.chatAgentFilterSelect:hover {
-  border-color: var(--border-strong);
-}
-.chatAgentFilterSelect:focus {
-  border-color: var(--accent);
 }
 .newChatButton {
   flex: 1;

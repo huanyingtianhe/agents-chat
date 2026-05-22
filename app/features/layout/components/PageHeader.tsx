@@ -11,9 +11,11 @@ export type PageHeaderProps = {
   showChatsPanel: boolean;
   showAgentsPanel: boolean;
   showNodesPanel: boolean;
+  showSchedulesPanel: boolean;
   onToggleChats: () => void;
   onToggleAgents: () => void;
   onToggleNodes: () => void;
+  onToggleSchedules: () => void;
   activeThemeId: string;
   normalizedThemeId: string;
   onSelectTheme: (id: string) => void;
@@ -27,9 +29,11 @@ export function PageHeader({
   showChatsPanel,
   showAgentsPanel,
   showNodesPanel,
+  showSchedulesPanel,
   onToggleChats,
   onToggleAgents,
   onToggleNodes,
+  onToggleSchedules,
   activeThemeId,
   normalizedThemeId,
   onSelectTheme,
@@ -60,6 +64,7 @@ export function PageHeader({
           {themeMenu}
           <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={onToggleAgents} title="Agents">🤖</button>
           <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={onToggleNodes} title="Nodes">🖥️</button>
+          <button className={`ghostButton ${showSchedulesPanel ? 'activeGhost' : ''}`} onClick={onToggleSchedules} title="Schedules">⏰</button>
         </div>
         <div className="headerOverflowWrap" ref={headerOverflowRef}>
           <button
@@ -101,6 +106,15 @@ export function PageHeader({
               >
                 <span className="headerOverflowEmoji">🖥️</span>
                 <span>Nodes</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={`headerOverflowItem ${showSchedulesPanel ? 'active' : ''}`}
+                onClick={() => { onToggleSchedules(); setShowHeaderOverflow(false); }}
+              >
+                <span className="headerOverflowEmoji">⏰</span>
+                <span>Schedules</span>
               </button>
               <div className="headerOverflowSeparator" />
               <div className="headerOverflowSectionLabel">Theme</div>

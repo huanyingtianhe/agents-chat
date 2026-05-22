@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import type { SlashCommand } from '../slashCommandTypes';
 
 type SlashCommandPaletteProps = {
@@ -9,12 +10,22 @@ type SlashCommandPaletteProps = {
 };
 
 export function SlashCommandPalette({ commands, selectedIndex, onSelect }: SlashCommandPaletteProps) {
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const el = itemRefs.current[selectedIndex];
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex, commands]);
+
   if (commands.length === 0) return null;
   return (
     <div className="mentionDropdown slashCommandDropdown" role="listbox" aria-label="Slash commands">
       {commands.map((cmd, idx) => (
         <button
           key={cmd.name}
+          ref={(el) => { itemRefs.current[idx] = el; }}
           type="button"
           role="option"
           aria-selected={selectedIndex === idx}

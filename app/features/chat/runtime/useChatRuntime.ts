@@ -154,7 +154,7 @@ export function useChatRuntime({
   const persistHandlers = createPersistenceHandlers({
     acp, currentChatIdRef, currentAgentSessionsRef, needsContextRestoreRef,
     chatMessagesRef, messagesRef, chatNameRef, chatAgentFilterRef,
-    chatHistoryRef,
+    chatHistoryRef, inputHistoryRef,
     setChatHistory, setChatName, setChatCounter, setCurrentChatId, setActiveSidebarChatId,
     setShareDialog, setExpandedMessages, setMessagesForChat, addMessage,
     resumeActiveTurn: (agentId, turn) => resumeActiveTurnRef.current(agentId, turn),
@@ -308,6 +308,14 @@ export function useChatRuntime({
             setLoadedChatIdForResume(lastChatId);
             if (migration.changed) {
               void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
+            }
+            // Backfill input history from loaded messages if none exists for this chat
+            if (!inputHistoryRef.current[lastChatId]) {
+              const userTexts = msgs.filter((m: ChatMessage) => m.type === 'user' && m.content).map((m: ChatMessage) => m.content as string).filter((t: string) => t.trim().length > 0);
+              if (userTexts.length > 0) {
+                inputHistoryRef.current[lastChatId] = userTexts.slice(-100);
+                try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(inputHistoryRef.current)); } catch { /* ignore */ }
+              }
             }
           }
         }).catch(() => { /* ignore */ });

@@ -34,7 +34,6 @@ export function handleTerminalCreate(params: Record<string, unknown>, cwd: strin
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: termCwd,
     env: process.env,
-    windowsHide: true,
     shell: true,
   });
 

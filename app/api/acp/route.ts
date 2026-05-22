@@ -238,7 +238,6 @@ async function doBootAgent(agentId: string): Promise<void> {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
         env: { ...process.env, ...agentEnv },
-        windowsHide: true,
         shell: true,
       });
 

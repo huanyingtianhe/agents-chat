@@ -364,6 +364,7 @@ async function doBootAgent(agentId: string): Promise<void> {
           });
         }
         proc.availableCommandsBySession.set(notifSessionId, normalized);
+        log(`[ACP:${agentId}] available_commands_update for session=${notifSessionId}: ${normalized.length} commands. Sample raw payload: ${JSON.stringify(update.availableCommands.slice(0, 3))}`);
       }
 
       // During session/load, capture replayed messages into the replay buffer

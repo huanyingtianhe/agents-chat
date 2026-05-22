@@ -3,14 +3,15 @@ import type { CronJob, CronRun } from "../../app/features/scheduler/scheduleType
 import { nextFires } from "../../app/features/scheduler/scheduleSpec.ts";
 
 type Runner = { runAgentOnce: (job: CronJob) => Promise<{ replyText: string; rawLog: string; error: string | null }> };
-type CronLike = { schedule: (expr: string, fn: () => void, opts?: { timezone?: string }) => { stop: () => void } };
+type CronTaskLike = { stop: () => void; destroy?: () => void };
+type CronLike = { schedule: (expr: string, fn: () => void, opts?: { timezone?: string }) => CronTaskLike };
 
 export type SchedulerRuntime = ReturnType<typeof createRuntime>;
 
 export function createRuntime(deps: { store: ScheduleStore; runner: Runner; cron: CronLike; now: () => number; backfillCap?: number }) {
   const { store, runner, cron, now } = deps;
   const backfillCap = deps.backfillCap ?? 100;
-  const tasks = new Map<string, { stop: () => void }>();
+  const tasks = new Map<string, CronTaskLike>();
   const queues = new Map<string, Promise<void>>();
 
   async function start(): Promise<void> {
@@ -21,8 +22,13 @@ export function createRuntime(deps: { store: ScheduleStore; runner: Runner; cron
     }
   }
 
+  function killTask(t: CronTaskLike): void {
+    try { t.stop(); } catch { /* ignore */ }
+    try { t.destroy?.(); } catch { /* ignore */ }
+  }
+
   function stop(): void {
-    for (const t of tasks.values()) t.stop();
+    for (const t of tasks.values()) killTask(t);
     tasks.clear();
   }
 
@@ -82,26 +88,34 @@ export function createRuntime(deps: { store: ScheduleStore; runner: Runner; cron
   }
   function unscheduleJob(jobId: string): void {
     const t = tasks.get(jobId);
-    if (t) { t.stop(); tasks.delete(jobId); }
+    if (t) { killTask(t); tasks.delete(jobId); }
   }
 
   return { start, stop, scheduleJob, unscheduleJob, runNow, enqueueTick };
 }
 
-let singleton: SchedulerRuntime | null = null;
-export function getRuntime(): SchedulerRuntime | null { return singleton; }
-export function setRuntime(rt: SchedulerRuntime | null) { singleton = rt; }
+// Use globalThis so that Next.js dev mode HMR (which can re-evaluate this
+// module) doesn't create a second singleton. Without this, an old module
+// instance can keep its cron tasks alive while a new instance has no record
+// of them, so unscheduleJob() can never stop them.
+type GlobalScope = typeof globalThis & {
+  __scheduler_singleton?: SchedulerRuntime | null;
+  __scheduler_ensure?: Promise<SchedulerRuntime | null> | null;
+};
+const g = globalThis as GlobalScope;
 
-let ensurePromise: Promise<SchedulerRuntime | null> | null = null;
+export function getRuntime(): SchedulerRuntime | null { return g.__scheduler_singleton ?? null; }
+export function setRuntime(rt: SchedulerRuntime | null) { g.__scheduler_singleton = rt; }
+
 export async function ensureRuntime(): Promise<SchedulerRuntime | null> {
-  if (singleton) return singleton;
-  if (ensurePromise) return ensurePromise;
-  ensurePromise = (async () => {
+  if (g.__scheduler_singleton) return g.__scheduler_singleton;
+  if (g.__scheduler_ensure) return g.__scheduler_ensure;
+  g.__scheduler_ensure = (async () => {
     try {
       const cron = await import("node-cron");
       const { openScheduleStore } = await import("./scheduleStore");
       const { runAgentOnce } = await import("./agentRunner");
-      if (singleton) return singleton;
+      if (g.__scheduler_singleton) return g.__scheduler_singleton;
       const store = openScheduleStore();
       const rt = createRuntime({
         store,
@@ -109,14 +123,14 @@ export async function ensureRuntime(): Promise<SchedulerRuntime | null> {
         cron: { schedule: (expr, fn, opts) => cron.schedule(expr, fn, opts as any) },
         now: () => Date.now(),
       });
-      singleton = rt;
+      g.__scheduler_singleton = rt;
       await rt.start();
       return rt;
     } catch (err) {
       console.error("[scheduler] ensureRuntime failed:", err);
-      ensurePromise = null;
+      g.__scheduler_ensure = null;
       return null;
     }
   })();
-  return ensurePromise;
+  return g.__scheduler_ensure;
 }

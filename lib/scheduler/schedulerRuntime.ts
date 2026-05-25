@@ -2,7 +2,7 @@ import type { ScheduleStore } from "./scheduleStore.ts";
 import type { CronJob, CronRun } from "../../app/features/scheduler/scheduleTypes.ts";
 import { nextFires } from "../../app/features/scheduler/scheduleSpec.ts";
 
-type Runner = { runAgentOnce: (job: CronJob) => Promise<{ replyText: string; rawLog: string; error: string | null }> };
+type Runner = { runAgentOnce: (job: CronJob, opts?: { timeoutMs?: number }) => Promise<{ replyText: string; rawLog: string; error: string | null }> };
 type CronTaskLike = { stop: () => void; destroy?: () => void };
 type CronLike = { schedule: (expr: string, fn: () => void, opts?: { timezone?: string }) => CronTaskLike };
 
@@ -66,7 +66,7 @@ export function createRuntime(deps: { store: ScheduleStore; runner: Runner; cron
     if (!job || !job.enabled) return;
     const run = store.createRun({ jobId, scheduledFor, status: "running" });
     store.updateRun(run.id, { startedAt: now() });
-    const res = await runner.runAgentOnce(job);
+    const res = await runner.runAgentOnce(job, job.timeoutMinutes ? { timeoutMs: job.timeoutMinutes * 60_000 } : undefined);
     store.updateRun(run.id, {
       finishedAt: now(),
       status: res.error ? "error" : "success",

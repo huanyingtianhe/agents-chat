@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { CronJob, ScheduleSpec } from '../scheduleTypes';
+import { DEFAULT_TIMEOUT_MINUTES, MIN_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES } from '../scheduleTypes';
 import { validateSpec, nextFires } from '../scheduleSpec';
 import { useSchedules } from '../hooks/useSchedules';
 import { AgentPicker } from './AgentPicker';
@@ -43,6 +44,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
   const [weekdaysSelected, setWeekdaysSelected] = useState<boolean[]>([false, false, false, false, false, false, false]);
   const [weeklyHour, setWeeklyHour] = useState(9);
   const [weeklyMinute, setWeeklyMinute] = useState(0);
+  const [timeoutMinutes, setTimeoutMinutes] = useState<number>(DEFAULT_TIMEOUT_MINUTES);
 
   // Load existing job on mount
   useEffect(() => {
@@ -53,6 +55,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
       setEnabled(true);
       setSpecKind('every_minutes');
       setEveryMinutesInterval(60);
+      setTimeoutMinutes(DEFAULT_TIMEOUT_MINUTES);
       setError(null);
     } else {
       setLoading(true);
@@ -62,6 +65,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
           setAgentId(job.agentId);
           setPrompt(job.prompt);
           setEnabled(job.enabled);
+          setTimeoutMinutes(job.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES);
           setError(null);
           populateFromSpec(job.scheduleSpec);
         })
@@ -155,6 +159,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
           prompt,
           scheduleSpec: spec,
           enabled,
+          timeoutMinutes,
         });
       } else {
         await update(jobId, {
@@ -162,6 +167,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
           prompt,
           scheduleSpec: spec,
           enabled,
+          timeoutMinutes,
         });
       }
       onSaved();
@@ -395,6 +401,23 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
             </div>
           </>
         )}
+
+        <label>
+          <span>Run timeout (minutes)</span>
+          <input
+            type="number"
+            value={timeoutMinutes}
+            onChange={(e) => {
+              const raw = parseInt(e.target.value);
+              if (Number.isNaN(raw)) { setTimeoutMinutes(MIN_TIMEOUT_MINUTES); return; }
+              setTimeoutMinutes(Math.max(MIN_TIMEOUT_MINUTES, Math.min(MAX_TIMEOUT_MINUTES, raw)));
+            }}
+            min={MIN_TIMEOUT_MINUTES}
+            max={MAX_TIMEOUT_MINUTES}
+            disabled={saving}
+          />
+          <span className="fieldHint">Each run is aborted if it takes longer than this ({MIN_TIMEOUT_MINUTES}–{MAX_TIMEOUT_MINUTES} min, default {DEFAULT_TIMEOUT_MINUTES}).</span>
+        </label>
 
         <label className="checkboxLabel">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={saving} />

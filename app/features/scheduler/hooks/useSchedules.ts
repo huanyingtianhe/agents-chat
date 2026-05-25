@@ -21,13 +21,13 @@ export function useSchedules() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const create = useCallback(async (input: { agentId: string; name: string; prompt: string; scheduleSpec: ScheduleSpec; enabled?: boolean }) => {
+  const create = useCallback(async (input: { agentId: string; name: string; prompt: string; scheduleSpec: ScheduleSpec; enabled?: boolean; timeoutMinutes?: number }) => {
     const r = await fetch("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
     if (!r.ok) throw new Error(await r.text());
     await refresh();
   }, [refresh]);
 
-  const update = useCallback(async (id: string, patch: Partial<{ name: string; prompt: string; enabled: boolean; scheduleSpec: ScheduleSpec }>) => {
+  const update = useCallback(async (id: string, patch: Partial<{ name: string; prompt: string; enabled: boolean; scheduleSpec: ScheduleSpec; timeoutMinutes: number }>) => {
     const r = await fetch(`/api/schedules/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
     if (!r.ok) throw new Error(await r.text());
     await refresh();

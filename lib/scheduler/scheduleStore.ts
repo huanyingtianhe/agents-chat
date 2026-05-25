@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import type { CronJob, CronRun, CronRunStatus, ScheduleSpec } from "../../app/features/scheduler/scheduleTypes";
+import { DEFAULT_TIMEOUT_MINUTES } from "../../app/features/scheduler/scheduleTypes";
 
 export type ScheduleStore = ReturnType<typeof openScheduleStore>;
 
@@ -18,21 +19,23 @@ export function openScheduleStore(dbPath?: string) {
     const id = randomUUID();
     const now = Date.now();
     db.prepare(`INSERT INTO cron_jobs
-      (id, agent_id, owner_email, name, prompt, schedule_spec, cron_expr, enabled, created_at, updated_at, last_run_at, next_run_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`).run(
+      (id, agent_id, owner_email, name, prompt, schedule_spec, cron_expr, enabled, created_at, updated_at, last_run_at, next_run_at, timeout_minutes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`).run(
       id, input.agentId, input.ownerEmail, input.name, input.prompt,
-      JSON.stringify(input.scheduleSpec), input.cronExpr, input.enabled ? 1 : 0, now, now
+      JSON.stringify(input.scheduleSpec), input.cronExpr, input.enabled ? 1 : 0, now, now,
+      input.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES
     );
     return getJob(id)!;
   }
 
-  function updateJob(id: string, patch: Partial<Pick<CronJob, "name" | "prompt" | "scheduleSpec" | "cronExpr" | "enabled" | "lastRunAt" | "nextRunAt">>): CronJob | null {
+  function updateJob(id: string, patch: Partial<Pick<CronJob, "name" | "prompt" | "scheduleSpec" | "cronExpr" | "enabled" | "lastRunAt" | "nextRunAt" | "timeoutMinutes">>): CronJob | null {
     const cur = getJob(id);
     if (!cur) return null;
     const next = { ...cur, ...patch, updatedAt: Date.now() };
-    db.prepare(`UPDATE cron_jobs SET name=?, prompt=?, schedule_spec=?, cron_expr=?, enabled=?, updated_at=?, last_run_at=?, next_run_at=? WHERE id=?`).run(
+    db.prepare(`UPDATE cron_jobs SET name=?, prompt=?, schedule_spec=?, cron_expr=?, enabled=?, updated_at=?, last_run_at=?, next_run_at=?, timeout_minutes=? WHERE id=?`).run(
       next.name, next.prompt, JSON.stringify(next.scheduleSpec), next.cronExpr,
-      next.enabled ? 1 : 0, next.updatedAt, next.lastRunAt, next.nextRunAt, id
+      next.enabled ? 1 : 0, next.updatedAt, next.lastRunAt, next.nextRunAt,
+      next.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES, id
     );
     return getJob(id);
   }
@@ -114,6 +117,11 @@ function migrate(db: Database.Database) {
     last_run_at INTEGER,
     next_run_at INTEGER
   );`);
+  // Additive migration for existing databases.
+  const cols = db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "timeout_minutes")) {
+    db.exec(`ALTER TABLE cron_jobs ADD COLUMN timeout_minutes INTEGER`);
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS cron_runs (
     id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL,
@@ -137,6 +145,7 @@ function rowToJob(r: any): CronJob {
     cronExpr: r.cron_expr, enabled: !!r.enabled,
     createdAt: r.created_at, updatedAt: r.updated_at,
     lastRunAt: r.last_run_at, nextRunAt: r.next_run_at,
+    timeoutMinutes: r.timeout_minutes ?? DEFAULT_TIMEOUT_MINUTES,
   };
 }
 

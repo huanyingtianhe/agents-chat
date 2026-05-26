@@ -190,7 +190,7 @@ $ready = $false
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 3
     try {
-        $response = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5
+        $response = Invoke-WebRequest -Uri 'http://localhost:3000/api/auth/providers' -UseBasicParsing -TimeoutSec 5
         if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
             $ready = $true
             break

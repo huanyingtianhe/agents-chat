@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CronJob, ScheduleSpec } from '../scheduleTypes';
 import { DEFAULT_TIMEOUT_MINUTES, MIN_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES } from '../scheduleTypes';
 import { validateSpec, nextFires } from '../scheduleSpec';
+import { localHMToUtc, utcHMToLocal, shiftWeekday } from '../timezoneHelpers';
 import { useSchedules } from '../hooks/useSchedules';
 import { AgentPicker } from './AgentPicker';
 import { SelectPicker } from '../../ui/SelectPicker';
@@ -87,24 +88,31 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
       case 'every_hours':
         setEveryHoursInterval(spec.interval);
         break;
-      case 'every_days':
+      case 'every_days': {
         setEveryDaysInterval(spec.interval);
-        setDailyHour(spec.hour);
-        setDailyMinute(spec.minute);
+        const local = utcHMToLocal(spec.hour, spec.minute);
+        setDailyHour(local.hour);
+        setDailyMinute(local.minute);
         break;
-      case 'daily':
-        setDailyHour(spec.hour);
-        setDailyMinute(spec.minute);
+      }
+      case 'daily': {
+        const local = utcHMToLocal(spec.hour, spec.minute);
+        setDailyHour(local.hour);
+        setDailyMinute(local.minute);
         break;
-      case 'weekly':
-        setWeeklyHour(spec.hour);
-        setWeeklyMinute(spec.minute);
+      }
+      case 'weekly': {
+        const local = utcHMToLocal(spec.hour, spec.minute);
+        setWeeklyHour(local.hour);
+        setWeeklyMinute(local.minute);
         const selected = [false, false, false, false, false, false, false];
         spec.weekdays.forEach((d) => {
-          selected[d] = true;
+          // Shift each stored UTC weekday back into the user's local week.
+          selected[shiftWeekday(d, local.dayShift)] = true;
         });
         setWeekdaysSelected(selected);
         break;
+      }
     }
   }
 
@@ -114,15 +122,25 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
         return { kind: 'every_minutes', interval: everyMinutesInterval };
       case 'every_hours':
         return { kind: 'every_hours', interval: everyHoursInterval };
-      case 'every_days':
-        return { kind: 'every_days', interval: everyDaysInterval, hour: dailyHour, minute: dailyMinute };
-      case 'daily':
-        return { kind: 'daily', hour: dailyHour, minute: dailyMinute };
-      case 'weekly':
-        const weekdays = weekdaysSelected
-          .map((selected, index) => (selected ? (index as 0 | 1 | 2 | 3 | 4 | 5 | 6) : null))
-          .filter((d) => d !== null) as Array<0 | 1 | 2 | 3 | 4 | 5 | 6>;
-        return { kind: 'weekly', weekdays, hour: weeklyHour, minute: weeklyMinute };
+      case 'every_days': {
+        const utc = localHMToUtc(dailyHour, dailyMinute);
+        return { kind: 'every_days', interval: everyDaysInterval, hour: utc.hour, minute: utc.minute };
+      }
+      case 'daily': {
+        const utc = localHMToUtc(dailyHour, dailyMinute);
+        return { kind: 'daily', hour: utc.hour, minute: utc.minute };
+      }
+      case 'weekly': {
+        const utc = localHMToUtc(weeklyHour, weeklyMinute);
+        const localWeekdays = weekdaysSelected
+          .map((selected, index) => (selected ? index : null))
+          .filter((d): d is number => d !== null);
+        // Shift each local weekday into UTC; dedupe in case shifts collide.
+        const utcWeekdays = Array.from(
+          new Set(localWeekdays.map((d) => shiftWeekday(d, utc.dayShift)))
+        ).sort((a, b) => a - b) as Array<0 | 1 | 2 | 3 | 4 | 5 | 6>;
+        return { kind: 'weekly', weekdays: utcWeekdays, hour: utc.hour, minute: utc.minute };
+      }
     }
   }
 

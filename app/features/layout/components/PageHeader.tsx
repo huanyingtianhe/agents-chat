@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { THEMES, normalizeThemeId } from '../../theme/themes';
+import { useFullscreen } from '../useFullscreen';
 
 export type PageHeaderProps = {
   authLabel: string;
@@ -41,6 +42,7 @@ export function PageHeader({
   const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
   const headerOverflowRef = useRef<HTMLDivElement | null>(null);
   const currentThemeId = normalizeThemeId(normalizedThemeId || activeThemeId);
+  const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen();
 
   useEffect(() => {
     if (!showHeaderOverflow) return;
@@ -65,6 +67,17 @@ export function PageHeader({
           <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={onToggleAgents} title="Agents">🤖</button>
           <button className={`ghostButton ${showNodesPanel ? 'activeGhost' : ''}`} onClick={onToggleNodes} title="Nodes">🖥️</button>
           <button className={`ghostButton ${showSchedulesPanel ? 'activeGhost' : ''}`} onClick={onToggleSchedules} title="Schedules">⏰</button>
+          {fullscreenSupported && (
+            <button
+              className={`ghostButton ${isFullscreen ? 'activeGhost' : ''}`}
+              onClick={() => void toggleFullscreen()}
+              title={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+              aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+              aria-pressed={isFullscreen}
+            >
+              {isFullscreen ? '🗗' : '⛶'}
+            </button>
+          )}
         </div>
         <div className="headerOverflowWrap" ref={headerOverflowRef}>
           <button
@@ -116,6 +129,17 @@ export function PageHeader({
                 <span className="headerOverflowEmoji">⏰</span>
                 <span>Schedules</span>
               </button>
+              {fullscreenSupported && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`headerOverflowItem ${isFullscreen ? 'active' : ''}`}
+                  onClick={() => { void toggleFullscreen(); setShowHeaderOverflow(false); }}
+                >
+                  <span className="headerOverflowEmoji">{isFullscreen ? '🗗' : '⛶'}</span>
+                  <span>{isFullscreen ? 'Exit full screen' : 'Full screen'}</span>
+                </button>
+              )}
               <div className="headerOverflowSeparator" />
               <div className="headerOverflowSectionLabel">Theme</div>
               {Object.entries(THEMES).map(([id, theme]) => (

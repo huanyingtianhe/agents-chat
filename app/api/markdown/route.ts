@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getAuthToken, canTalkTo } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
+import { getAgentProcess } from '@/lib/acp/runtimeState';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,6 +117,46 @@ export async function GET(req: NextRequest) {
   }
 
   const agentCwd = agent.cwd;
+
+  // ── Relay agents: proxy file operations via RPC ──
+  if (agent.relay) {
+    const proc = getAgentProcess(agentId, agent as any);
+    if (!proc.rpc) {
+      return NextResponse.json({ error: 'relay agent not connected' }, { status: 503 });
+    }
+
+    const filePath = req.nextUrl.searchParams.get('path');
+    const diffOnly = req.nextUrl.searchParams.get('diff') === 'true';
+
+    if (!filePath) {
+      try {
+        const result = await proc.rpc.send('fs/list_files', { path: agentCwd || '/', diff: diffOnly }, 30_000) as any;
+        if (result?.error) {
+          return NextResponse.json({ error: result.error }, { status: 400 });
+        }
+        return NextResponse.json({ files: result?.files || [] });
+      } catch (err: any) {
+        return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+      }
+    } else {
+      try {
+        const result = await proc.rpc.send('fs/read_text_file', { path: filePath }, 15_000) as any;
+        if (result?.error) {
+          return NextResponse.json({ error: result.error }, { status: result.error === 'file not found' ? 404 : 400 });
+        }
+        return NextResponse.json({
+          path: filePath,
+          content: result?.content ?? '',
+          kind: result?.kind ?? 'text',
+          mtime: result?.mtime ?? null,
+        });
+      } catch (err: any) {
+        return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+      }
+    }
+  }
+
+  // ── Local agents: direct filesystem access ──
   if (!agentCwd || !existsSync(agentCwd)) {
     return NextResponse.json({ error: 'agent cwd not found' }, { status: 404 });
   }
@@ -236,6 +277,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
+  // ── Relay agents: proxy write via RPC ──
+  if (agent.relay) {
+    const proc = getAgentProcess(agentId, agent as any);
+    if (!proc.rpc) {
+      return NextResponse.json({ error: 'relay agent not connected' }, { status: 503 });
+    }
+    try {
+      const result = await proc.rpc.send('fs/write_text_file', {
+        path: filePath,
+        content,
+        mtime: body.mtime,
+      }, 15_000) as any;
+      if (result?.error === 'conflict') {
+        return NextResponse.json({
+          error: 'conflict',
+          message: 'File was modified externally. Choose how to resolve the conflict.',
+          serverContent: result.serverContent,
+          serverMtime: result.serverMtime,
+        }, { status: 409 });
+      }
+      if (result?.error) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, path: filePath, mtime: result?.mtime ?? null });
+    } catch (err: any) {
+      return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+    }
+  }
+
+  // ── Local agents: direct filesystem access ──
   const agentCwd = agent.cwd;
   if (!agentCwd || !existsSync(agentCwd)) {
     return NextResponse.json({ error: 'agent cwd not found' }, { status: 404 });

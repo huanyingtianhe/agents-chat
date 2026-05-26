@@ -142,7 +142,7 @@ export function useFileWorkspaceState({
     fileWorkspaceRestoredRef.current = true;
     if (workspace.tab !== 'files' || !workspace.agentId) return;
 
-    const agentCanShowFiles = agents.some(a => a.id === workspace.agentId && a.cwd && !a.relay && a.id !== schedulerAgentId);
+    const agentCanShowFiles = agents.some(a => a.id === workspace.agentId && (a.cwd || a.relay) && a.id !== schedulerAgentId);
     if (!agentCanShowFiles) return;
 
     const agentId = workspace.agentId;

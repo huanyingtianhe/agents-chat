@@ -130,7 +130,7 @@ export async function GET(req: NextRequest) {
 
     if (!filePath) {
       try {
-        const result = await proc.rpc.send('fs/list_files', { path: agentCwd || '/', diff: diffOnly }, 30_000) as any;
+        const result = await proc.rpc.send('fs/list_files', { cwd: agentCwd || '/', diff: diffOnly }, 30_000) as any;
         if (result?.error) {
           return NextResponse.json({ error: result.error }, { status: 400 });
         }
@@ -140,7 +140,7 @@ export async function GET(req: NextRequest) {
       }
     } else {
       try {
-        const result = await proc.rpc.send('fs/read_text_file', { path: filePath }, 15_000) as any;
+        const result = await proc.rpc.send('fs/read_text_file', { cwd: agentCwd || '/', path: filePath }, 15_000) as any;
         if (result?.error) {
           return NextResponse.json({ error: result.error }, { status: result.error === 'file not found' ? 404 : 400 });
         }
@@ -285,6 +285,7 @@ export async function POST(req: NextRequest) {
     }
     try {
       const result = await proc.rpc.send('fs/write_text_file', {
+        cwd: agent.cwd || '/',
         path: filePath,
         content,
         mtime: body.mtime,

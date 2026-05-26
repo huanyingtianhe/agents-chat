@@ -12,7 +12,6 @@ const execFileAsync = promisify(execFile);
 const connectionString = process.env.RELAY_CONNECTION_STRING;
 const connectionName = process.env.RELAY_CONNECTION_NAME || require('os').hostname().toLowerCase();
 const acpPort = parseInt(process.env.ACP_PORT || '3001');
-const baseCwd = process.env.AGENT_CWD || process.cwd();
 
 if (!connectionString) {
   console.error('RELAY_CONNECTION_STRING environment variable is required');
@@ -22,7 +21,6 @@ if (!connectionString) {
 console.log(`Relay listener starting...`);
 console.log(`  Connection name: ${connectionName}`);
 console.log(`  ACP port: ${acpPort}`);
-console.log(`  Agent CWD: ${baseCwd}`);
 
 const ns = connectionString.match(/Endpoint=sb:\/\/([^/;]+)/)[1];
 const keyName = connectionString.match(/SharedAccessKeyName=([^;]+)/)[1];
@@ -83,7 +81,7 @@ function resolveAndValidate(cwd, relativePath) {
 }
 
 async function handleFsListFiles(params) {
-  const cwd = params.path || baseCwd;
+  const cwd = params.cwd || process.cwd();
   const diff = params.diff === true;
 
   if (diff) {
@@ -122,9 +120,10 @@ async function handleFsListFiles(params) {
 }
 
 async function handleFsReadTextFile(params) {
+  const cwd = params.cwd || process.cwd();
   const filePath = params.path;
   if (!filePath) return { error: 'missing path' };
-  const target = resolveAndValidate(baseCwd, filePath);
+  const target = resolveAndValidate(cwd, filePath);
   if (!target) return { error: 'invalid path' };
   if (!fs.existsSync(target)) return { error: 'file not found' };
   try {
@@ -139,10 +138,11 @@ async function handleFsReadTextFile(params) {
 }
 
 async function handleFsWriteTextFile(params) {
+  const cwd = params.cwd || process.cwd();
   const filePath = params.path;
   const content = params.content;
   if (!filePath || content === undefined) return { error: 'missing path or content' };
-  const target = resolveAndValidate(baseCwd, filePath);
+  const target = resolveAndValidate(cwd, filePath);
   if (!target) return { error: 'invalid path' };
 
   // Optimistic concurrency

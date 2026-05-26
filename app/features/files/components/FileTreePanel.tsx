@@ -56,8 +56,8 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
             options={[
               { value: '', label: 'Select agent…' },
               ...agents
-                .filter(a => a.cwd && !a.relay && a.id !== schedulerAgentId)
-                .map(a => ({ value: a.id, label: `${a.canTalk === false ? '🔒 ' : ''}${a.name || a.id}` })),
+                .filter(a => (a.cwd || a.relay) && a.id !== schedulerAgentId)
+                .map(a => ({ value: a.id, label: `${a.canTalk === false ? '🔒 ' : ''}${a.relay ? '🌐 ' : ''}${a.name || a.id}` })),
             ]}
             value={workspace.mdSelectedAgentId || ''}
             ariaLabel="Files agent"

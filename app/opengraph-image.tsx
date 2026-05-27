@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 export const size = {
   width: 1200,
@@ -28,10 +28,10 @@ export default function OpenGraphImage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '760px' }}>
           <div
             style={{
-              display: 'inline-flex',
+              display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              width: 'fit-content',
+              alignSelf: 'flex-start',
               padding: '12px 18px',
               borderRadius: '999px',
               background: 'rgba(255,255,255,0.08)',

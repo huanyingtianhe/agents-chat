@@ -16,7 +16,7 @@ const metadataBase = new URL(process.env.NEXTAUTH_URL || 'http://localhost:3010'
 export const metadata: Metadata = {
   metadataBase,
   title: 'Agents Chat',
-  description: 'Chat with ACP agents (GitHub Copilot CLI, Claude Code, etc.)',
+  description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
   icons: {
     icon: [
       { url: '/favicon.svg', type: 'image/svg+xml' },
@@ -25,15 +25,25 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: 'Agents Chat',
-    description: 'Chat with ACP agents (GitHub Copilot CLI, Claude Code, etc.)',
-    images: ['/opengraph-image'],
+    description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
+    images: [{
+      url: '/opengraph-image',
+      width: 1200,
+      height: 630,
+      alt: 'Agents Chat preview',
+    }],
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Agents Chat',
-    description: 'Chat with ACP agents (GitHub Copilot CLI, Claude Code, etc.)',
-    images: ['/opengraph-image'],
+    description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
+    images: [{
+      url: '/opengraph-image',
+      width: 1200,
+      height: 630,
+      alt: 'Agents Chat preview',
+    }],
   },
 };
 

@@ -18,64 +18,57 @@ export default function OpenGraphImage() {
           height: '100%',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '64px',
-          background: 'linear-gradient(135deg, #111827 0%, #1f2937 55%, #0f172a 100%)',
+          justifyContent: 'center',
+          background: 'radial-gradient(circle at 30% 20%, #374151 0%, #1f2937 38%, #0b1220 100%)',
           color: '#f8fafc',
           fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '760px' }}>
+        <div
+          style={{
+            width: '620px',
+            height: '560px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '26px',
+            borderRadius: '36px',
+            background: 'linear-gradient(160deg, rgba(30,41,59,0.86), rgba(15,23,42,0.94))',
+            border: '1px solid rgba(255,255,255,0.14)',
+            boxShadow: '0 30px 70px rgba(0,0,0,0.38)',
+            textAlign: 'center',
+            padding: '44px 52px',
+          }}
+        >
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
-              alignSelf: 'flex-start',
-              padding: '12px 18px',
-              borderRadius: '999px',
-              background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              fontSize: '22px',
-              fontWeight: 700,
-              letterSpacing: '-0.02em',
+              justifyContent: 'center',
+              width: '164px',
+              height: '164px',
+              borderRadius: '34px',
+              background: 'linear-gradient(180deg, rgba(129,140,248,0.36), rgba(99,102,241,0.25))',
+              border: '1px solid rgba(165,180,252,0.45)',
             }}
           >
-            <span>🤖</span>
-            <span>Agents Chat</span>
+            <svg width="108" height="108" viewBox="0 0 100 100" fill="none" aria-hidden="true">
+              <rect x="15" y="30" width="70" height="55" rx="12" fill="#6366f1" />
+              <rect x="35" y="10" width="30" height="25" rx="8" fill="#818cf8" />
+              <circle cx="36" cy="52" r="8" fill="#fff" />
+              <circle cx="64" cy="52" r="8" fill="#fff" />
+              <circle cx="36" cy="52" r="4" fill="#1e1b4b" />
+              <circle cx="64" cy="52" r="4" fill="#1e1b4b" />
+              <rect x="38" y="68" width="24" height="6" rx="3" fill="#c7d2fe" />
+            </svg>
           </div>
-          <div style={{ fontSize: '72px', fontWeight: 800, lineHeight: 1, letterSpacing: '-0.05em' }}>
-            Chat with ACP agents
+          <div style={{ fontSize: '72px', fontWeight: 800, lineHeight: 1, letterSpacing: '-0.04em' }}>
+            Agents Chat
           </div>
-          <div style={{ fontSize: '28px', lineHeight: 1.4, color: 'rgba(248,250,252,0.82)', maxWidth: '680px' }}>
-            GitHub Copilot CLI, Claude Code, and scheduler-driven workflows in one place.
+          <div style={{ fontSize: '30px', lineHeight: 1.35, color: 'rgba(248,250,252,0.86)', maxWidth: '520px' }}>
+            Chat with multiple agents: GitHub Copilot CLI, Claude Code, and more.
           </div>
-        </div>
-        <div
-          style={{
-            width: '220px',
-            height: '220px',
-            borderRadius: '32px',
-            background: 'linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04))',
-            border: '1px solid rgba(255,255,255,0.14)',
-            boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <svg width="132" height="132" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <rect x="15" y="30" width="70" height="55" rx="12" fill="#6366f1" />
-            <rect x="35" y="10" width="30" height="25" rx="8" fill="#818cf8" />
-            <circle cx="36" cy="52" r="8" fill="#fff" />
-            <circle cx="64" cy="52" r="8" fill="#fff" />
-            <circle cx="36" cy="52" r="4" fill="#1e1b4b" />
-            <circle cx="64" cy="52" r="4" fill="#1e1b4b" />
-            <rect x="38" y="68" width="24" height="6" rx="3" fill="#c7d2fe" />
-            <rect x="45" y="5" width="10" height="10" rx="5" fill="#a5b4fc" />
-            <rect x="5" y="45" width="12" height="8" rx="4" fill="#818cf8" />
-            <rect x="83" y="45" width="12" height="8" rx="4" fill="#818cf8" />
-          </svg>
         </div>
       </div>
     ),

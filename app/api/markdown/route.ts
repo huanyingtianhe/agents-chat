@@ -6,7 +6,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getAuthToken, canTalkTo } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
-import { getAgentProcess } from '@/lib/acp/runtimeState';
+import { getAgentProcess, getAgentProcesses } from '@/lib/acp/runtimeState';
+import { createRelayNdjsonRpc } from '@/lib/acp/rpc';
 
 const execFileAsync = promisify(execFile);
 
@@ -120,9 +121,29 @@ export async function GET(req: NextRequest) {
 
   // ── Relay agents: proxy file operations via RPC ──
   if (agent.relay) {
-    const proc = getAgentProcess(agentId, agent as any);
-    if (!proc.rpc) {
-      return NextResponse.json({ error: 'relay agent not connected' }, { status: 503 });
+    const allProcs = getAgentProcesses();
+    let proc = allProcs.get(agentId);
+
+    // Auto-connect relay if proc exists but rpc is not active
+    if (!proc || !proc.rpc) {
+      try {
+        const connName = agent.relayConnectionName || agentId;
+        console.log(`[markdown] Auto-connecting relay for ${agentId} (connection: ${connName})`);
+        const rpc = await createRelayNdjsonRpc(connName);
+        if (!proc) {
+          proc = getAgentProcess(agentId, agent as any);
+        }
+        proc.rpc = rpc;
+        proc.ready = true;
+        proc.cachedCwd = agent.cwd || '/';
+        rpc.onClose = () => {
+          proc!.rpc = null;
+          proc!.ready = false;
+        };
+      } catch (err: any) {
+        console.error(`[markdown] Failed to connect relay for ${agentId}:`, err.message);
+        return NextResponse.json({ error: `relay connection failed: ${err.message}` }, { status: 503 });
+      }
     }
 
     const filePath = req.nextUrl.searchParams.get('path');
@@ -130,12 +151,15 @@ export async function GET(req: NextRequest) {
 
     if (!filePath) {
       try {
+        console.log(`[markdown] Sending fs/list_files to relay agent ${agentId} (cwd: ${agentCwd})`);
         const result = await proc.rpc.send('fs/list_files', { cwd: agentCwd || '/', diff: diffOnly }, 30_000) as any;
+        console.log(`[markdown] fs/list_files result:`, JSON.stringify(result).slice(0, 200));
         if (result?.error) {
           return NextResponse.json({ error: result.error }, { status: 400 });
         }
         return NextResponse.json({ files: result?.files || [] });
       } catch (err: any) {
+        console.error(`[markdown] fs/list_files error:`, err.message);
         return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
       }
     } else {
@@ -279,9 +303,22 @@ export async function POST(req: NextRequest) {
 
   // ── Relay agents: proxy write via RPC ──
   if (agent.relay) {
-    const proc = getAgentProcess(agentId, agent as any);
-    if (!proc.rpc) {
-      return NextResponse.json({ error: 'relay agent not connected' }, { status: 503 });
+    const allProcs = getAgentProcesses();
+    let proc = allProcs.get(agentId);
+    if (!proc || !proc.rpc) {
+      try {
+        const connName = agent.relayConnectionName || agentId;
+        const rpc = await createRelayNdjsonRpc(connName);
+        if (!proc) {
+          proc = getAgentProcess(agentId, agent as any);
+        }
+        proc.rpc = rpc;
+        proc.ready = true;
+        proc.cachedCwd = agent.cwd || '/';
+        rpc.onClose = () => { proc!.rpc = null; proc!.ready = false; };
+      } catch (err: any) {
+        return NextResponse.json({ error: `relay connection failed: ${err.message}` }, { status: 503 });
+      }
     }
     try {
       const result = await proc.rpc.send('fs/write_text_file', {

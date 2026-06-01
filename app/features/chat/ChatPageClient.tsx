@@ -86,7 +86,7 @@ export function ChatPageClient() {
   const { fileCommentsRef, extractFileComments, saveAgentComments, resolveProcessingCommentForChat } = fileCommentsController;
   fileCommentCallbacksRef.current = { extractFileComments, saveAgentComments, fileCommentsRef, resolveProcessingCommentForChat };
 
-  const filteredAgents = useMemo(() => { const match = input.match(/@(\S*)$/); if (!match) return []; const q = match[1].toLowerCase(); return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q))); }, [input, agents]);
+  const filteredAgents = useMemo(() => { const match = input.match(/@(\S*)$/); if (!match) return []; const q = match[1].toLowerCase(); return agents.filter((a) => a.id !== SCHEDULER_AGENT_ID && a.canTalk !== false && (a.id.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q))); }, [input, agents]);
   const chatFilterAgents = useMemo(() => agents.filter((agent) => agent.id !== SCHEDULER_AGENT_ID), [agents]);
   const mentionedAgentIds = useMemo(() => getMentionedAgentIds(input, agents), [input, agents]);
   const currentChatPrimaryAgentId = useMemo(() => chatHistory.find((chat) => chat.id === currentChatId)?.agentId || null, [chatHistory, currentChatId]);

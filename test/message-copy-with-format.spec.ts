@@ -74,7 +74,12 @@ test('agent message exposes Copy and Copy-with-format buttons that write expecte
             fullText: markdownReply,
             done: true,
             phase: 'done',
-            events: [{ type: 'text_chunk', ts: Date.now(), text: markdownReply }],
+            events: [
+              { type: 'thinking', ts: Date.now(), text: 'secret-thought-do-not-copy' },
+              { type: 'tool_start', ts: Date.now(), toolCallId: 't1', toolName: 'secret_tool', toolArgs: 'private-args-do-not-copy' },
+              { type: 'tool_complete', ts: Date.now(), toolCallId: 't1', toolName: 'secret_tool', toolResult: 'private-result-do-not-copy' },
+              { type: 'text_chunk', ts: Date.now(), text: markdownReply },
+            ],
           },
         }),
       });
@@ -126,6 +131,26 @@ test('agent message exposes Copy and Copy-with-format buttons that write expecte
   expect(htmlPayload).toContain('href="https://example.com');
   expect(htmlPayload).toContain('<h1');
   expect(htmlPayload).not.toContain('**bold**');
+  // Thinking and tool-call DOM must NOT leak into the formatted copy
+  expect(htmlPayload).not.toContain('secret-thought-do-not-copy');
+  expect(htmlPayload).not.toContain('private-args-do-not-copy');
+  expect(htmlPayload).not.toContain('private-result-do-not-copy');
+  expect(htmlPayload).not.toContain('thinkingPart');
+  expect(htmlPayload).not.toContain('toolCall');
+
+  const plainFormatted = await page.evaluate(async () => {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      if (item.types.includes('text/plain')) {
+        const blob = await item.getType('text/plain');
+        return await blob.text();
+      }
+    }
+    return '';
+  });
+  expect(plainFormatted).not.toContain('secret-thought-do-not-copy');
+  expect(plainFormatted).not.toContain('private-args-do-not-copy');
+  expect(plainFormatted).not.toContain('private-result-do-not-copy');
 
   await page.waitForTimeout(800);
 });

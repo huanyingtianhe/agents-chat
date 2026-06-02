@@ -60,10 +60,27 @@ export function MessageBubble({
   const messageActionsClassName = `messageActions ${failedSend ? 'messageActionsWithFailure' : ''}`;
   const partsContentRef = useRef<HTMLDivElement | null>(null);
   const markdownContentRef = useRef<HTMLDivElement | null>(null);
-  const handleCopyFormatted = (ref: React.MutableRefObject<HTMLDivElement | null>) => () => {
+  const handleCopyFormatted = (ref: React.MutableRefObject<HTMLDivElement | null>, partsMode: boolean) => () => {
     const node = ref.current;
-    const html = node ? node.innerHTML : '';
-    const text = node ? (node.innerText || node.textContent || '') : getMessageCopyText(message);
+    if (!node) {
+      const fallback = getMessageCopyText(message);
+      onCopyFormatted('', fallback);
+      return;
+    }
+    let htmlParts: string[] = [];
+    let textParts: string[] = [];
+    if (partsMode) {
+      const answerNodes = node.querySelectorAll<HTMLElement>(':scope > .messageContent.markdownBody, :scope > .userAnswerPart');
+      answerNodes.forEach((el) => {
+        htmlParts.push(el.innerHTML);
+        textParts.push(el.innerText || el.textContent || '');
+      });
+    } else {
+      htmlParts.push(node.innerHTML);
+      textParts.push(node.innerText || node.textContent || '');
+    }
+    const html = htmlParts.join('\n');
+    const text = textParts.join('\n').trim() || getMessageCopyText(message);
     onCopyFormatted(html, text);
   };
 
@@ -132,7 +149,7 @@ export function MessageBubble({
                         className="messageCopyButton"
                         aria-label="Copy answer with formatting"
                         title="Copy with formatting preserved (paste into Word, email, etc.)"
-                        onClick={handleCopyFormatted(partsContentRef)}
+                        onClick={handleCopyFormatted(partsContentRef, true)}
                       >
                         {isCopiedFormatted ? 'Copied' : 'Copy with format'}
                       </button>
@@ -185,7 +202,7 @@ export function MessageBubble({
                       className="messageCopyButton"
                       aria-label="Copy answer with formatting"
                       title="Copy with formatting preserved (paste into Word, email, etc.)"
-                      onClick={handleCopyFormatted(markdownContentRef)}
+                      onClick={handleCopyFormatted(markdownContentRef, false)}
                     >
                       {isCopiedFormatted ? 'Copied' : 'Copy with format'}
                     </button>

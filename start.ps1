@@ -142,11 +142,88 @@ if (-not $Cloudflare) {
 Write-Host "`nReady! $tunnelUrl" -ForegroundColor Green
 Write-Host "Press Ctrl+C to stop`n" -ForegroundColor DarkGray
 
-try { $tunnel.WaitForExit() } catch {}
+$healthCheckUrl = "http://localhost:3000/api/auth/providers"
+$healthFailures = 0
+$maxHealthFailures = 3
+$exitCode = 0
 
-# Cleanup
-Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
-$pids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
-foreach ($p in $pids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
-if ($Cloudflare) { Remove-Item "$env:TEMP\cloudflared-$PID.log" -Force -ErrorAction SilentlyContinue }
-Write-Host "Stopped." -ForegroundColor Yellow
+# Wait for the server to respond before entering the monitoring loop
+Write-Host "Waiting for server to become ready at $healthCheckUrl..." -ForegroundColor Cyan
+$startupDeadline = (Get-Date).AddSeconds(60)
+$startupReady = $false
+while ((Get-Date) -lt $startupDeadline) {
+    try { $server.Refresh() } catch {}
+    if ($server.HasExited) {
+        Write-Host "Next.js server exited during startup (code $($server.ExitCode))." -ForegroundColor Red
+        $exitCode = 1
+        break
+    }
+    try {
+        $r = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) {
+            Write-Host "Server is ready." -ForegroundColor Green
+            $startupReady = $true
+            break
+        }
+    } catch { }
+    Start-Sleep -Seconds 3
+}
+
+if (-not $startupReady -and $exitCode -eq 0) {
+    Write-Host "Server did not become ready within 60 seconds; exiting." -ForegroundColor Red
+    $exitCode = 1
+}
+
+try {
+    while ($exitCode -eq 0) {
+        Start-Sleep -Seconds 10
+
+        try { $server.Refresh() } catch {}
+        if ($server.HasExited) {
+            Write-Host "Next.js server exited unexpectedly with code $($server.ExitCode)." -ForegroundColor Red
+            $exitCode = 1
+            break
+        }
+
+        if ($tunnel) {
+            try { $tunnel.Refresh() } catch {}
+            if ($tunnel.HasExited) {
+                Write-Host "Tunnel exited unexpectedly with code $($tunnel.ExitCode)." -ForegroundColor Red
+                $exitCode = 1
+                break
+            }
+        }
+
+        try {
+            $response = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                $healthFailures = 0
+            } else {
+                $healthFailures++
+                Write-Host "Health check failed: $healthCheckUrl returned HTTP $($response.StatusCode) ($healthFailures/$maxHealthFailures)." -ForegroundColor Yellow
+            }
+        } catch {
+            $healthFailures++
+            Write-Host "Health check failed: $healthCheckUrl did not respond ($healthFailures/$maxHealthFailures). $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+
+        if ($healthFailures -ge $maxHealthFailures) {
+            Write-Host "Health check failed $healthFailures times; exiting so service-watchdog.ps1 can restart the app." -ForegroundColor Red
+            $exitCode = 1
+            break
+        }
+    }
+} catch {
+    Write-Host "Supervisor loop failed: $($_.Exception.Message)" -ForegroundColor Red
+    $exitCode = 1
+} finally {
+    # Cleanup
+    if ($tunnel -and -not $tunnel.HasExited) { Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue }
+    if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    $pids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($p in $pids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    if ($Cloudflare) { Remove-Item "$env:TEMP\cloudflared-$PID.log" -Force -ErrorAction SilentlyContinue }
+    Write-Host "Stopped." -ForegroundColor Yellow
+}
+
+exit $exitCode

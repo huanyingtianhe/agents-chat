@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { mdComponents } from '../markdownHelpers';
@@ -30,7 +31,9 @@ export function MessageBubble({
   isCollapsed,
   mounted,
   isCopied,
+  isCopiedFormatted,
   onCopy,
+  onCopyFormatted,
   onToggleExpanded,
   onRetryFailedSend,
   onOpenImage,
@@ -43,7 +46,9 @@ export function MessageBubble({
   isCollapsed: boolean;
   mounted: boolean;
   isCopied: boolean;
+  isCopiedFormatted: boolean;
   onCopy: () => void;
+  onCopyFormatted: (html: string, text: string) => void;
   onToggleExpanded: () => void;
   onRetryFailedSend: () => void;
   onOpenImage: (src: string) => void;
@@ -53,6 +58,14 @@ export function MessageBubble({
   const hasParts = message.parts && message.parts.length > 0;
   const isLong = (message.content || '').length > 400 || (message.content || '').split('\n').length > 12;
   const messageActionsClassName = `messageActions ${failedSend ? 'messageActionsWithFailure' : ''}`;
+  const partsContentRef = useRef<HTMLDivElement | null>(null);
+  const markdownContentRef = useRef<HTMLDivElement | null>(null);
+  const handleCopyFormatted = (ref: React.MutableRefObject<HTMLDivElement | null>) => () => {
+    const node = ref.current;
+    const html = node ? node.innerHTML : '';
+    const text = node ? (node.innerText || node.textContent || '') : getMessageCopyText(message);
+    onCopyFormatted(html, text);
+  };
 
   return (
     <div className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
@@ -80,7 +93,7 @@ export function MessageBubble({
             return (
               <>
                 <FailedSendNotice failure={failedSend} />
-                <div className={`partsStream ${partsLong && isCollapsed && !message.pending ? 'collapsed' : ''}`}>
+                <div ref={partsContentRef} className={`partsStream ${partsLong && isCollapsed && !message.pending ? 'collapsed' : ''}`}>
                   <MessageContentParts
                     parts={message.parts!}
                     pending={message.pending}
@@ -104,15 +117,26 @@ export function MessageBubble({
                   )}
                   <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend()} />
                   {message.type !== 'user' && (
-                    <button
-                      type="button"
-                      className="messageCopyButton"
-                      aria-label="Copy answer"
-                      title="Copy answer"
-                      onClick={onCopy}
-                    >
-                      {isCopied ? 'Copied' : 'Copy'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="messageCopyButton"
+                        aria-label="Copy answer"
+                        title="Copy answer"
+                        onClick={onCopy}
+                      >
+                        {isCopied ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        type="button"
+                        className="messageCopyButton"
+                        aria-label="Copy answer with formatting"
+                        title="Copy with formatting preserved (paste into Word, email, etc.)"
+                        onClick={handleCopyFormatted(partsContentRef)}
+                      >
+                        {isCopiedFormatted ? 'Copied' : 'Copy with format'}
+                      </button>
+                    </>
                   )}
                 </div>
               </>
@@ -120,7 +144,7 @@ export function MessageBubble({
           })() : (
             <>
               <FailedSendNotice failure={failedSend} />
-              <div className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
+              <div ref={markdownContentRef} className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
               </div>
               <AttachmentList attachments={message.attachments} mode="message" onPreview={onOpenImage} />
@@ -146,15 +170,26 @@ export function MessageBubble({
                 )}
                 <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend()} />
                 {message.type !== 'user' && (
-                  <button
-                    type="button"
-                    className="messageCopyButton"
-                    aria-label="Copy answer"
-                    title="Copy answer"
-                    onClick={onCopy}
-                  >
-                    {isCopied ? 'Copied' : 'Copy'}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="messageCopyButton"
+                      aria-label="Copy answer"
+                      title="Copy answer"
+                      onClick={onCopy}
+                    >
+                      {isCopied ? 'Copied' : 'Copy'}
+                    </button>
+                    <button
+                      type="button"
+                      className="messageCopyButton"
+                      aria-label="Copy answer with formatting"
+                      title="Copy with formatting preserved (paste into Word, email, etc.)"
+                      onClick={handleCopyFormatted(markdownContentRef)}
+                    >
+                      {isCopiedFormatted ? 'Copied' : 'Copy with format'}
+                    </button>
+                  </>
                 )}
               </div>
             </>

@@ -98,6 +98,18 @@ assert.match(
 
 assert.match(
   routeSource,
+  /function\s+readAgentsConfig\([\s\S]*?public:\s*a\.public,[\s\S]*?function\s+getAgentById/,
+  'readAgentsConfig should expose the persisted public flag from SQLite',
+);
+
+assert.match(
+  routeSource,
+  /function\s+getAgentById\([\s\S]*?public:\s*a\.public,[\s\S]*?env:/,
+  'get-agent-config should expose the persisted public flag from SQLite',
+);
+
+assert.match(
+  routeSource,
   /const base = \{[\s\S]*?models:\s*a\.models[\s\S]*?defaultModelId:\s*a\.defaultModelId[\s\S]*?\}/,
   'list-agents should return persisted models/defaultModelId for agent selection UI',
 );

@@ -29,6 +29,7 @@ export function MessageList({
 }) {
   const [mounted, setMounted] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [copiedFormattedMessageId, setCopiedFormattedMessageId] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -46,6 +47,33 @@ export function MessageList({
     });
   }
 
+  function handleCopyFormatted(message: ChatMessage, html: string, text: string) {
+    const flagCopied = () => {
+      setCopiedFormattedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedFormattedMessageId((current) => current === message.id ? null : current);
+      }, 1500);
+    };
+    const fallbackText = text || getMessageCopyText(message);
+    const ClipboardItemCtor = typeof window !== 'undefined' ? (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem : undefined;
+    if (ClipboardItemCtor && navigator.clipboard && typeof navigator.clipboard.write === 'function') {
+      const item = new ClipboardItemCtor({
+        'text/html': new Blob([html || `<pre>${fallbackText}</pre>`], { type: 'text/html' }),
+        'text/plain': new Blob([fallbackText], { type: 'text/plain' }),
+      });
+      navigator.clipboard.write([item]).then(flagCopied).catch((err) => {
+        console.error('Failed to copy formatted message, falling back to plain text', err);
+        navigator.clipboard.writeText(fallbackText).then(flagCopied).catch((err2) => {
+          console.error('Failed to copy message', err2);
+        });
+      });
+    } else {
+      navigator.clipboard.writeText(fallbackText).then(flagCopied).catch((err) => {
+        console.error('Failed to copy message', err);
+      });
+    }
+  }
+
   return (
     <>
       {messages.map((message) => (
@@ -57,7 +85,9 @@ export function MessageList({
           isCollapsed={expandedMessages[message.id] === false}
           mounted={mounted}
           isCopied={copiedMessageId === message.id}
+          isCopiedFormatted={copiedFormattedMessageId === message.id}
           onCopy={() => handleCopy(message)}
+          onCopyFormatted={(html, text) => handleCopyFormatted(message, html, text)}
           onToggleExpanded={() => onToggleExpanded(message.id)}
           onRetryFailedSend={() => onRetryFailedSend(message.id)}
           onOpenImage={onOpenImage}

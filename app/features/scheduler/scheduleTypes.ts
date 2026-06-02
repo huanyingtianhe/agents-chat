@@ -27,7 +27,12 @@ export type CronJob = {
   updatedAt: number;
   lastRunAt: number | null;
   nextRunAt: number | null;
+  timeoutMinutes: number;
 };
+
+export const DEFAULT_TIMEOUT_MINUTES = 10;
+export const MIN_TIMEOUT_MINUTES = 1;
+export const MAX_TIMEOUT_MINUTES = 1440;
 
 export type CronRunStatus = "queued" | "running" | "success" | "error" | "skipped";
 

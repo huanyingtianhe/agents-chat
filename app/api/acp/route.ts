@@ -56,6 +56,7 @@ function readAgentsConfig(): AgentConfig[] {
     noTools: a.noTools,
     relay: a.relay,
     relayConnectionName: a.relayConnectionName,
+    public: a.public,
     models: a.models,
     defaultModelId: a.defaultModelId,
   }));
@@ -74,6 +75,7 @@ function getAgentById(agentId: string): AgentConfig | null {
     noTools: a.noTools,
     relay: a.relay,
     relayConnectionName: a.relayConnectionName,
+    public: a.public,
     models: a.models,
     defaultModelId: a.defaultModelId,
     env: JSON.stringify(a.env || {}),

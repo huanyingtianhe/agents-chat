@@ -5,7 +5,7 @@
 .participantsList {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 .chatAgentFilterRow {
@@ -21,19 +21,18 @@
 }
 .newChatButton {
   flex: 1;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px dashed var(--border-strong);
-  background: transparent;
-  color: var(--text-soft);
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--panel-soft);
+  color: var(--text);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
 }
 .newChatButton:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--text) 8%);
 }
 .newChatButton:disabled {
   opacity: 0.4;
@@ -56,11 +55,11 @@
 .chatHistoryItem {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
   text-align: left;
-  padding: 10px 12px;
-  border-radius: 14px;
+  padding: 8px 10px;
+  border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-soft);
@@ -73,7 +72,7 @@
 }
 .chatHistoryIcon { font-size: 16px; flex: 0 0 auto; }
 .chatHistoryText { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.chatHistoryName { font-size: 13px; font-weight: 600; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chatHistoryName { font-size: 13px; font-weight: 500; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .chatHistoryMetaRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chatHistoryMeta { font-size: 11px; color: var(--muted); }
 .chatStatusBadge {
@@ -96,7 +95,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  border-radius: 14px;
+  border-radius: 10px;
   border: 1px solid transparent;
   position: relative;
   min-width: 0;
@@ -105,11 +104,11 @@
 .chatHistoryRow .chatHistoryItem { flex: 1; min-width: 0; }
 .chatHistoryRow:hover,
 .chatHistoryRow:focus-within {
-  background: var(--panel-soft);
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 78%, var(--text) 7%);
+  border-color: transparent;
   color: var(--text);
 }
-.chatHistoryRow.active { background: var(--panel-soft); border-color: var(--border-strong); box-shadow: inset 0 0 0 1px var(--accent-soft); border-radius: 14px; }
+.chatHistoryRow.active { background: color-mix(in srgb, var(--panel-soft) 65%, var(--text) 10%); border-color: transparent; border-radius: 10px; }
 .chatHistoryRow:hover .chatHistoryItem,
 .chatHistoryRow:focus-within .chatHistoryItem,
 .chatHistoryRow.active .chatHistoryItem { border-color: transparent; box-shadow: none; background: transparent; }
@@ -144,9 +143,9 @@
 }
 .chatMoreBtn:hover,
 .chatMoreBtn.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--border);
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--text) 8%);
+  border-color: transparent;
 }
 .chatActionsMenu {
   position: absolute;

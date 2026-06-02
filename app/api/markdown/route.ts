@@ -6,6 +6,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getAuthToken, canTalkTo } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
+import { getAgentProcess, getAgentProcesses } from '@/lib/acp/runtimeState';
+import { createRelayNdjsonRpc } from '@/lib/acp/rpc';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,6 +118,69 @@ export async function GET(req: NextRequest) {
   }
 
   const agentCwd = agent.cwd;
+
+  // ── Relay agents: proxy file operations via RPC ──
+  if (agent.relay) {
+    const allProcs = getAgentProcesses();
+    let proc = allProcs.get(agentId);
+
+    // Auto-connect relay if proc exists but rpc is not active
+    if (!proc || !proc.rpc) {
+      try {
+        const connName = agent.relayConnectionName || agentId;
+        console.log(`[markdown] Auto-connecting relay for ${agentId} (connection: ${connName})`);
+        const rpc = await createRelayNdjsonRpc(connName);
+        if (!proc) {
+          proc = getAgentProcess(agentId, agent as any);
+        }
+        proc.rpc = rpc;
+        proc.ready = true;
+        proc.cachedCwd = agent.cwd || '/';
+        rpc.onClose = () => {
+          proc!.rpc = null;
+          proc!.ready = false;
+        };
+      } catch (err: any) {
+        console.error(`[markdown] Failed to connect relay for ${agentId}:`, err.message);
+        return NextResponse.json({ error: `relay connection failed: ${err.message}` }, { status: 503 });
+      }
+    }
+
+    const filePath = req.nextUrl.searchParams.get('path');
+    const diffOnly = req.nextUrl.searchParams.get('diff') === 'true';
+
+    if (!filePath) {
+      try {
+        console.log(`[markdown] Sending fs/list_files to relay agent ${agentId} (cwd: ${agentCwd})`);
+        const result = await proc.rpc.send('fs/list_files', { cwd: agentCwd || '/', diff: diffOnly }, 30_000) as any;
+        console.log(`[markdown] fs/list_files result:`, JSON.stringify(result).slice(0, 200));
+        if (result?.error) {
+          return NextResponse.json({ error: result.error }, { status: 400 });
+        }
+        return NextResponse.json({ files: result?.files || [] });
+      } catch (err: any) {
+        console.error(`[markdown] fs/list_files error:`, err.message);
+        return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+      }
+    } else {
+      try {
+        const result = await proc.rpc.send('fs/read_text_file', { cwd: agentCwd || '/', path: filePath }, 15_000) as any;
+        if (result?.error) {
+          return NextResponse.json({ error: result.error }, { status: result.error === 'file not found' ? 404 : 400 });
+        }
+        return NextResponse.json({
+          path: filePath,
+          content: result?.content ?? '',
+          kind: result?.kind ?? 'text',
+          mtime: result?.mtime ?? null,
+        });
+      } catch (err: any) {
+        return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+      }
+    }
+  }
+
+  // ── Local agents: direct filesystem access ──
   if (!agentCwd || !existsSync(agentCwd)) {
     return NextResponse.json({ error: 'agent cwd not found' }, { status: 404 });
   }
@@ -236,6 +301,50 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
+  // ── Relay agents: proxy write via RPC ──
+  if (agent.relay) {
+    const allProcs = getAgentProcesses();
+    let proc = allProcs.get(agentId);
+    if (!proc || !proc.rpc) {
+      try {
+        const connName = agent.relayConnectionName || agentId;
+        const rpc = await createRelayNdjsonRpc(connName);
+        if (!proc) {
+          proc = getAgentProcess(agentId, agent as any);
+        }
+        proc.rpc = rpc;
+        proc.ready = true;
+        proc.cachedCwd = agent.cwd || '/';
+        rpc.onClose = () => { proc!.rpc = null; proc!.ready = false; };
+      } catch (err: any) {
+        return NextResponse.json({ error: `relay connection failed: ${err.message}` }, { status: 503 });
+      }
+    }
+    try {
+      const result = await proc.rpc.send('fs/write_text_file', {
+        cwd: agent.cwd || '/',
+        path: filePath,
+        content,
+        mtime: body.mtime,
+      }, 15_000) as any;
+      if (result?.error === 'conflict') {
+        return NextResponse.json({
+          error: 'conflict',
+          message: 'File was modified externally. Choose how to resolve the conflict.',
+          serverContent: result.serverContent,
+          serverMtime: result.serverMtime,
+        }, { status: 409 });
+      }
+      if (result?.error) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, path: filePath, mtime: result?.mtime ?? null });
+    } catch (err: any) {
+      return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
+    }
+  }
+
+  // ── Local agents: direct filesystem access ──
   const agentCwd = agent.cwd;
   if (!agentCwd || !existsSync(agentCwd)) {
     return NextResponse.json({ error: 'agent cwd not found' }, { status: 404 });

@@ -3,6 +3,7 @@ import { getAuthToken, isAdminToken } from "../../../../lib/auth";
 import { openScheduleStore } from "../../../../lib/scheduler/scheduleStore";
 import { getRuntime, ensureRuntime } from "../../../../lib/scheduler/schedulerRuntime";
 import { specToCron, validateSpec } from "../../../../app/features/scheduler/scheduleSpec";
+import { MIN_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES } from "../../../../app/features/scheduler/scheduleTypes";
 
 function authorize(token: any, ownerEmail: string) {
   return token?.email && (isAdminToken(token) || token.email === ownerEmail);
@@ -35,6 +36,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     catch (e: any) { return NextResponse.json({ error: e.message }, { status: 400 }); }
     patch.scheduleSpec = body.scheduleSpec;
     patch.cronExpr = specToCron(body.scheduleSpec);
+  }
+  if (body.timeoutMinutes !== undefined) {
+    const n = typeof body.timeoutMinutes === 'number' ? body.timeoutMinutes : Number(body.timeoutMinutes);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < MIN_TIMEOUT_MINUTES || n > MAX_TIMEOUT_MINUTES) {
+      return NextResponse.json({ error: `timeoutMinutes must be an integer between ${MIN_TIMEOUT_MINUTES} and ${MAX_TIMEOUT_MINUTES}` }, { status: 400 });
+    }
+    patch.timeoutMinutes = n;
   }
   const updated = store.updateJob(id, patch)!;
   getRuntime()?.scheduleJob(updated);

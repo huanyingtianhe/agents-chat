@@ -11,17 +11,46 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import Providers from './providers';
 
+const metadataBase = new URL(process.env.NEXTAUTH_URL || 'http://localhost:3010');
+
 export const metadata: Metadata = {
+  metadataBase,
   title: 'Agents Chat',
-  description: 'Chat with ACP agents (GitHub Copilot CLI, Claude Code, etc.)',
-  icons: { icon: '/favicon.svg' },
+  description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+    ],
+    apple: '/favicon.svg',
+  },
+  openGraph: {
+    title: 'Agents Chat',
+    description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
+    images: [{
+      url: '/opengraph-image',
+      width: 1200,
+      height: 630,
+      alt: 'Agents Chat preview',
+    }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Agents Chat',
+    description: 'Chat with multiple agents (GitHub Copilot CLI, Claude Code, etc.)',
+    images: [{
+      url: '/opengraph-image',
+      width: 1200,
+      height: 630,
+      alt: 'Agents Chat preview',
+    }],
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
       </head>
       <body>
         <Providers>{children}</Providers>

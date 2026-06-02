@@ -103,6 +103,7 @@ export type AgentConfig = {
   noTools?: boolean;
   relay?: boolean;
   relayConnectionName?: string;
+  public?: boolean;
   models?: AgentModel[];
   defaultModelId?: string;
   env?: string; // JSON string: '{"KEY":"value"}'

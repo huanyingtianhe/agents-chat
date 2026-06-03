@@ -52,10 +52,12 @@ export type AgentRegistry = {
   setEnsuringAgentModels: Dispatch<SetStateAction<Record<string, boolean>>>;
   mergeModelPrefs: (prefs: Record<string, string>) => void;
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
-  rememberedChatAgents: Record<string, string>;
-  setRememberedChatAgents: (next: Record<string, string>) => void;
-  rememberChatAgent: (chatId: string, agentId: string) => void;
-  clearRememberedChatAgent: (chatId: string) => void;
+  lastUsedAgent: string | null;
+  chatLastUsedAgents: Record<string, string>;
+  lastUsedAgentScope: 'user' | 'chat';
+  setLastUsedAgentScope: (scope: 'user' | 'chat') => void;
+  rememberLastUsedAgent: (agentId: string, chatId?: string) => void;
+  clearLastUsedAgent: (chatId?: string) => void;
   reloadAgents: () => Promise<void>;
   ensureAgentModels: (agentId: string, opts: EnsureAgentModelsOptions) => Promise<void>;
 };

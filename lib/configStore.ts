@@ -101,6 +101,25 @@ function getDb(): ReturnType<typeof Database> {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (user_email, agent_id)
     );
+    CREATE TABLE IF NOT EXISTS user_last_used_agent (
+      user_email TEXT PRIMARY KEY,
+      agent_id   TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS user_chat_last_used_agent (
+      user_email TEXT NOT NULL,
+      chat_id    TEXT NOT NULL,
+      agent_id   TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_email, chat_id)
+    );
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_email TEXT NOT NULL,
+      key        TEXT NOT NULL,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_email, key)
+    );
   `);
   runMigrations();
   return _db;
@@ -537,4 +556,92 @@ export function setUserAgentModelPref(userEmail: string, agentId: string, modelI
       ON CONFLICT(user_email, agent_id) DO UPDATE SET model_id = excluded.model_id, updated_at = excluded.updated_at
     `).run(userEmail.toLowerCase(), agentId, modelId);
   }
+}
+
+// ─── User Last-Used Agent ───
+//
+// One row per user that records the agent they most recently @-mentioned.
+// Used to pre-fill the composer target when opening any chat, replacing the
+// per-chat browser-local "remembered agent" hint.
+
+export function getUserLastUsedAgent(userEmail: string): string | null {
+  const db = getDb();
+  const row = db.prepare('SELECT agent_id FROM user_last_used_agent WHERE user_email = ?')
+    .get(userEmail.toLowerCase()) as any;
+  return row?.agent_id || null;
+}
+
+export function setUserLastUsedAgent(userEmail: string, agentId: string): void {
+  const db = getDb();
+  if (!agentId) {
+    db.prepare('DELETE FROM user_last_used_agent WHERE user_email = ?').run(userEmail.toLowerCase());
+    return;
+  }
+  db.prepare(`
+    INSERT INTO user_last_used_agent (user_email, agent_id, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(user_email) DO UPDATE SET agent_id = excluded.agent_id, updated_at = excluded.updated_at
+  `).run(userEmail.toLowerCase(), agentId);
+}
+
+// ─── User Per-Chat Last-Used Agent ───
+//
+// One row per (user, chat) when the user enables per-chat scope for the
+// "last used agent" preference. Independent from the per-user row above —
+// the active table is chosen at request time by the client based on the
+// user's lastUsedAgentScope setting.
+
+export function getUserChatLastUsedAgent(userEmail: string, chatId: string): string | null {
+  const db = getDb();
+  const row = db.prepare('SELECT agent_id FROM user_chat_last_used_agent WHERE user_email = ? AND chat_id = ?')
+    .get(userEmail.toLowerCase(), chatId) as any;
+  return row?.agent_id || null;
+}
+
+export function getUserChatLastUsedAgents(userEmail: string): Record<string, string> {
+  const db = getDb();
+  const rows = db.prepare('SELECT chat_id, agent_id FROM user_chat_last_used_agent WHERE user_email = ?')
+    .all(userEmail.toLowerCase()) as any[];
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.chat_id] = row.agent_id;
+  return result;
+}
+
+export function setUserChatLastUsedAgent(userEmail: string, chatId: string, agentId: string): void {
+  const db = getDb();
+  if (!agentId) {
+    db.prepare('DELETE FROM user_chat_last_used_agent WHERE user_email = ? AND chat_id = ?')
+      .run(userEmail.toLowerCase(), chatId);
+    return;
+  }
+  db.prepare(`
+    INSERT INTO user_chat_last_used_agent (user_email, chat_id, agent_id, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(user_email, chat_id) DO UPDATE SET agent_id = excluded.agent_id, updated_at = excluded.updated_at
+  `).run(userEmail.toLowerCase(), chatId, agentId);
+}
+
+// ─── User Settings (generic key/value) ───
+
+export function getUserSettings(userEmail: string): Record<string, string> {
+  const db = getDb();
+  const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_email = ?')
+    .all(userEmail.toLowerCase()) as any[];
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.key] = row.value;
+  return result;
+}
+
+export function setUserSetting(userEmail: string, key: string, value: string): void {
+  const db = getDb();
+  if (!value) {
+    db.prepare('DELETE FROM user_settings WHERE user_email = ? AND key = ?')
+      .run(userEmail.toLowerCase(), key);
+    return;
+  }
+  db.prepare(`
+    INSERT INTO user_settings (user_email, key, value, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(user_email, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(userEmail.toLowerCase(), key, value);
 }

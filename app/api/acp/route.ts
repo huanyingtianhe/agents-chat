@@ -1476,6 +1476,60 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    if (action === 'get-last-used-agent') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const chatId = typeof body?.chatId === 'string' ? body.chatId : '';
+      if (chatId) {
+        const lastAgentId = configStore.getUserChatLastUsedAgent(userEmail, chatId);
+        return NextResponse.json({ ok: true, agentId: lastAgentId, scope: 'chat', chatId });
+      }
+      const lastAgentId = configStore.getUserLastUsedAgent(userEmail);
+      return NextResponse.json({ ok: true, agentId: lastAgentId, scope: 'user' });
+    }
+
+    if (action === 'get-chat-last-used-agents') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const map = configStore.getUserChatLastUsedAgents(userEmail);
+      return NextResponse.json({ ok: true, map });
+    }
+
+    if (action === 'set-last-used-agent') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const lastAgentId = typeof body?.agentId === 'string' ? body.agentId : '';
+      const chatId = typeof body?.chatId === 'string' ? body.chatId : '';
+      if (chatId) {
+        configStore.setUserChatLastUsedAgent(userEmail, chatId, lastAgentId);
+      } else {
+        configStore.setUserLastUsedAgent(userEmail, lastAgentId);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === 'get-user-settings') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const settings = configStore.getUserSettings(userEmail);
+      return NextResponse.json({ ok: true, settings });
+    }
+
+    if (action === 'set-user-setting') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const key = typeof body?.key === 'string' ? body.key : '';
+      const value = typeof body?.value === 'string' ? body.value : '';
+      if (!key) return NextResponse.json({ ok: false, error: 'missing_key' }, { status: 400 });
+      configStore.setUserSetting(userEmail, key, value);
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === 'list-agents') {
       const allAgents = configStore.getAllAgents();
       const token = await getAuthToken(req);

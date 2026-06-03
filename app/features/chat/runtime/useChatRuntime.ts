@@ -18,8 +18,11 @@ export type UseChatRuntimeParams = {
   chatAgentFilterRef: React.MutableRefObject<string | null>;
   getSelectedModelIdForAgent: (agentId: string) => string;
   setInputProgrammatic: (value: string) => void;
-  rememberedChatAgentsRef: React.MutableRefObject<Record<string, string>>;
-  rememberChatAgent: (chatId: string, agentId: string) => void;
+  // Resolves the effective "last used agent" for a chat based on the current
+  // scope setting: per-user value (any chat) or per-chat value (only the
+  // matching chat — no fallback to per-user).
+  effectiveLastUsedAgentRef: React.MutableRefObject<(chatId: string) => string | null>;
+  rememberLastUsedAgent: (agentId: string, chatId?: string) => void;
   authStatus: string;
 };
 
@@ -39,8 +42,8 @@ export function useChatRuntime({
   chatAgentFilterRef,
   getSelectedModelIdForAgent,
   setInputProgrammatic,
-  rememberedChatAgentsRef,
-  rememberChatAgent,
+  effectiveLastUsedAgentRef,
+  rememberLastUsedAgent,
   authStatus,
 }: UseChatRuntimeParams) {
   /* ── State ── */
@@ -222,13 +225,13 @@ export function useChatRuntime({
       await persistHandlers.createNewChat(chatAgentFilterRef.current);
     }
     const sendChatPrimaryAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId || null;
-    const sendFallbackAgentId = getExistingAgentId(rememberedChatAgentsRef.current[currentChatIdRef.current], agentsRef.current)
+    const sendFallbackAgentId = getExistingAgentId(effectiveLastUsedAgentRef.current(currentChatIdRef.current), agentsRef.current)
       || getExistingAgentId(sendChatPrimaryAgentId, agentsRef.current)
       || getDefaultAgentId(agentsRef.current);
     const { agentIds, message } = parseAgents(textForAgent, agentsRef.current, sendFallbackAgentId);
     const explicitlyMentionedAgentIds = getMentionedAgentIds(textForAgent, agentsRef.current);
     if (explicitlyMentionedAgentIds.length > 0) {
-      rememberChatAgent(currentChatIdRef.current, explicitlyMentionedAgentIds[0]);
+      rememberLastUsedAgent(explicitlyMentionedAgentIds[0], currentChatIdRef.current);
     }
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;

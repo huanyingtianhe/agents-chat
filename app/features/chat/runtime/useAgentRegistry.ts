@@ -7,6 +7,9 @@ import { SCHEDULER_AGENT_ID } from '../chatHelpers';
 import { STORAGE_AGENT_FILTER, STORAGE_REMEMBERED_CHAT_AGENTS } from './sessionPersistence';
 import type { EnsureAgentModelsOptions } from './chatRuntimeTypes';
 
+export type LastUsedAgentScope = 'user' | 'chat';
+export const LAST_USED_AGENT_SCOPE_KEY = 'last_used_agent_scope';
+
 export type UseAgentRegistryParams = {
   acp: (body: Record<string, unknown>) => Promise<any>;
 };
@@ -14,7 +17,15 @@ export type UseAgentRegistryParams = {
 export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
-  const [rememberedChatAgents, setRememberedChatAgentsState] = useState<Record<string, string>>({});
+  // Per-user "last @-mentioned agent" — persisted server-side so it travels
+  // across browsers/devices. Used when lastUsedAgentScope === 'user'.
+  const [lastUsedAgent, setLastUsedAgentState] = useState<string | null>(null);
+  // Per-chat "last @-mentioned agent" map, also server-side. Used when
+  // lastUsedAgentScope === 'chat'. No fallback to the per-user value —
+  // when a chat has no entry the composer falls back to chat primary agent.
+  const [chatLastUsedAgents, setChatLastUsedAgentsState] = useState<Record<string, string>>({});
+  // Which scope the composer reads/writes for the "last used agent" hint.
+  const [lastUsedAgentScope, setLastUsedAgentScopeState] = useState<LastUsedAgentScope>('chat');
 
   // Agent filter — persisted in localStorage
   const [selectedAgentFilter, setSelectedAgentFilterState] = useState<string | null>(null);
@@ -29,17 +40,9 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
       const saved = window.localStorage.getItem(STORAGE_AGENT_FILTER);
       if (saved) setSelectedAgentFilterState(saved);
     } catch { /* ignore */ }
-    try {
-      const savedRememberedAgents = window.localStorage.getItem(STORAGE_REMEMBERED_CHAT_AGENTS);
-      if (savedRememberedAgents) {
-        const parsed = JSON.parse(savedRememberedAgents) as Record<string, unknown>;
-        const next: Record<string, string> = {};
-        for (const [chatId, agentId] of Object.entries(parsed)) {
-          if (chatId && typeof agentId === 'string' && agentId) next[chatId] = agentId;
-        }
-        setRememberedChatAgentsState(next);
-      }
-    } catch { /* ignore */ }
+    // Clean up the legacy per-chat localStorage key — superseded by the
+    // server-side tables loaded in reloadAgents.
+    try { window.localStorage.removeItem(STORAGE_REMEMBERED_CHAT_AGENTS); } catch { /* ignore */ }
   }, []);
 
   function setSelectedAgentFilter(agentId: string | null) {
@@ -56,36 +59,46 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
     void acp({ action: 'set-model-pref', agentId, modelId }).catch(() => { /* ignore */ });
   }
 
-  function persistRememberedChatAgents(next: Record<string, string>) {
-    setRememberedChatAgentsState(next);
-    try { window.localStorage.setItem(STORAGE_REMEMBERED_CHAT_AGENTS, JSON.stringify(next)); } catch { /* ignore */ }
+  function rememberLastUsedAgent(agentId: string, chatId?: string) {
+    if (!agentId) return;
+    if (lastUsedAgentScope === 'chat' && chatId) {
+      setChatLastUsedAgentsState((prev) => ({ ...prev, [chatId]: agentId }));
+      void acp({ action: 'set-last-used-agent', agentId, chatId }).catch(() => { /* ignore */ });
+    } else {
+      setLastUsedAgentState(agentId);
+      void acp({ action: 'set-last-used-agent', agentId }).catch(() => { /* ignore */ });
+    }
   }
 
-  function rememberChatAgent(chatId: string, agentId: string) {
-    if (!chatId || !agents.some(a => a.id === agentId)) return;
-    setRememberedChatAgentsState(prev => {
-      const next = { ...prev, [chatId]: agentId };
-      try { window.localStorage.setItem(STORAGE_REMEMBERED_CHAT_AGENTS, JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
+  function clearLastUsedAgent(chatId?: string) {
+    if (lastUsedAgentScope === 'chat' && chatId) {
+      setChatLastUsedAgentsState((prev) => {
+        if (!prev[chatId]) return prev;
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      });
+      void acp({ action: 'set-last-used-agent', agentId: '', chatId }).catch(() => { /* ignore */ });
+    } else {
+      setLastUsedAgentState(null);
+      void acp({ action: 'set-last-used-agent', agentId: '' }).catch(() => { /* ignore */ });
+    }
   }
 
-  function clearRememberedChatAgent(chatId: string) {
-    setRememberedChatAgentsState(prev => {
-      if (!prev[chatId]) return prev;
-      const next = { ...prev };
-      delete next[chatId];
-      try { window.localStorage.setItem(STORAGE_REMEMBERED_CHAT_AGENTS, JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
+  function setLastUsedAgentScope(scope: LastUsedAgentScope) {
+    setLastUsedAgentScopeState(scope);
+    void acp({ action: 'set-user-setting', key: LAST_USED_AGENT_SCOPE_KEY, value: scope }).catch(() => { /* ignore */ });
   }
 
   async function reloadAgents() {
     setAgentsLoading(true);
     try {
-      const [agentsData, prefsData] = await Promise.all([
+      const [agentsData, prefsData, lastUsedData, chatLastUsedData, settingsData] = await Promise.all([
         acp({ action: 'list-agents' }),
         acp({ action: 'get-model-prefs' }).catch(() => null),
+        acp({ action: 'get-last-used-agent' }).catch(() => null),
+        acp({ action: 'get-chat-last-used-agents' }).catch(() => null),
+        acp({ action: 'get-user-settings' }).catch(() => null),
       ]);
       if (agentsData.ok && Array.isArray(agentsData.agents)) {
         const loadedAgents = agentsData.agents as Agent[];
@@ -94,6 +107,16 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
       }
       if (prefsData?.ok && prefsData.prefs && typeof prefsData.prefs === 'object') {
         mergeModelPrefs(prefsData.prefs as Record<string, string>);
+      }
+      if (lastUsedData?.ok && typeof lastUsedData.agentId === 'string' && lastUsedData.agentId) {
+        setLastUsedAgentState(lastUsedData.agentId);
+      }
+      if (chatLastUsedData?.ok && chatLastUsedData.map && typeof chatLastUsedData.map === 'object') {
+        setChatLastUsedAgentsState(chatLastUsedData.map as Record<string, string>);
+      }
+      if (settingsData?.ok && settingsData.settings && typeof settingsData.settings === 'object') {
+        const scope = (settingsData.settings as Record<string, string>)[LAST_USED_AGENT_SCOPE_KEY];
+        if (scope === 'user' || scope === 'chat') setLastUsedAgentScopeState(scope);
       }
     } catch (err) {
       console.error('Failed to load agents', err);
@@ -151,10 +174,12 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
     setEnsuringAgentModels,
     mergeModelPrefs,
     setSelectedModelForAgent,
-    rememberedChatAgents,
-    setRememberedChatAgents: persistRememberedChatAgents,
-    rememberChatAgent,
-    clearRememberedChatAgent,
+    lastUsedAgent,
+    chatLastUsedAgents,
+    lastUsedAgentScope,
+    setLastUsedAgentScope,
+    rememberLastUsedAgent,
+    clearLastUsedAgent,
     reloadAgents,
     ensureAgentModels,
   };

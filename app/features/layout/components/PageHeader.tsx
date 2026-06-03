@@ -20,6 +20,8 @@ export type PageHeaderProps = {
   activeThemeId: string;
   normalizedThemeId: string;
   onSelectTheme: (id: string) => void;
+  lastUsedAgentScope: 'user' | 'chat';
+  onSelectLastUsedAgentScope: (scope: 'user' | 'chat') => void;
 };
 
 export function PageHeader({
@@ -38,9 +40,13 @@ export function PageHeader({
   activeThemeId,
   normalizedThemeId,
   onSelectTheme,
+  lastUsedAgentScope,
+  onSelectLastUsedAgentScope,
 }: PageHeaderProps) {
   const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const headerOverflowRef = useRef<HTMLDivElement | null>(null);
+  const settingsRef = useRef<HTMLDivElement | null>(null);
   const currentThemeId = normalizeThemeId(normalizedThemeId || activeThemeId);
   const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen();
 
@@ -54,6 +60,17 @@ export function PageHeader({
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [showHeaderOverflow]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (!settingsRef.current?.contains(event.target as Node)) {
+        setShowSettings(false);
+      }
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [showSettings]);
 
   return (
     <header className="header">
@@ -78,6 +95,46 @@ export function PageHeader({
               {isFullscreen ? '🗗' : '⛶'}
             </button>
           )}
+          <div className="headerSettingsWrap" ref={settingsRef}>
+            <button
+              type="button"
+              className={`ghostButton ${showSettings ? 'activeGhost' : ''}`}
+              onClick={() => setShowSettings((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={showSettings}
+              aria-label="Settings"
+              title="Settings"
+            >
+              <span aria-hidden="true">⚙️</span>
+            </button>
+            {showSettings && (
+              <div className="headerOverflowMenu" role="menu" aria-label="Settings">
+                <div className="headerOverflowSectionLabel">Remember last @-mentioned agent</div>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={lastUsedAgentScope === 'user'}
+                  className={`headerOverflowItem ${lastUsedAgentScope === 'user' ? 'active' : ''}`}
+                  onClick={() => { onSelectLastUsedAgentScope('user'); setShowSettings(false); }}
+                >
+                  <span className="headerOverflowEmoji">👤</span>
+                  <span>Per user (all chats)</span>
+                  {lastUsedAgentScope === 'user' ? <span className="headerOverflowCheck">✓</span> : null}
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={lastUsedAgentScope === 'chat'}
+                  className={`headerOverflowItem ${lastUsedAgentScope === 'chat' ? 'active' : ''}`}
+                  onClick={() => { onSelectLastUsedAgentScope('chat'); setShowSettings(false); }}
+                >
+                  <span className="headerOverflowEmoji">💬</span>
+                  <span>Per chat</span>
+                  {lastUsedAgentScope === 'chat' ? <span className="headerOverflowCheck">✓</span> : null}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="headerOverflowWrap" ref={headerOverflowRef}>
           <button
@@ -140,6 +197,30 @@ export function PageHeader({
                   <span>{isFullscreen ? 'Exit full screen' : 'Full screen'}</span>
                 </button>
               )}
+              <div className="headerOverflowSeparator" />
+              <div className="headerOverflowSectionLabel">Remember last @-mentioned agent</div>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={lastUsedAgentScope === 'user'}
+                className={`headerOverflowItem ${lastUsedAgentScope === 'user' ? 'active' : ''}`}
+                onClick={() => { onSelectLastUsedAgentScope('user'); setShowHeaderOverflow(false); }}
+              >
+                <span className="headerOverflowEmoji">👤</span>
+                <span>Per user (all chats)</span>
+                {lastUsedAgentScope === 'user' ? <span className="headerOverflowCheck">✓</span> : null}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={lastUsedAgentScope === 'chat'}
+                className={`headerOverflowItem ${lastUsedAgentScope === 'chat' ? 'active' : ''}`}
+                onClick={() => { onSelectLastUsedAgentScope('chat'); setShowHeaderOverflow(false); }}
+              >
+                <span className="headerOverflowEmoji">💬</span>
+                <span>Per chat</span>
+                {lastUsedAgentScope === 'chat' ? <span className="headerOverflowCheck">✓</span> : null}
+              </button>
               <div className="headerOverflowSeparator" />
               <div className="headerOverflowSectionLabel">Theme</div>
               {Object.entries(THEMES).map(([id, theme]) => (

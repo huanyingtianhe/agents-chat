@@ -1,0 +1,130 @@
+.agentAuthControl {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.agentAuthButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255,255,255,0.15));
+  background: var(--panel, rgba(255,255,255,0.04));
+  color: var(--text-soft, #c9d1d9);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+
+.agentAuthButton:hover {
+  background: var(--hover, rgba(255,255,255,0.08));
+}
+
+.agentAuthButton.needsAuth {
+  background: rgba(248, 81, 73, 0.12);
+  border-color: rgba(248, 81, 73, 0.45);
+  color: #f0a89e;
+}
+
+.agentAuthButton.needsAuth:hover {
+  background: rgba(248, 81, 73, 0.2);
+}
+
+.agentAuthPopover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 8px;
+  background: var(--panel-strong, #1d2433);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow, 0 12px 32px rgba(0,0,0,0.4));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text, #e6edf3);
+  font-size: 12px;
+  backdrop-filter: blur(16px);
+}
+
+.agentAuthPopoverTitle {
+  font-weight: 600;
+  padding: 4px 6px 2px;
+  opacity: 0.8;
+}
+
+.agentAuthHint {
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  line-height: 1.45;
+  color: var(--text-soft, #c9d1d9);
+}
+
+.agentAuthHint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(0,0,0,0.3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.agentAuthMethodBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms;
+}
+
+.agentAuthMethodBtn:hover:not(.disabled) {
+  background: var(--hover, rgba(255,255,255,0.06));
+}
+
+.agentAuthMethodBtn.disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.agentAuthMethodName {
+  font-weight: 600;
+}
+
+.agentAuthMethodDesc {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.agentAuthBusy {
+  margin-left: auto;
+}
+
+.agentAuthError {
+  padding: 6px 8px;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: 8px;
+  color: #f0a89e;
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.agentAuthSuccess {
+  padding: 6px 8px;
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  border-radius: 8px;
+  color: #7ee787;
+  font-size: 11px;
+}

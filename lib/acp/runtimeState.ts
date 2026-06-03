@@ -82,6 +82,8 @@ export function getAgentProcess(agentId: string, config: AgentConfig): AgentProc
       supportsLoadSession: false,
       knownSessions: new Set(),
       availableCommandsBySession: new Map(),
+      authMethods: [],
+      needsAuth: false,
     };
     procs.set(agentId, proc);
   }

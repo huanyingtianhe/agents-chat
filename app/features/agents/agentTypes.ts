@@ -4,6 +4,12 @@ export type AgentModel = {
   description?: string;
 };
 
+export type AgentAuthMethod = {
+  id: string;
+  name?: string;
+  description?: string;
+};
+
 export type Agent = {
   id: string;
   name: string;
@@ -21,4 +27,6 @@ export type Agent = {
   public?: boolean;
   models?: AgentModel[];
   defaultModelId?: string;
+  authMethods?: AgentAuthMethod[];
+  needsAuth?: boolean;
 };

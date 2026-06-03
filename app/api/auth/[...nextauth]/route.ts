@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 import NextAuth, { type AuthOptions } from 'next-auth';
 import AzureADProvider from 'next-auth/providers/azure-ad';
+import GitHubProvider from 'next-auth/providers/github';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { type NextRequest } from 'next/server';
 
@@ -36,6 +37,28 @@ if (process.env.AZURE_AD_CLIENT_ID) {
           name: profile.name || profile.preferred_username,
           email: profile.email || profile.preferred_username || profile.upn,
         };
+      },
+    }),
+  );
+}
+
+if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+  providers.push(
+    GitHubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+      authorization: { params: { scope: 'read:user user:email' } },
+      profile(profile, tokens) {
+        return {
+          id: String(profile.id),
+          name: profile.name || profile.login,
+          email: profile.email || `${profile.login}@users.noreply.github.com`,
+          image: profile.avatar_url,
+          // Stash the OAuth access token so we can fetch primary email later
+          // if the profile.email is null (private email setting).
+          ghAccessToken: tokens?.access_token,
+          ghLogin: profile.login,
+        } as any;
       },
     }),
   );
@@ -120,7 +143,28 @@ export const authOptions: AuthOptions = {
     },
   },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
+      // For GitHub OAuth: fetch the verified primary email if it wasn't
+      // included in the profile (users with private email settings).
+      if (account?.provider === 'github' && account.access_token && !token.email) {
+        try {
+          const res = await fetch('https://api.github.com/user/emails', {
+            headers: {
+              Authorization: `Bearer ${account.access_token}`,
+              Accept: 'application/vnd.github+json',
+            },
+          });
+          if (res.ok) {
+            const emails = (await res.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+            const primary = emails.find((e) => e.primary && e.verified) || emails.find((e) => e.verified);
+            if (primary?.email) {
+              token.email = primary.email;
+            }
+          }
+        } catch {
+          // ignore — fall back to whatever the profile() helper provided
+        }
+      }
       if (user) {
         // Credentials login with role=admin → always admin
         if ((user as any).role === 'admin') {

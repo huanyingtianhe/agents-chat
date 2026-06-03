@@ -70,7 +70,7 @@ export function AgentAuthControl({ agent, onAuthenticated }: AgentAuthControlPro
     };
   }, [open]);
 
-  if (!needsAuth && methods.length === 0) return null;
+  if (!needsAuth) return null;
 
   async function authenticate(methodId: string) {
     setBusyMethodId(methodId);
@@ -84,7 +84,9 @@ export function AgentAuthControl({ agent, onAuthenticated }: AgentAuthControlPro
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) {
-        setError(typeof json?.error === 'string' ? json.error : `HTTP ${res.status}`);
+        const hint = typeof json?.hint === 'string' ? json.hint : null;
+        const errMsg = typeof json?.error === 'string' ? json.error : `HTTP ${res.status}`;
+        setError(hint || errMsg);
       } else {
         setSuccess(true);
         onAuthenticated?.();

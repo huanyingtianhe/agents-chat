@@ -24,6 +24,9 @@ export type UseChatRuntimeParams = {
   effectiveLastUsedAgentRef: React.MutableRefObject<(chatId: string) => string | null>;
   rememberLastUsedAgent: (agentId: string, chatId?: string) => void;
   authStatus: string;
+  // Called after a send failure that looks like agent-side auth is required,
+  // so the agents panel can refresh and surface the red "Sign in" pill.
+  reloadAgents?: () => Promise<void> | void;
 };
 
 export type PanelCallbacks = {
@@ -45,6 +48,7 @@ export function useChatRuntime({
   effectiveLastUsedAgentRef,
   rememberLastUsedAgent,
   authStatus,
+  reloadAgents,
 }: UseChatRuntimeParams) {
   /* ── State ── */
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -168,6 +172,11 @@ export function useChatRuntime({
   });
 
   /* ── Failed send helpers ── */
+  function looksLikeAgentAuthError(error: string): boolean {
+    if (!error) return false;
+    return /-32000|authentication required|not authenticated|please.*log.?in|sign.?in required/i.test(error);
+  }
+
   function markUserMessageSendFailed(
     chatId: string, userMessageId: string, error: string,
     resendAgentIds: string[], resendMessage: string, resendAttachments?: ChatAttachment[],
@@ -180,6 +189,12 @@ export function useChatRuntime({
       attachments: resendAttachments,
     }, chatId);
     void persistHandlers.saveChatToHistory(chatId);
+    // If the failure looks like the agent itself needs auth, refresh the
+    // agent list so the panel picks up `needsAuth: true` and shows the
+    // red "Sign in" pill on the offending agent row.
+    if (reloadAgents && looksLikeAgentAuthError(error)) {
+      void Promise.resolve(reloadAgents()).catch(() => { /* best effort */ });
+    }
   }
 
   function clearUserMessageSendFailure(chatId: string, userMessageId: string) {

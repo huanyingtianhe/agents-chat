@@ -62,7 +62,7 @@ export function ChatPageClient() {
   const shouldStickToBottomRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
   const fileCommentsControllerRef = useRef<Pick<UseFileCommentsResult, 'resetForFileOpen'> | null>(null);
-  const runtime = useChatRuntime({ acp, agentsRef, agentsLoadingRef, chatAgentFilterRef, getSelectedModelIdForAgent, setInputProgrammatic, effectiveLastUsedAgentRef, rememberLastUsedAgent, authStatus });
+  const runtime = useChatRuntime({ acp, agentsRef, agentsLoadingRef, chatAgentFilterRef, getSelectedModelIdForAgent, setInputProgrammatic, effectiveLastUsedAgentRef, rememberLastUsedAgent, authStatus, reloadAgents });
   const { messages, chatHistory, currentChatId, activeSidebarChatId, chatName, runVersion, shareDialog, expandedMessages, orchestrationMode, discussionRounds, setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId, setShareDialog, setExpandedMessages, setOrchestrationMode, setDiscussionRounds, currentChatIdRef, sessionRunsRef, currentAgentSessionsRef, inputHistoryRef, addMessage, updateMessage, notifyRunStateChanged, dispatchToAgent, saveCurrentChatToHistory, clearChatMessages, shareCurrentChat, handleStop, retryFailedSend, answerAgentUserRequest, dismissAgentUserRequest, fileCommentCallbacksRef, panelCallbacksRef, loadChat: runtimeLoadChat, createNewChat: runtimeCreateNewChat, renameChatById: runtimeRenameChatById, deleteChatById: runtimeDeleteChatById, handleSend: runtimeHandleSend, loadChatIntoCache, getChatSidebarStatus } = runtime;
   const nodePanelState = useNodePanelState({ acp, loadAgents: reloadAgents, addMessage });
   const { showNodesPanel, setShowNodesPanel, loadNodes, nodesData } = nodePanelState;

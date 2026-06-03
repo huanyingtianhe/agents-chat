@@ -1620,6 +1620,33 @@ export async function POST(req: NextRequest) {
       log(`[ACP:${agentId}] authenticate methodId=${methodId} (triggered by ${userEmail})`);
       try {
         const result = await proc.rpc.send('authenticate', { methodId });
+        // Many agents (e.g. Copilot CLI today) accept `authenticate` without
+        // actually performing a sign-in — the advertised method may just be
+        // instructional ("Run `copilot login` in the terminal"). Verify the
+        // sign-in actually worked by probing session/new before declaring
+        // success, otherwise the user thinks they're signed in but the very
+        // next message will fail with -32000 again.
+        let probeError: unknown = null;
+        try {
+          const probeParams: any = { cwd: config.cwd || process.cwd(), mcpServers: [] };
+          const probe = await proc.rpc.send('session/new', probeParams);
+          // Best-effort cleanup; ignore errors — many agents don't implement session/cancel.
+          if (probe?.sessionId) {
+            try { await proc.rpc.send('session/cancel', { sessionId: probe.sessionId }); } catch { /* ignore */ }
+          }
+        } catch (probeErr) {
+          probeError = probeErr;
+        }
+        if (probeError && isAuthRequiredError(probeError)) {
+          proc.needsAuth = true;
+          const probeMsg = probeError instanceof Error ? probeError.message : String(probeError);
+          log(`[ACP:${agentId}] authenticate returned OK but session/new still requires auth: ${probeMsg}`);
+          return NextResponse.json({
+            ok: false,
+            error: 'still_unauthenticated',
+            hint: 'The agent accepted the request but is still not signed in. You likely need to complete sign-in in a terminal (e.g. run `copilot` then `/login`), then click Sign in again.',
+          }, { status: 409 });
+        }
         proc.needsAuth = false;
         // Drop any per-user sessions so the next message creates a fresh one
         // now that the agent is authenticated.

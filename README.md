@@ -70,21 +70,26 @@ Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.lo
 - **Discussion orchestration** — Run multiple agents in parallel for configurable rounds, then summarize.
 - **Pipeline orchestration** — Run agents sequentially, passing each output to the next.
 - **File attachments** — Drag-and-drop or click to attach images and files to messages (up to 8 files, 10 MB each).
-- **Files tab** — Browse an agent's working directory, filter to changed files, open files inline, edit Markdown with split preview or live editing, and save changes back to disk.
+- **Files tab** — Browse an agent's working directory (local _or_ remote/relay agents), filter to changed files, open files inline, edit Markdown with split preview or live editing, and save changes back to disk. For relay agents the backend auto-connects the node and resolves `cwd` from the remote machine.
 - **Model selection** — Per-agent model picker synced from the agent's available models.
+- **Slash commands** — Type `/` in a single-agent chat to pick from the agent's ACP-advertised slash commands (autocomplete dropdown).
+- **In-app ACP sign-in** — Agents that require authentication (e.g., Copilot CLI) expose a sign-in flow directly in the UI; the composer surfaces a `needs auth` pill when a turn fails because of missing auth and verifies sign-in actually succeeded.
+- **Scheduler / cron jobs** — Schedule any agent to run on a cron expression with per-job run timeout, a themed time picker, and schedule times rendered in the user's local timezone.
 - **Environment variables** — Per-agent KEY=VALUE configuration for API keys and agent settings.
 - **Themes** — 5 built-in themes (Aurora, Sunset, VS Code Dark, Claude, ChatGPT).
-- **Message actions** — Copy, retry, or branch from any message.
+- **Message actions** — Copy (plain), **Copy with format** (rich Markdown→HTML/Markdown, excluding thinking and tool-call DOM), retry, or branch from any message.
+- **Mention autocomplete** — Typing `@` filters the agent dropdown as you type.
+- **Full screen toggle** — Header button (desktop + mobile) to expand the chat into full screen.
 - **Multi-turn queue** — Send follow-up messages while an agent is processing; turns are queued and executed in order.
 - **Streaming responses** — Real-time streaming with phase indicators for thinking, tool execution, and replying.
-- **Agent management** — Add, configure, remove, and permission agents from the UI.
+- **Agent management** — Add, configure, remove, and permission agents from the UI. The "last used agent" is persisted per-user on the server.
 - **Relay agents** — Connect to remote agents on other machines via Azure Relay.
-- **Node registry** — Register and discover remote agent nodes; auto-discovers Azure Relay hybrid connections.
-- **Chat history** — Persistent message history in SQLite (`.data/chats.db`) with sidebar run status.
+- **Node registry** — Register and discover remote agent nodes; auto-discovers Azure Relay hybrid connections. The Node Setup Kit lets you choose the launcher (Copilot CLI or Agency).
+- **Chat history** — Persistent message history in SQLite (`.data/chats.db`) with sidebar run status, sorted newest-first and filtered to the signed-in user.
 - **Session resume** — Reloading a chat restores agent session context via `session/load`.
-- **Shared chats** — Generate a read-only share link for any conversation.
+- **Shared chats** — Generate a read-only share link for any conversation, with Open Graph image optimized for Teams previews.
 - **Mobile responsive** — Full-featured UI on phones and tablets with swipeable panels and touch-friendly controls.
-- **Authentication** — Azure AD SSO or local credentials login; admin/user roles.
+- **Authentication** — Azure AD SSO, **GitHub OAuth**, or local credentials login; admin/user roles.
 
 ## Using the app
 
@@ -107,14 +112,34 @@ When a message mentions more than one agent, the composer exposes orchestration 
 
 Auto mode is useful when the task has conditional flow, such as "ask one agent to implement, then have another test/review depending on the result." The scheduler is routing-only: it should pick agents and write instructions rather than doing project work itself.
 
+### Slash commands
+
+In a chat targeting a single agent, type `/` in the composer to open a dropdown of the agent's ACP-advertised slash commands. Selecting one inserts the command; arguments (if any) can be typed after it. Slash commands are only shown when the chat targets exactly one agent.
+
+### Scheduler (cron jobs)
+
+Any agent can be scheduled to run on a cron expression:
+
+1. Open the agent's settings or the **Scheduler** UI.
+2. Pick a cron schedule using the themed picker (times are displayed in your local timezone).
+3. Set an optional **per-job run timeout** so a stuck job is cancelled automatically.
+4. Save. The job will fire on schedule, run a turn against the agent, and record the result.
+
+### In-app ACP sign-in
+
+Some ACP agents (for example GitHub Copilot CLI) require authentication before they can answer prompts. When an agent reports it needs auth:
+
+- The composer surfaces a **needs auth** pill.
+- Open the agent's panel and click **Sign in**. The UI runs the agent's `authenticate` ACP flow and verifies the sign-in actually completed before clearing the pill.
+
 ### Files tab
 
 The left sidebar has two tabs: **Chats** and **Files**.
 
-Use **Files** to inspect and edit files from a local, non-relay agent's working directory:
+Use **Files** to inspect and edit files from any agent's working directory (local _or_ relay):
 
 1. Open the **Files** tab.
-2. Choose an agent from the dropdown. The list only includes agents with a configured `cwd` that are local/non-relay.
+2. Choose an agent from the dropdown. Relay agents are supported — the backend auto-connects the node and resolves the working directory from the remote machine.
 3. Browse the file tree. The backend skips heavy/generated folders such as `.git`, `node_modules`, `.next`, `dist`, `build`, and binary/media file extensions.
 4. Click a file to open it inline.
 5. For Markdown files, choose:
@@ -141,6 +166,8 @@ cp .env.example .env.local
 | `AZURE_AD_CLIENT_ID` | Optional | Azure AD / Microsoft Entra app client ID; enables SSO login when set |
 | `AZURE_AD_CLIENT_SECRET` | Optional | Azure AD client secret |
 | `AZURE_AD_TENANT_ID` | Optional | Tenant ID, default `common` |
+| `GITHUB_CLIENT_ID` | Optional | GitHub OAuth app client ID; enables "Sign in with GitHub" when set. Configure the OAuth app's callback URL as `${NEXTAUTH_URL}/api/auth/callback/github`. |
+| `GITHUB_CLIENT_SECRET` | Optional | GitHub OAuth client secret |
 | `ADMIN_USERNAME` | Optional | Local admin username for credentials login |
 | `ADMIN_PASSWORD` | Optional | Local admin password |
 | `ADMIN_EMAILS` | Optional | Comma-separated emails granted admin role for Azure AD users |
@@ -324,7 +351,7 @@ Nodes represent remote machines that can host relay agents. A node is backed by 
    Restart or redeploy the app and download a new `copilot-node-setup.zip` after changing these environment variables.
 2. Open the **Nodes** panel.
 3. Click **+** to open **Node Setup Kit**.
-4. Download `copilot-node-setup.zip`.
+4. Choose the launcher you want the node to run (**Copilot CLI** or **Agency**) and download `copilot-node-setup.zip`.
 5. Copy/extract it on the remote devbox.
 6. Open PowerShell in the extracted folder.
 7. Run:

@@ -5,6 +5,8 @@ import type { NodeData } from '../../nodes/nodeTypes';
 import type { AccessEntry } from '../hooks/useAgentPanelState';
 import { useAgentPanelState } from '../hooks/useAgentPanelState';
 import { AgentModelSelect } from './AgentModelSelect';
+import { AgentAuthControl } from './AgentAuthControl';
+import './AgentAuthControl.css';
 
 function getAgentLocationLabel(agent: Agent): string {
   if (!agent.relay) return `@${agent.id}`;
@@ -27,6 +29,7 @@ export interface AgentsPanelProps {
   selectedAgentModels: Record<string, string>;
   ensuringAgentModels: Record<string, boolean>;
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
+  reloadAgents: () => void | Promise<void>;
 }
 
 export function AgentsPanel({
@@ -39,6 +42,7 @@ export function AgentsPanel({
   selectedAgentModels,
   ensuringAgentModels,
   setSelectedModelForAgent,
+  reloadAgents,
 }: AgentsPanelProps) {
   const {
     showAgentsPanel,
@@ -122,6 +126,7 @@ export function AgentsPanel({
                   <span className="agentListName">{agent.name || agent.id}{agent.canTalk === false ? ' 🔒' : ''}</span>
                   <span className="agentListId" title={getAgentLocationTitle(agent)}>{getAgentLocationLabel(agent)}</span>
                 </span>
+                <AgentAuthControl agent={agent} onAuthenticated={() => void reloadAgents()} />
                 <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
               </button>
             ))}

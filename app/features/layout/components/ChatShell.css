@@ -325,6 +325,10 @@
   position: relative;
   display: none;
 }
+.chatPageRoot .headerSettingsWrap {
+  position: relative;
+  display: inline-flex;
+}
 .chatPageRoot .headerOverflowBtn {
   font-size: 18px;
   line-height: 1;

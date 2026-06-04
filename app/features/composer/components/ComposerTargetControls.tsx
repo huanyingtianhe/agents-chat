@@ -19,7 +19,7 @@ type ComposerTargetControlsProps = {
   setOpenModelMenuAgentId: Dispatch<SetStateAction<string | null>>;
   modelMenuRefs: MutableRefObject<Map<string, HTMLSpanElement | null>>;
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
-  clearRememberedChatAgent: (chatId: string) => void;
+  clearLastUsedAgent: () => void;
   setOrchestrationMode: (mode: OrchestrationMode) => void;
   setDiscussionRounds: (rounds: number) => void;
 };
@@ -28,7 +28,7 @@ export function ComposerTargetControls({
   mentionedAgentIds, orchestrationEnabled, orchestrationMode, discussionRounds,
   effectiveComposerAgentId, rememberedComposerAgentId, currentChatId,
   getAgentModels, getSelectedModelIdForAgent, openModelMenuAgentId, setOpenModelMenuAgentId,
-  modelMenuRefs, setSelectedModelForAgent, clearRememberedChatAgent,
+  modelMenuRefs, setSelectedModelForAgent, clearLastUsedAgent,
   setOrchestrationMode, setDiscussionRounds,
 }: ComposerTargetControlsProps) {
   const modelSelect = (agentId: string) => (
@@ -77,8 +77,8 @@ export function ComposerTargetControls({
             type="button"
             className="rememberedAgentRemove"
             aria-label={`Remove remembered agent ${effectiveComposerAgentId}`}
-            title="Use the chat primary/default agent instead"
-            onClick={() => clearRememberedChatAgent(currentChatId)}
+            title="Stop pre-filling this agent in the composer"
+            onClick={() => clearLastUsedAgent()}
           />
         ) : null}
       </span>

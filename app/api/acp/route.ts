@@ -43,6 +43,16 @@ type NdjsonRpc = import('@/lib/acp/types').NdjsonRpc;
 void getPendingUserRequestResponders();
 const SYNTHETIC_USER_REQUEST_METHOD = 'client/text_question';
 
+/** True for JSON-RPC errors that mean the agent process needs to be authenticated. */
+function isAuthRequiredError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as any;
+  const code = anyErr?.data?.code ?? anyErr?.code;
+  if (code === -32000) return true;
+  const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
+  return /authentication required|not authenticated|please.*log.?in|sign.?in required/.test(msg);
+}
+
 /* ─────────────── agents.json Config (now backed by SQLite via configStore) ─────────────── */
 
 function readAgentsConfig(): AgentConfig[] {
@@ -436,6 +446,27 @@ async function doBootAgent(agentId: string): Promise<void> {
     proc.supportsLoadSession = !!initResult?.agentCapabilities?.loadSession;
     log(`[ACP:${agentId}] loadSession capability: ${proc.supportsLoadSession}`);
 
+    // Capture authentication methods advertised by the agent. Per ACP spec the
+    // shape is `{ authMethods: [{ id, name?, description? }, ...] }`. Some
+    // agents nest it under agentCapabilities; accept either.
+    const rawAuthMethods = Array.isArray(initResult?.authMethods)
+      ? initResult.authMethods
+      : Array.isArray(initResult?.agentCapabilities?.authMethods)
+        ? initResult.agentCapabilities.authMethods
+        : [];
+    proc.authMethods = rawAuthMethods
+      .map((m: any) => ({
+        id: typeof m?.id === 'string' ? m.id : '',
+        name: typeof m?.name === 'string' ? m.name : undefined,
+        description: typeof m?.description === 'string' ? m.description : undefined,
+      }))
+      .filter((m: { id: string }) => m.id.length > 0);
+    if (proc.authMethods.length > 0) {
+      log(`[ACP:${agentId}] authMethods: ${proc.authMethods.map((m) => m.id).join(', ')}`);
+    }
+    // Clear stale needsAuth from any previous boot
+    proc.needsAuth = false;
+
     // No longer create a session at boot — sessions are created per-user on first send
     proc.ready = true;
     proc.booting = false;
@@ -604,11 +635,20 @@ async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId:
   if (!proc.rpc) throw new Error('Agent process not ready');
   const sessionParams = await buildSessionParams(proc, isAdmin);
   log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
-  const result = await proc.rpc.send('session/new', sessionParams);
-  syncAgentModelsFromSessionResult(agentId, result);
-  sess.sessionId = result.sessionId;
-  proc.knownSessions.add(result.sessionId);
-  log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
+  try {
+    const result = await proc.rpc.send('session/new', sessionParams);
+    proc.needsAuth = false;
+    syncAgentModelsFromSessionResult(agentId, result);
+    sess.sessionId = result.sessionId;
+    proc.knownSessions.add(result.sessionId);
+    log(`[ACP:${agentId}] Session ${result.sessionId} created for user ${userId}`);
+  } catch (err) {
+    if (isAuthRequiredError(err)) {
+      proc.needsAuth = true;
+      log(`[ACP:${agentId}] session/new failed: authentication required (authMethods=${proc.authMethods.map((m) => m.id).join(',') || 'none advertised'})`);
+    }
+    throw err;
+  }
 }
 
 function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
@@ -1476,16 +1516,170 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    if (action === 'get-last-used-agent') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const chatId = typeof body?.chatId === 'string' ? body.chatId : '';
+      if (chatId) {
+        const lastAgentId = configStore.getUserChatLastUsedAgent(userEmail, chatId);
+        return NextResponse.json({ ok: true, agentId: lastAgentId, scope: 'chat', chatId });
+      }
+      const lastAgentId = configStore.getUserLastUsedAgent(userEmail);
+      return NextResponse.json({ ok: true, agentId: lastAgentId, scope: 'user' });
+    }
+
+    if (action === 'get-chat-last-used-agents') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const map = configStore.getUserChatLastUsedAgents(userEmail);
+      return NextResponse.json({ ok: true, map });
+    }
+
+    if (action === 'set-last-used-agent') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const lastAgentId = typeof body?.agentId === 'string' ? body.agentId : '';
+      const chatId = typeof body?.chatId === 'string' ? body.chatId : '';
+      if (chatId) {
+        configStore.setUserChatLastUsedAgent(userEmail, chatId, lastAgentId);
+      } else {
+        configStore.setUserLastUsedAgent(userEmail, lastAgentId);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === 'get-user-settings') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const settings = configStore.getUserSettings(userEmail);
+      return NextResponse.json({ ok: true, settings });
+    }
+
+    if (action === 'set-user-setting') {
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const key = typeof body?.key === 'string' ? body.key : '';
+      const value = typeof body?.value === 'string' ? body.value : '';
+      if (!key) return NextResponse.json({ ok: false, error: 'missing_key' }, { status: 400 });
+      configStore.setUserSetting(userEmail, key, value);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ─── ACP authentication endpoints ───
+    // These expose the ACP `authenticate` flow so users can sign an agent in
+    // from the UI (e.g. GitHub Copilot CLI's device-code flow) instead of
+    // having to drop to a terminal and run `copilot /login`.
+
+    if (action === 'acp-auth-status') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const config = getAgentById(agentId);
+      if (!config) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      const proc = getAgentProcess(agentId, config);
+      return NextResponse.json({
+        ok: true,
+        ready: proc.ready,
+        booting: proc.booting,
+        error: proc.error,
+        needsAuth: proc.needsAuth,
+        authMethods: proc.authMethods,
+      });
+    }
+
+    if (action === 'acp-authenticate') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const config = getAgentById(agentId);
+      if (!config) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      // Only authenticated app users can trigger agent sign-in. We don't
+      // restrict to admins because the underlying agent uses its own auth
+      // (e.g. the user's own GitHub account for Copilot CLI).
+      const token = await getAuthToken(req);
+      const userEmail = getUserEmail(token);
+      if (!userEmail) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+      const methodId = typeof body?.methodId === 'string' ? body.methodId : '';
+      if (!methodId) return NextResponse.json({ ok: false, error: 'missing_methodId' }, { status: 400 });
+
+      // Make sure the agent process is up so it can handle authenticate().
+      try {
+        await bootAgent(agentId);
+      } catch (bootErr) {
+        const msg = bootErr instanceof Error ? bootErr.message : String(bootErr);
+        return NextResponse.json({ ok: false, error: `agent_boot_failed: ${msg}` }, { status: 500 });
+      }
+      const proc = getAgentProcess(agentId, config);
+      if (!proc.rpc) return NextResponse.json({ ok: false, error: 'agent_not_ready' }, { status: 503 });
+      // Validate methodId against the advertised set when possible, but allow
+      // a manual override if the agent didn't advertise anything.
+      if (proc.authMethods.length > 0 && !proc.authMethods.some((m) => m.id === methodId)) {
+        return NextResponse.json({ ok: false, error: 'unknown_methodId', authMethods: proc.authMethods }, { status: 400 });
+      }
+      log(`[ACP:${agentId}] authenticate methodId=${methodId} (triggered by ${userEmail})`);
+      try {
+        const result = await proc.rpc.send('authenticate', { methodId });
+        // Many agents (e.g. Copilot CLI today) accept `authenticate` without
+        // actually performing a sign-in — the advertised method may just be
+        // instructional ("Run `copilot login` in the terminal"). Verify the
+        // sign-in actually worked by probing session/new before declaring
+        // success, otherwise the user thinks they're signed in but the very
+        // next message will fail with -32000 again.
+        let probeError: unknown = null;
+        try {
+          const probeParams: any = { cwd: config.cwd || process.cwd(), mcpServers: [] };
+          const probe = await proc.rpc.send('session/new', probeParams);
+          // Best-effort cleanup; ignore errors — many agents don't implement session/cancel.
+          if (probe?.sessionId) {
+            try { await proc.rpc.send('session/cancel', { sessionId: probe.sessionId }); } catch { /* ignore */ }
+          }
+        } catch (probeErr) {
+          probeError = probeErr;
+        }
+        if (probeError && isAuthRequiredError(probeError)) {
+          proc.needsAuth = true;
+          const probeMsg = probeError instanceof Error ? probeError.message : String(probeError);
+          log(`[ACP:${agentId}] authenticate returned OK but session/new still requires auth: ${probeMsg}`);
+          return NextResponse.json({
+            ok: false,
+            error: 'still_unauthenticated',
+            hint: 'The agent accepted the request but is still not signed in. You likely need to complete sign-in in a terminal (e.g. run `copilot` then `/login`), then click Sign in again.',
+          }, { status: 409 });
+        }
+        proc.needsAuth = false;
+        // Drop any per-user sessions so the next message creates a fresh one
+        // now that the agent is authenticated.
+        for (const [key, sess] of getUserSessions()) {
+          if (key.startsWith(`${agentId}:`)) {
+            sess.sessionId = null;
+          }
+        }
+        proc.knownSessions.clear();
+        return NextResponse.json({ ok: true, result: result ?? null });
+      } catch (authErr) {
+        const msg = authErr instanceof Error ? authErr.message : String(authErr);
+        const anyErr = authErr as any;
+        const code = anyErr?.data?.code ?? anyErr?.code;
+        log(`[ACP:${agentId}] authenticate failed: ${msg}`);
+        return NextResponse.json({ ok: false, error: msg, code: code ?? null }, { status: 502 });
+      }
+    }
+
     if (action === 'list-agents') {
       const allAgents = configStore.getAllAgents();
       const token = await getAuthToken(req);
       const userEmail = getUserEmail(token);
+      const procs = getAgentProcesses();
       // All authenticated users can see all agents; include canModify and canTalk flags
       const agents = allAgents.map(a => {
         const userCanModify = canModify(token, a.owner);
         const userCanTalk = canTalkTo(token, a.owner, a.id, a.public, configStore.hasAgentAccess);
         const relayNode = a.relay && a.relayConnectionName ? configStore.getNodeByName(a.relayConnectionName) : null;
-        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label, cwd: a.cwd, models: a.models, defaultModelId: a.defaultModelId };
+        const proc = procs.get(a.id);
+        const authMethods = proc?.authMethods ?? [];
+        const needsAuth = !!proc?.needsAuth;
+        const base = { id: a.id, name: a.name, owner: a.owner, canModify: userCanModify, canTalk: userCanTalk, public: a.public, relay: a.relay, noTools: a.noTools, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label, cwd: a.cwd, models: a.models, defaultModelId: a.defaultModelId, authMethods, needsAuth };
         if (userCanModify) {
           return { ...base, command: a.command, args: a.args, cwd: a.cwd, yolo: a.yolo, relayConnectionName: a.relayConnectionName, relayConnectionLabel: relayNode?.label };
         }

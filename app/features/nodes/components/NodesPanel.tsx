@@ -1,10 +1,13 @@
 'use client';
 
+import { useState } from 'react';
 import { useNodePanelState } from '../hooks/useNodePanelState';
 
 export interface NodesPanelProps {
   panelState: ReturnType<typeof useNodePanelState>;
 }
+
+type Launcher = 'copilot' | 'agency';
 
 export function NodesPanel({ panelState }: NodesPanelProps) {
   const {
@@ -39,6 +42,9 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
     createRelayAgent,
   } = panelState;
 
+  // Per-download choice; defaults to the lighter-weight direct copilot --acp path.
+  const [setupLauncher, setSetupLauncher] = useState<Launcher>('copilot');
+
   return (
     <>
       {/* ── Right sidebar: nodes ── */}
@@ -70,11 +76,10 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
                       autoFocus
                     />
                   ) : (
-                    <span className="agentListName" onDoubleClick={(e) => { if (node.canModify) { e.stopPropagation(); setEditingNodeName(node.name); setEditingNodeLabel(node.label); } }} title={node.canModify ? 'Double-click to rename' : undefined}>{node.label}</span>
+                    <span className="agentListName nodeListName" onDoubleClick={(e) => { if (node.canModify) { e.stopPropagation(); setEditingNodeName(node.name); setEditingNodeLabel(node.label); } }} title={node.canModify ? `${node.label} — double-click to rename` : node.label}>{node.label}</span>
                   )}
-                  <span className="agentListId">{node.name}{!node.manual ? ' · auto' : ''}</span>
+                  <span className="agentListId nodeListId" title={node.name}>{node.name}{!node.manual ? ' · auto' : ''}</span>
                 </span>
-                <span className={`agentListStatus ${node.online ? 'running' : ''}`}>{node.online ? '●' : '○'}</span>
                 {node.canModify && (
                   <span className="nodeActionBtn" onClick={(e) => { e.stopPropagation(); openRelayAgent(node.name); }} title="Add agent on this node">＋</span>
                 )}
@@ -139,8 +144,37 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
             <div className="setupScriptNote">
               <strong>Prerequisites:</strong> Node.js, GitHub Copilot CLI, Azure CLI (logged in)
             </div>
+            <fieldset className="setupScriptLauncher">
+              <legend>Start command for Copilot ACP</legend>
+              <label className="setupScriptLauncherOption">
+                <input
+                  type="radio"
+                  name="setup-launcher"
+                  value="copilot"
+                  checked={setupLauncher === 'copilot'}
+                  onChange={() => setSetupLauncher('copilot')}
+                />
+                <span>
+                  <code>copilot --acp</code>
+                  <span className="setupScriptLauncherDesc">Runs the GitHub Copilot CLI directly. Installed via winget (<code>GitHub.Copilot</code>) if missing.</span>
+                </span>
+              </label>
+              <label className="setupScriptLauncherOption">
+                <input
+                  type="radio"
+                  name="setup-launcher"
+                  value="agency"
+                  checked={setupLauncher === 'agency'}
+                  onChange={() => setSetupLauncher('agency')}
+                />
+                <span>
+                  <code>agency copilot --acp</code>
+                  <span className="setupScriptLauncherDesc">Launches Copilot through the Microsoft <code>agency</code> wrapper. Installed via <code>aka.ms/InstallTool.ps1</code> if missing.</span>
+                </span>
+              </label>
+            </fieldset>
             <div className="setupScriptActions">
-              <button className="ghostButton setupDownloadBtn" onClick={() => downloadSetupZip()}>
+              <button className="ghostButton setupDownloadBtn" onClick={() => downloadSetupZip(setupLauncher)}>
                 📦 Download copilot-node-setup.zip
               </button>
               <button className="ghostButton" onClick={() => setShowSetupScript(false)}>Close</button>

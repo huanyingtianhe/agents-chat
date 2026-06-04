@@ -671,7 +671,7 @@ assert.match(
 
 assert.match(
   setupTemplateSource,
-  /function\s+renderSetupNodeScript\(source,\s*env\s*=\s*process\.env\)[\s\S]*?env\.RELAY_KEY_VAULT_NAME[\s\S]*?env\.RELAY_KEY_VAULT_SECRET_NAME[\s\S]*?env\.RELAY_SUBSCRIPTION_ID[\s\S]*?env\.RELAY_RESOURCE_GROUP[\s\S]*?SETUP_KEY_VAULT_NAME_PLACEHOLDER[\s\S]*?SETUP_KEY_VAULT_SECRET_PLACEHOLDER[\s\S]*?SETUP_SUBSCRIPTION_ID_PLACEHOLDER[\s\S]*?SETUP_RESOURCE_GROUP_PLACEHOLDER/,
+  /function\s+renderSetupNodeScript\(source,\s*env\s*=\s*process\.env[^)]*\)[\s\S]*?env\.RELAY_KEY_VAULT_NAME[\s\S]*?env\.RELAY_KEY_VAULT_SECRET_NAME[\s\S]*?env\.RELAY_SUBSCRIPTION_ID[\s\S]*?env\.RELAY_RESOURCE_GROUP[\s\S]*?SETUP_KEY_VAULT_NAME_PLACEHOLDER[\s\S]*?SETUP_KEY_VAULT_SECRET_PLACEHOLDER[\s\S]*?SETUP_SUBSCRIPTION_ID_PLACEHOLDER[\s\S]*?SETUP_RESOURCE_GROUP_PLACEHOLDER/,
   'setup template helper should render setup-node.ps1 placeholders from deployment environment variables',
 );
 
@@ -689,7 +689,7 @@ assert.match(
 
 assert.match(
   setupRouteSource,
-  /const\s+stagedPs1Path\s*=\s*path\.join\(tempDir,\s*['"]setup-node\.ps1['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?stagedPs1Path/,
+  /const\s+stagedPs1Path\s*=\s*path\.join\(tempDir,\s*['"]setup-node\.ps1['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript[^)]*\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?stagedPs1Path/,
   'setup ZIP route should zip a rendered temporary setup-node.ps1 instead of the tracked template file',
 );
 
@@ -749,13 +749,13 @@ assert.match(
 
 assert.match(
   setupRouteSource,
-  /const\s+zipBuffer\s*=\s*await\s*\(async\s*\(\)\s*=>\s*\{[\s\S]*?try\s*\{[\s\S]*?const\s+setupNodeScript\s*=\s*await\s+fs\.readFile\(ps1Path,\s*['"]utf-8['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]/,
+  /const\s+zipBuffer\s*=\s*await\s*\(async\s*\(\)\s*=>\s*\{[\s\S]*?try\s*\{[\s\S]*?const\s+setupNodeScript\s*=\s*await\s+fs\.readFile\(ps1Path,\s*['"]utf-8['"]\)[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript[^)]*\),\s*['"]utf-8['"]/,
   'setup ZIP route should read and render the setup template inside the cleanup-protected block',
 );
 
 assert.match(
   setupRouteSource,
-  /try\s*\{[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?await\s+fs\.readFile\(zipPath\)[\s\S]*?\}\s*finally\s*\{[\s\S]*?await\s+fs\.rm\(tempDir,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/,
+  /try\s*\{[\s\S]*?await\s+fs\.writeFile\(stagedPs1Path,\s*renderSetupNodeScript\(setupNodeScript[^)]*\),\s*['"]utf-8['"]\)[\s\S]*?Compress-Archive[\s\S]*?await\s+fs\.readFile\(zipPath\)[\s\S]*?\}\s*finally\s*\{[\s\S]*?await\s+fs\.rm\(tempDir,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/,
   'setup ZIP route should clean up temporary setup artifacts in a finally block after zipping and reading',
 );
 

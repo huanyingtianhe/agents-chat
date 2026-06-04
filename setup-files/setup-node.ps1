@@ -14,12 +14,18 @@ param(
     [string]$RelaySubscriptionId = "__RELAY_SUBSCRIPTION_ID__",
     [string]$RelayResourceGroup = "__RELAY_RESOURCE_GROUP__",
     [string]$NodePath,
-    [string]$AgencyPath,
+    [string]$LauncherPath,
+    [ValidateSet('copilot', 'agency', '__SETUP_DEFAULT_LAUNCHER__')]
+    [string]$Launcher = "__SETUP_DEFAULT_LAUNCHER__",
     [switch]$UninstallService,
     [switch]$RunAsService
 )
 
 $TaskName = "AgentsChatNode"
+
+# Resolve the launcher choice: if the template placeholder wasn't replaced
+# (someone ran the raw script outside the download flow), fall back to copilot.
+if ($Launcher -notin @('copilot', 'agency')) { $Launcher = 'copilot' }
 
 function Get-ScriptDirectory {
     if ($PSScriptRoot) { return $PSScriptRoot }
@@ -122,17 +128,40 @@ function Install-AgencyCli {
     return Get-ExecutablePath "agency"
 }
 
-function Resolve-AgencyPath([string]$CurrentPath) {
+function Install-CopilotCli {
+    Write-Host "The 'copilot' CLI was not found. Installing GitHub Copilot CLI via winget..." -ForegroundColor Yellow
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Error "winget is required to install GitHub Copilot CLI automatically. Install winget (App Installer) or install Copilot CLI manually, then rerun this command."
+        return $null
+    }
+    try {
+        winget install --id GitHub.Copilot --exact --accept-source-agreements --accept-package-agreements --silent
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "winget install GitHub.Copilot exited with code $LASTEXITCODE."
+            return $null
+        }
+    } catch {
+        Write-Error "Failed to install GitHub Copilot CLI via winget. $($_.Exception.Message)"
+        return $null
+    }
+
+    Update-ProcessPath
+    return Get-ExecutablePath "copilot"
+}
+
+function Resolve-LauncherPath([string]$CurrentPath, [string]$LauncherChoice) {
     if ($CurrentPath) { return $CurrentPath }
 
-    $resolvedPath = Get-ExecutablePath "agency"
+    $cliName = if ($LauncherChoice -eq 'agency') { 'agency' } else { 'copilot' }
+    $resolvedPath = Get-ExecutablePath $cliName
     if ($resolvedPath) { return $resolvedPath }
 
     Update-ProcessPath
-    $resolvedPath = Get-ExecutablePath "agency"
+    $resolvedPath = Get-ExecutablePath $cliName
     if ($resolvedPath) { return $resolvedPath }
 
-    return Install-AgencyCli
+    if ($LauncherChoice -eq 'agency') { return Install-AgencyCli }
+    return Install-CopilotCli
 }
 
 function Get-AzureAccountEmail {
@@ -182,13 +211,15 @@ function Stop-ServiceProcesses([string]$ScriptDir) {
     $currentPid = $PID
 
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        ($_.Name -in @("node.exe", "agency.exe", "pwsh.exe", "powershell.exe")) -and $_.CommandLine
+        ($_.Name -in @("node.exe", "agency.exe", "copilot.exe", "pwsh.exe", "powershell.exe")) -and $_.CommandLine
     }
 
     foreach ($process in $processes) {
         $commandLine = [string]$process.CommandLine
         $isRelay = $process.Name -eq "node.exe" -and $commandLine.Contains($relayScript)
-        $isCopilotAcp = $process.Name -eq "agency.exe" -and $commandLine -match "\bcopilot\b" -and $commandLine -match "--acp"
+        $isAgencyAcp = $process.Name -eq "agency.exe" -and $commandLine -match "\bcopilot\b" -and $commandLine -match "--acp"
+        $isCopilotDirectAcp = $process.Name -eq "copilot.exe" -and $commandLine -match "--acp"
+        $isCopilotAcp = $isAgencyAcp -or $isCopilotDirectAcp
         $isSupervisor = $process.ProcessId -ne $currentPid -and $process.Name -in @("pwsh.exe", "powershell.exe") -and $commandLine.Contains($setupScript) -and $commandLine -match "-RunAsService"
 
         if (-not ($isRelay -or $isCopilotAcp -or $isSupervisor)) { continue }
@@ -298,9 +329,10 @@ if (-not $RunAsService) {
         exit 1
     }
 
-    if (-not $AgencyPath) { $AgencyPath = Resolve-AgencyPath $AgencyPath }
-    if (-not $AgencyPath) {
-        Write-Error "The 'agency' CLI is required, but setup could not install or locate it. Install it manually, then rerun this command."
+    if (-not $LauncherPath) { $LauncherPath = Resolve-LauncherPath $LauncherPath $Launcher }
+    if (-not $LauncherPath) {
+        $cliName = if ($Launcher -eq 'agency') { 'agency' } else { 'copilot' }
+        Write-Error "The '$cliName' CLI is required for the '$Launcher' launcher, but setup could not install or locate it. Install it manually, then rerun this command."
         exit 1
     }
 
@@ -315,7 +347,8 @@ if (-not $RunAsService) {
     $scriptArguments += Format-TaskArgument "RelaySubscriptionId" $RelaySubscriptionId
     $scriptArguments += Format-TaskArgument "RelayResourceGroup" $RelayResourceGroup
     $scriptArguments += Format-TaskArgument "NodePath" $NodePath
-    $scriptArguments += Format-TaskArgument "AgencyPath" $AgencyPath
+    $scriptArguments += Format-TaskArgument "LauncherPath" $LauncherPath
+    $scriptArguments += Format-TaskArgument "Launcher" $Launcher
     if ($RelayConnectionString) { $scriptArguments += Format-TaskArgument "RelayConnectionString" $RelayConnectionString }
     $commandText = "& `"$scriptPath`" -RunAsService$scriptArguments *>> `"$serviceLog`""
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($commandText))
@@ -343,8 +376,8 @@ if (-not $RunAsService) {
 
     Write-Host "Registered scheduled task '$TaskName' to start when $taskUser logs in." -ForegroundColor Green
     Write-Host "  Script: $scriptPath" -ForegroundColor Gray
-    Write-Host "  Node:   $NodePath" -ForegroundColor Gray
-    Write-Host "  Agency: $AgencyPath" -ForegroundColor Gray
+    Write-Host "  Node:     $NodePath" -ForegroundColor Gray
+    Write-Host "  Launcher: $Launcher ($LauncherPath)" -ForegroundColor Gray
 
     try {
         $taskBeforeStart = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -495,18 +528,20 @@ Write-Host ""
 # Step 1: Kill whatever is listening on the copilot port (use netstat — no WMI)
 Stop-PortOwner $Port
 
-# Step 2: Ensure Node.js, agency, and hyco-ws are available
+# Step 2: Ensure Node.js, the chosen launcher CLI, and hyco-ws are available
 if (-not $NodePath) { $NodePath = Resolve-NodePath $NodePath }
 if (-not $NodePath) {
     Write-Error "Node.js is required. Please install it first."
     exit 1
 }
 
-if (-not $AgencyPath) { $AgencyPath = Resolve-AgencyPath $AgencyPath }
-if (-not $AgencyPath) {
-    Write-Error "The 'agency' CLI is required, but setup could not install or locate it. Install it manually, then rerun this command."
+if (-not $LauncherPath) { $LauncherPath = Resolve-LauncherPath $LauncherPath $Launcher }
+if (-not $LauncherPath) {
+    $cliName = if ($Launcher -eq 'agency') { 'agency' } else { 'copilot' }
+    Write-Error "The '$cliName' CLI is required for the '$Launcher' launcher, but setup could not install or locate it. Install it manually, then rerun this command."
     exit 1
 }
+Write-Host "Launcher: $Launcher ($LauncherPath)" -ForegroundColor Gray
 Write-Host "Script directory: $scriptDir" -ForegroundColor Gray
 if (-not (Test-Path (Join-Path $scriptDir "node_modules\hyco-ws"))) {
     Write-Host "Installing hyco-ws..." -ForegroundColor Yellow
@@ -591,10 +626,15 @@ $relayLog = Join-Path $logDir "relay.log"
 $relayErrLog = Join-Path $logDir "relay-err.log"
 
 function Start-Copilot {
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting Copilot ACP on port $Port..." -ForegroundColor Yellow
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting Copilot ACP on port $Port via $Launcher..." -ForegroundColor Yellow
     Stop-PortOwner $Port
     Remove-Item $copilotLog, $copilotErrLog -Force -ErrorAction SilentlyContinue
-    return Start-Process -FilePath $AgencyPath -ArgumentList "copilot", "--acp", "--port", "$Port", "--yolo" `
+    $launchArgs = if ($Launcher -eq 'agency') {
+        @("copilot", "--acp", "--port", "$Port", "--yolo")
+    } else {
+        @("--acp", "--port", "$Port", "--yolo")
+    }
+    return Start-Process -FilePath $LauncherPath -ArgumentList $launchArgs `
         -RedirectStandardOutput $copilotLog -RedirectStandardError $copilotErrLog `
         -WindowStyle Hidden -PassThru
 }

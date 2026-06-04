@@ -4,7 +4,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { renderSetupNodeScript } from '../../../../lib/setupNodeTemplate.mjs';
+import { renderSetupNodeScript, normalizeLauncher } from '../../../../lib/setupNodeTemplate.mjs';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,8 +12,11 @@ export const runtime = 'nodejs';
 const SETUP_FILES_DIR = path.join(process.cwd(), 'setup-files');
 const execFileAsync = promisify(execFile);
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const launcher = normalizeLauncher(url.searchParams.get('launcher') ?? undefined);
+
     // Verify setup files exist
     const ps1Path = path.join(SETUP_FILES_DIR, 'setup-node.ps1');
     const jsPath = path.join(SETUP_FILES_DIR, 'relay-listener.js');
@@ -35,7 +38,7 @@ export async function GET() {
         const setupNodeScript = await fs.readFile(ps1Path, 'utf-8');
 
         // Use PowerShell Compress-Archive (available on Windows)
-        await fs.writeFile(stagedPs1Path, renderSetupNodeScript(setupNodeScript), 'utf-8');
+        await fs.writeFile(stagedPs1Path, renderSetupNodeScript(setupNodeScript, process.env, { launcher }), 'utf-8');
         await fs.writeFile(
           compressScriptPath,
           [

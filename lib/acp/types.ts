@@ -132,6 +132,12 @@ export type SlashCommand = {
   hint?: string;
 };
 
+export type AcpAuthMethod = {
+  id: string;
+  name?: string;
+  description?: string;
+};
+
 export type AgentProcess = {
   rpc: NdjsonRpc | null;
   ready: boolean;
@@ -143,6 +149,10 @@ export type AgentProcess = {
   knownSessions: Set<string>; // sessions active in agent memory (no need to session/load)
   /** Slash commands advertised by the agent via `session/update` notifications, keyed by sessionId. */
   availableCommandsBySession: Map<string, SlashCommand[]>;
+  /** Authentication methods advertised by the agent in its `initialize` response. */
+  authMethods: AcpAuthMethod[];
+  /** True when a session/new attempt failed with an "Authentication required" error. */
+  needsAuth: boolean;
 };
 
 // Per-user per-agent: isolated session and turn state

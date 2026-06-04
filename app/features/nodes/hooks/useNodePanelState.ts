@@ -117,9 +117,10 @@ export function useNodePanelState({
     }
   }
 
-  function downloadSetupZip() {
+  function downloadSetupZip(launcher: 'copilot' | 'agency' = 'copilot') {
     const a = document.createElement('a');
-    a.href = '/api/nodes/setup';
+    const params = new URLSearchParams({ launcher });
+    a.href = `/api/nodes/setup?${params.toString()}`;
     a.download = 'copilot-node-setup.zip';
     a.click();
   }

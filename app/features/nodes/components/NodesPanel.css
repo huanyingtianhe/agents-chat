@@ -6,31 +6,50 @@
   background: linear-gradient(135deg, #718096, #4a5568) !important;
 }
 
-/* ── Node action buttons ── */
-.chatPageRoot .nodeRemoveBtn {
-  font-size: 11px;
-  color: var(--muted);
-  cursor: pointer;
-  flex: 0 0 auto;
-  padding: 2px 4px;
-  border-radius: 4px;
-  transition: all 0.12s ease;
-  opacity: 0;
-}
+/* ── Node action buttons: collapsed by default, only reveal on row hover ── */
+.chatPageRoot .nodeRemoveBtn,
 .chatPageRoot .nodeActionBtn {
-  font-size: 13px;
   color: var(--muted);
   cursor: pointer;
   flex: 0 0 auto;
-  padding: 2px 4px;
   border-radius: 4px;
-  transition: all 0.12s ease;
+  transition: opacity 0.12s ease, width 0.12s ease, padding 0.12s ease, margin 0.12s ease, background 0.12s ease, color 0.12s ease;
   opacity: 0;
+  width: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+.chatPageRoot .nodeRemoveBtn { font-size: 11px; }
+.chatPageRoot .nodeActionBtn { font-size: 13px; }
 .chatPageRoot .agentListItem:hover .nodeRemoveBtn,
-.chatPageRoot .agentListItem:hover .nodeActionBtn { opacity: 1; }
+.chatPageRoot .agentListItem:hover .nodeActionBtn,
+.chatPageRoot .agentListItem:focus-within .nodeRemoveBtn,
+.chatPageRoot .agentListItem:focus-within .nodeActionBtn {
+  opacity: 1;
+  width: 18px;
+  padding: 2px 3px;
+  margin-left: 2px;
+  pointer-events: auto;
+}
 .chatPageRoot .nodeRemoveBtn:hover { color: #e53e3e; background: rgba(229, 62, 62, 0.1); }
 .chatPageRoot .nodeActionBtn:hover { color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+
+/* ── Node name: single line ellipsis, full text on hover ── */
+.chatPageRoot .nodeListName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chatPageRoot .nodeListId {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── Node inline editing ── */
 .chatPageRoot .nodeEditInput {
@@ -131,6 +150,65 @@
   background: var(--panel-soft);
   padding: 1px 4px;
   border-radius: 3px;
+  font-size: 11px;
+}
+
+.chatPageRoot .setupScriptLauncher {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px 10px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chatPageRoot .setupScriptLauncher legend {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft, var(--text));
+  padding: 0 6px;
+}
+.chatPageRoot .modal label.setupScriptLauncherOption {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.chatPageRoot .modal label.setupScriptLauncherOption:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.chatPageRoot .setupScriptLauncherOption input[type="radio"] {
+  margin: 2px 0 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chatPageRoot .modal label.setupScriptLauncherOption > span {
+  display: flex !important;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 !important;
+  color: var(--text);
+  min-width: 0;
+  flex: 1;
+}
+.chatPageRoot .modal label.setupScriptLauncherOption .setupScriptLauncherDesc {
+  display: block !important;
+  margin: 0 !important;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.chatPageRoot .setupScriptLauncherOption code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--panel-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
   font-size: 11px;
 }
 .chatPageRoot .setupDownloadBtn {

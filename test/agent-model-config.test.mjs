@@ -162,4 +162,10 @@ assert.match(
   'send should apply the selected model after session creation/load and before session/prompt',
 );
 
+assert.match(
+  routeSource,
+  /async function recoverStaleSessionForSend[\s\S]*?loadSavedChatSessionForSend\(proc, sess, agentId, userId, chatId, staleSessionId, isAdmin\)[\s\S]*?createFreshSessionForSend\(proc, sess, agentId, userId, chatId, isAdmin, staleSessionId\)[\s\S]*?catch \(err\) \{[\s\S]*?isSessionNotFoundError\(err\)[\s\S]*?recoverStaleSessionForSend\(proc, sess, agentId, userId, chatId, staleSessionId, isAdmin\)[\s\S]*?await applySessionModelIfRequested\(proc, sess\.sessionId, requestedModelId\)[\s\S]*?const turn = sendPrompt/,
+  'send should recover stale remembered sessions by trying session/load before creating a replacement session',
+);
+
 console.log('agent model config persistence checks passed');

@@ -53,6 +53,18 @@ function isAuthRequiredError(err: unknown): boolean {
   return /authentication required|not authenticated|please.*log.?in|sign.?in required/.test(msg);
 }
 
+/** True for errors that mean the remembered ACP session id no longer exists. */
+function isSessionNotFoundError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as any;
+  const code = anyErr?.data?.code ?? anyErr?.code;
+  const dataUri = typeof anyErr?.data?.uri === 'string' ? anyErr.data.uri : '';
+  const msg = `${err instanceof Error ? err.message : String(err || '')} ${dataUri}`.toLowerCase();
+  return (code === -32002 && /session/.test(msg) && /not found/.test(msg))
+    || /resource not found:\s*session/.test(msg)
+    || /session\s+[^\s]+\s+not found/.test(msg);
+}
+
 /* ─────────────── agents.json Config (now backed by SQLite via configStore) ─────────────── */
 
 function readAgentsConfig(): AgentConfig[] {
@@ -575,6 +587,78 @@ function getLastStoredSessionId(value: unknown): string | null {
 async function getStoredChatAgentSessionId(userId: string, chatId: string, agentId: string): Promise<string | null> {
   const chat = await getChat(userId, chatId);
   return getLastStoredSessionId(chat?.agentSessions?.[agentId]);
+}
+
+async function getStoredChatHistoryForRecovery(userId: string, chatId: string): Promise<{ type: string; content: string; agentId?: string }[] | undefined> {
+  const chat = await getChat(userId, chatId);
+  const messages = chat?.messages || [];
+  const history = messages
+    .filter(message => (message.type === 'user' || message.type === 'agent') && typeof message.content === 'string' && message.content.trim())
+    .slice(-20)
+    .map(message => ({ type: message.type, content: message.content, agentId: message.agentId }));
+  return history.length > 0 ? history : undefined;
+}
+
+async function createFreshSessionForSend(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  chatId: string | undefined,
+  isAdmin: boolean,
+  previousSessionIdOverride?: string | null,
+): Promise<void> {
+  if (!proc.rpc) throw new Error('Agent process not ready');
+  const previousSessionId = previousSessionIdOverride || sess.sessionId;
+  if (previousSessionId) proc.knownSessions.delete(previousSessionId);
+  const sessionParams = await buildSessionParams(proc, isAdmin);
+  const session = await proc.rpc.send('session/new', sessionParams);
+  syncAgentModelsFromSessionResult(agentId, session);
+  sess.sessionId = session.sessionId;
+  proc.knownSessions.add(session.sessionId);
+  if (chatId) {
+    pushChatSession(sess, chatId, session.sessionId);
+    updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+  }
+  if (sess.activeTurns.size === 0) sess.phase = 'idle';
+  log(`[ACP:${agentId}] Recovered stale session ${previousSessionId || '(none)'} with fresh session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
+}
+
+async function recoverStaleSessionForSend(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  chatId: string | undefined,
+  staleSessionId: string | null,
+  isAdmin: boolean,
+): Promise<'loaded' | 'created'> {
+  if (staleSessionId) {
+    proc.knownSessions.delete(staleSessionId);
+    if (sess.sessionId === staleSessionId) sess.sessionId = null;
+    if (chatId) {
+      const loaded = await loadSavedChatSessionForSend(proc, sess, agentId, userId, chatId, staleSessionId, isAdmin);
+      if (loaded) {
+        log(`[ACP:${agentId}] Recovered stale session ${staleSessionId} with session/load for user ${userId} (chat ${chatId})`);
+        return 'loaded';
+      }
+    } else if (proc.supportsLoadSession && proc.rpc) {
+      try {
+        const sessionParams = await buildSessionParams(proc, isAdmin);
+        await proc.rpc.send('session/load', { sessionId: staleSessionId, ...sessionParams });
+        sess.sessionId = staleSessionId;
+        proc.knownSessions.add(staleSessionId);
+        if (sess.activeTurns.size === 0) sess.phase = 'idle';
+        log(`[ACP:${agentId}] Recovered stale session ${staleSessionId} with session/load for user ${userId}`);
+        return 'loaded';
+      } catch (loadErr) {
+        const msg = loadErr instanceof Error ? loadErr.message : String(loadErr);
+        logSessionLoadFallback(agentId, userId, undefined, staleSessionId, msg);
+      }
+    }
+  }
+  await createFreshSessionForSend(proc, sess, agentId, userId, chatId, isAdmin, staleSessionId);
+  return 'created';
 }
 
 async function loadSavedChatSessionForSend(
@@ -2001,7 +2085,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'access_denied' }, { status: 403 });
       }
 
-      const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
+      let chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory as { type: string; content: string; agentId?: string }[] : undefined;
       const chatId = body?.chatId as string | undefined;
       const messageId = typeof body?.messageId === 'string' ? body.messageId : undefined;
 
@@ -2061,8 +2145,21 @@ export async function POST(req: NextRequest) {
       try {
         await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+        if (isSessionNotFoundError(err)) {
+          const staleSessionId = sess.sessionId;
+          log(`[ACP:${agentId}] model switch found stale session ${staleSessionId || '(none)'}; attempting session/load before send`);
+          try {
+            const recovery = await recoverStaleSessionForSend(proc, sess, agentId, userId, chatId, staleSessionId, isAdmin);
+            if (recovery === 'created' && !chatHistory && chatId) chatHistory = await getStoredChatHistoryForRecovery(userId, chatId);
+            await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
+          } catch (recoveryErr) {
+            const msg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
+            return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+          }
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+        }
       }
 
       const turn = sendPrompt(proc, sess, agentId, text, isAdmin, userId, chatHistory, chatId, messageId, attachments, requestedModelId);

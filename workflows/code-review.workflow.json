@@ -1,0 +1,24 @@
+{
+  "name": "code-review",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "lint",
+      "agent": "stub-agent",
+      "instruction": "Lint {{input}} and list issues.",
+      "dependsOn": []
+    },
+    {
+      "id": "test",
+      "agent": "stub-agent",
+      "instruction": "Run unit tests for {{input}}.",
+      "dependsOn": []
+    },
+    {
+      "id": "review",
+      "agent": "stub-agent",
+      "instruction": "Summarize review based on:\nLint: {{lint.output}}\nTests: {{test.output}}",
+      "dependsOn": ["lint", "test"]
+    }
+  ]
+}

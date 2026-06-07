@@ -9,7 +9,6 @@ type ComposerTargetControlsProps = {
   mentionedAgentIds: string[];
   orchestrationEnabled: boolean;
   orchestrationMode: OrchestrationMode;
-  discussionRounds: number;
   effectiveComposerAgentId: string | null;
   rememberedComposerAgentId: string | null;
   currentChatId: string;
@@ -21,15 +20,14 @@ type ComposerTargetControlsProps = {
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
   clearLastUsedAgent: () => void;
   setOrchestrationMode: (mode: OrchestrationMode) => void;
-  setDiscussionRounds: (rounds: number) => void;
 };
 
 export function ComposerTargetControls({
-  mentionedAgentIds, orchestrationEnabled, orchestrationMode, discussionRounds,
+  mentionedAgentIds, orchestrationEnabled, orchestrationMode,
   effectiveComposerAgentId, rememberedComposerAgentId, currentChatId,
   getAgentModels, getSelectedModelIdForAgent, openModelMenuAgentId, setOpenModelMenuAgentId,
   modelMenuRefs, setSelectedModelForAgent, clearLastUsedAgent,
-  setOrchestrationMode, setDiscussionRounds,
+  setOrchestrationMode,
 }: ComposerTargetControlsProps) {
   const modelSelect = (agentId: string) => (
     <AgentModelSelect
@@ -55,12 +53,6 @@ export function ComposerTargetControls({
           <>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('auto')} title="Auto: a scheduler decides which agent to call next based on results">🧠 Auto</button>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('pipeline')} title="Pipeline: agents run sequentially, each receives the previous agent's output">🔀 Pipeline</button>
-            <button type="button" className={`targetPill orchPill ${orchestrationMode === 'discussion' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('discussion')} title="Discussion: agents run in parallel, then a summary is generated">💬 Discussion</button>
-            {orchestrationMode === 'discussion' && (
-              <select className="orchRoundsSelect" value={discussionRounds} onChange={(e) => setDiscussionRounds(Number(e.target.value))} title="Number of discussion rounds">
-                {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} {n === 1 ? 'round' : 'rounds'}</option>)}
-              </select>
-            )}
           </>
         )}
       </div>

@@ -64,7 +64,5 @@ export type AgentRegistry = {
 
 export type OrchestrationRuntime = {
   orchestrationMode: OrchestrationMode;
-  discussionRounds: number;
   setOrchestrationMode: (mode: OrchestrationMode) => void;
-  setDiscussionRounds: (rounds: number) => void;
 };

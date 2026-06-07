@@ -12,7 +12,6 @@ export type OrchestrationContext = {
   sessionRunsRef: MutableRefObject<Record<string, SessionRunContext>>;
   agentsRef: MutableRefObject<Agent[]>;
   orchestrationModeRef: MutableRefObject<OrchestrationMode>;
-  discussionRoundsRef: MutableRefObject<number>;
   currentChatIdRef: MutableRefObject<string>;
   dispatchToAgent: (agentId: string, content: string, orchestrationId: string, kind: 'worker' | 'summary', options?: DispatchToAgentOptions) => Promise<string>;
   markUserMessageSendFailed: (chatId: string, userMessageId: string, error: string, resendAgentIds: string[], resendMessage: string, resendAttachments?: ChatAttachment[]) => void;
@@ -66,42 +65,6 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
     const state = ctx.orchestrationsRef.current[orchestrationId];
     if (!state || state.summaryStarted) return;
     const orchestrationChatId = state.sourceChatId || ctx.currentChatIdRef.current;
-
-    if (state.mode === 'discussion') {
-      const allDone = state.agentIds.every((id) => typeof state.results[id] === 'string');
-      if (!allDone) return;
-      if (state.round < state.maxRounds) {
-        const prev = { ...state.results };
-        state.results = {};
-        state.round += 1;
-        await Promise.all(state.agentIds.map((id) => {
-          const others = state.agentIds.filter((x) => x !== id)
-            .map((x) => `## ${x}'s perspective\n${prev[x] || '(no result)'}`).join('\n\n');
-          const prompt = [
-            `You are in round ${state.round} of a multi-agent discussion.`,
-            `Original task: ${state.originalTask}`, '',
-            'Below are other agents\' perspectives from the previous round. Please respond:',
-            '1. State which points you agree with and from whom',
-            '2. State which points you disagree with or want to revise',
-            '3. Provide your updated perspective for this round', '', others,
-          ].join('\n');
-          return dispatchOrchestrationStep(orchestrationId, id, prompt, 'worker', {
-            chatId: orchestrationChatId, round: state.round, relation: `Responding to round ${state.round - 1} perspectives`,
-          });
-        }));
-        return;
-      }
-      state.summaryStarted = true;
-      const summaryPrompt = [
-        'You are the final coordinator. Please summarize the conclusions from this multi-agent discussion.',
-        `Original task: ${state.originalTask}`, `Total rounds: ${state.maxRounds}`, '',
-        ...state.agentIds.map((id) => `## ${id}\n${state.results[id] || '(no result)'}`), '',
-        'Please output:', '1. Consensus reached', '2. Remaining disagreements', '3. Final recommended plan',
-      ].join('\n');
-      const summaryAgent = state.agentIds[0] || 'main';
-      await dispatchOrchestrationStep(orchestrationId, summaryAgent, summaryPrompt, 'summary', { chatId: orchestrationChatId, relation: 'Final conclusion', summary: true });
-      return;
-    }
 
     if (state.mode === 'pipeline') {
       if (state.nextIndex < state.agentIds.length) {
@@ -274,7 +237,6 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
     const promptAttachments = options?.attachments || [];
     const dispatchOptions = { chatId: effectiveChatId, relation: options?.relation, attachments: promptAttachments };
     const orchestrationMode = ctx.orchestrationModeRef.current;
-    const discussionRounds = ctx.discussionRoundsRef.current;
 
     if (useOrchestration) {
       ctx.orchestrationsRef.current[orchestrationId] = {
@@ -285,8 +247,8 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
         results: {},
         nextIndex: orchestrationMode === 'pipeline' ? 1 : 0,
         summaryStarted: false,
-        round: orchestrationMode === 'discussion' ? 1 : 0,
-        maxRounds: orchestrationMode === 'discussion' ? discussionRounds : 1,
+        round: 0,
+        maxRounds: 1,
         sourceUserMessageId: options?.sourceUserMessageId,
         sourceChatId: effectiveChatId,
         sourceAgentIds: agentIds,
@@ -301,18 +263,6 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       }
       if (orchestrationMode === 'auto') {
         await runAutoOrchestration(orchestrationId, agentIds, effectiveMessage, originalText, effectiveChatId, promptAttachments);
-      } else if (orchestrationMode === 'discussion') {
-        const results = await Promise.allSettled(agentIds.map((id) => ctx.dispatchToAgent(id, effectiveMessage, orchestrationId, 'worker', {
-          ...dispatchOptions, round: 1, relation: dispatchOptions?.relation || 'Round 1 independent perspective',
-        })));
-        const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-        if (failed) {
-          const startedRunKeys = results
-            .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
-            .map((result) => result.value);
-          await cleanupDispatchedRuns(startedRunKeys);
-          throw failed.reason;
-        }
       } else {
         await ctx.dispatchToAgent(agentIds[0], effectiveMessage, orchestrationId, 'worker', {
           ...dispatchOptions, round: 1, relation: dispatchOptions?.relation || 'Pipeline initial step',

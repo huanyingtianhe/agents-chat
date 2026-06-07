@@ -64,7 +64,6 @@ export function useChatRuntime({
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
-  const [discussionRounds, setDiscussionRounds] = useState(2);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -82,8 +81,6 @@ export function useChatRuntime({
   const needsContextRestoreRef = useRef(false);
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
-  const discussionRoundsRef = useRef(discussionRounds);
-  discussionRoundsRef.current = discussionRounds;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
 
   /* ── Cross-service callback refs ── */
@@ -145,7 +142,7 @@ export function useChatRuntime({
   /* ── Orchestration service ── */
   const orchHandlers = createOrchestrationHandlers({
     acp, orchestrationsRef, sessionRunsRef, agentsRef,
-    orchestrationModeRef, discussionRoundsRef, currentChatIdRef,
+    orchestrationModeRef, currentChatIdRef,
     dispatchToAgent: (agentId, content, orchestrationId, kind, options) =>
       dispatchToAgentRef.current(agentId, content, orchestrationId, kind, options),
     markUserMessageSendFailed,
@@ -414,10 +411,10 @@ export function useChatRuntime({
     /* state */
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
-    orchestrationMode, discussionRounds,
+    orchestrationMode,
     /* state setters exposed for page.tsx */
     setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId,
-    setShareDialog, setExpandedMessages, setOrchestrationMode, setDiscussionRounds,
+    setShareDialog, setExpandedMessages, setOrchestrationMode,
     /* refs */
     messagesRef, chatMessagesRef, currentChatIdRef, chatNameRef, sessionRunsRef,
     orchestrationsRef, currentAgentSessionsRef, needsContextRestoreRef,

@@ -106,6 +106,7 @@ export type SessionRunContext = {
   relation?: string;
   ptyTurnId?: string;
   ptySendStarted?: boolean;
+  workflowNodeId?: string;
 };
 
 export type DispatchToAgentOptions = {
@@ -115,6 +116,7 @@ export type DispatchToAgentOptions = {
   chatId?: string;
   commentId?: string;
   attachments?: ChatAttachment[];
+  workflowNodeId?: string;
 };
 
 export type OrchestrationState = {

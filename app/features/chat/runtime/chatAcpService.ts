@@ -43,6 +43,12 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     const orchestration = ctx.orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
       orchestration.results[run.agentId] = run.currentText || '';
+      if (run.workflowNodeId) {
+        orchestration.results[run.workflowNodeId] = run.currentText || '';
+        if (!orchestration.nodeStatuses) orchestration.nodeStatuses = {};
+        const text = run.currentText || '';
+        orchestration.nodeStatuses[run.workflowNodeId] = text.startsWith('⚠️') ? 'failed' : 'ok';
+      }
     }
     delete ctx.sessionRunsRef.current[runKey];
     ctx.notifyRunStateChanged();
@@ -129,7 +135,7 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     content: string,
     orchestrationId: string,
     kind: 'worker' | 'summary' = 'worker',
-    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string; attachments?: ChatAttachment[] },
+    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string; attachments?: ChatAttachment[]; workflowNodeId?: string },
   ): Promise<string> {
     const dispatchChatId = options?.chatId || ctx.currentChatIdRef.current;
     const pendingId = `pending-${makeId()}`;
@@ -145,6 +151,7 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
       agentId, pendingId, orchestrationId, kind,
       currentText: '', chatId: dispatchChatId,
       commentId: options?.commentId, round: options?.round, relation: options?.relation,
+      workflowNodeId: options?.workflowNodeId,
     };
     ctx.notifyRunStateChanged();
     try {

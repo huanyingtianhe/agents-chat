@@ -5,6 +5,8 @@ import type { Agent } from '../../agents/agentTypes';
 import type { ChatMessage, DispatchToAgentOptions, OrchestrationMode, OrchestrationState, SessionRunContext } from '../chatTypes';
 import { PromptSendFailedError, AUTO_MAX_STEPS } from './chatRunLoop';
 import { SCHEDULER_AGENT_ID } from '../chatHelpers';
+import { renderInstruction } from '@/lib/workflow/templating.mjs';
+import type { WorkflowPlan, NodeStatus } from '@/lib/workflow/workflowTypes.mjs';
 
 export type OrchestrationContext = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -65,6 +67,55 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
     const state = ctx.orchestrationsRef.current[orchestrationId];
     if (!state || state.summaryStarted) return;
     const orchestrationChatId = state.sourceChatId || ctx.currentChatIdRef.current;
+
+    if (state.mode === 'workflow' && state.workflowPlan) {
+      const plan = state.workflowPlan;
+      const statuses = state.nodeStatuses ?? (state.nodeStatuses = {});
+      const nodeById = new Map(plan.nodes.map((n) => [n.id, n]));
+
+      // Cascade skip on failed/skipped deps.
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const n of plan.nodes) {
+          if (statuses[n.id]) continue;
+          for (const d of n.dependsOn) {
+            const ds = statuses[d];
+            if (ds === 'failed' || ds === 'skipped') {
+              statuses[n.id] = 'skipped';
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
+      ctx.notifyRunStateChanged();
+
+      // Dispatch every ready (pending) node whose deps are all ok.
+      const ready = plan.nodes.filter((n) => !statuses[n.id]
+        && n.dependsOn.every((d) => statuses[d] === 'ok'));
+      for (const n of ready) {
+        statuses[n.id] = 'running';
+        const upstream: Record<string, string> = {};
+        for (const d of n.dependsOn) upstream[d] = state.results[d] || '';
+        const prompt = renderInstruction(n.instruction, state.originalTask, upstream, n.dependsOn);
+        void dispatchOrchestrationStep(orchestrationId, n.agent, prompt, 'worker', {
+          chatId: orchestrationChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id,
+        });
+      }
+      ctx.notifyRunStateChanged();
+
+      // Done? All nodes terminal AND no running runs left.
+      const allTerminal = plan.nodes.every((n) => {
+        const s = statuses[n.id];
+        return s === 'ok' || s === 'failed' || s === 'skipped';
+      });
+      if (allTerminal) {
+        state.summaryStarted = true;
+        ctx.notifyRunStateChanged();
+      }
+      return;
+    }
 
     if (state.mode === 'pipeline') {
       if (state.nextIndex < state.agentIds.length) {
@@ -274,5 +325,38 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
     }
   }
 
-  return { markOrchestrationPromptSendFailed, dispatchOrchestrationStep, cleanupDispatchedRuns, maybeAdvanceOrchestration, runAutoOrchestration, dispatchParsedPrompt };
+  async function runWorkflowOrchestration(
+    orchestrationId: string,
+    plan: WorkflowPlan,
+    userInput: string,
+    chatId: string,
+    options?: { sourceUserMessageId?: string; attachments?: ChatAttachment[] },
+  ) {
+    const agentIds = Array.from(new Set(plan.nodes.map((n) => n.agent)));
+    const statuses: Record<string, NodeStatus> = {};
+    for (const n of plan.nodes) statuses[n.id] = 'pending';
+    ctx.orchestrationsRef.current[orchestrationId] = {
+      id: orchestrationId,
+      mode: 'workflow',
+      agentIds,
+      originalTask: userInput,
+      results: {},
+      nextIndex: 0,
+      summaryStarted: false,
+      round: 0,
+      maxRounds: 1,
+      sourceUserMessageId: options?.sourceUserMessageId,
+      sourceChatId: chatId,
+      sourceAgentIds: agentIds,
+      sourceMessage: userInput,
+      sourceAttachments: options?.attachments || [],
+      workflowPlan: plan,
+      nodeStatuses: statuses,
+      replanCount: 0,
+    };
+    ctx.notifyRunStateChanged();
+    await maybeAdvanceOrchestration(orchestrationId);
+  }
+
+  return { markOrchestrationPromptSendFailed, dispatchOrchestrationStep, cleanupDispatchedRuns, maybeAdvanceOrchestration, runAutoOrchestration, runWorkflowOrchestration, dispatchParsedPrompt };
 }

@@ -64,6 +64,7 @@ export function useChatRuntime({
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
+  const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan | null>(null);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -259,7 +260,15 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
-      await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
+      if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
+        const plan = pendingWorkflowPlan;
+        setPendingWorkflowPlan(null);
+        await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
+          sourceUserMessageId: userMessageId, attachments: sendAttachments,
+        });
+      } else {
+        await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
+      }
     } catch (err) {
       markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
     }
@@ -412,9 +421,11 @@ export function useChatRuntime({
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
     orchestrationMode,
+    pendingWorkflowPlan,
     /* state setters exposed for page.tsx */
     setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId,
     setShareDialog, setExpandedMessages, setOrchestrationMode,
+    setPendingWorkflowPlan,
     /* refs */
     messagesRef, chatMessagesRef, currentChatIdRef, chatNameRef, sessionRunsRef,
     orchestrationsRef, currentAgentSessionsRef, needsContextRestoreRef,

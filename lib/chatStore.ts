@@ -106,7 +106,7 @@ export type ResolveCommentResult =
 
 let _db: Database.Database | null = null;
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (_db) return _db;
   // Ensure .data/ dir exists (sync, runs once)
   const fsSync = require('fs');
@@ -173,6 +173,17 @@ function getDb(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_file_comment_replies_comment ON file_comment_replies(comment_id);
+
+    CREATE TABLE IF NOT EXISTS user_workflows (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      plan_json   TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_workflows_user_updated ON user_workflows(user_id, updated_at DESC);
   `);
 
   // Migration: add agent_id column to chats

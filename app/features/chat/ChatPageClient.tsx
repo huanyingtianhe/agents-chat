@@ -73,8 +73,8 @@ export function ChatPageClient() {
   void runVersion;
   const activeWorkflow = selectActiveWorkflowOrchestration(orchestrationsRef, currentChatId);
   const workflowFollowUp = useMemo(
-    () => detectWorkflowFollowUp(orchestrationsRef.current, currentChatId),
-    [orchestrationsRef, currentChatId, runVersion],
+    () => detectWorkflowFollowUp(orchestrationsRef.current, currentChatId, messages),
+    [orchestrationsRef, currentChatId, runVersion, messages],
   );
   const showFollowUpHint = !!workflowFollowUp && workflowFollowUp.orchestrationId !== dismissedFollowUpOrchId;
   const nodePanelState = useNodePanelState({ acp, loadAgents: reloadAgents, addMessage });

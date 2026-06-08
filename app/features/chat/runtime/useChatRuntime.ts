@@ -262,7 +262,7 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
-      const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId);
+      const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
       const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
       if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
         const plan = pendingWorkflowPlan;

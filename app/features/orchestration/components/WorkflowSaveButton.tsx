@@ -52,7 +52,7 @@ export function WorkflowSaveButton({ content }: Props) {
         onClick={save}
         disabled={saving}
       >
-        💾 {saving ? 'Saving…' : 'Save as workflow'}
+        {saving ? 'Saving…' : 'Save as workflow'}
       </button>
       {msg && <span className="messageMetaTag">{msg}</span>}
     </>

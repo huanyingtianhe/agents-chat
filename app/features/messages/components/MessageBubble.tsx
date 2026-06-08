@@ -11,6 +11,7 @@ import { FailedSendActions, FailedSendNotice } from '../../chat/components/Faile
 import { AttachmentList } from '../../composer/components/AttachmentList';
 import { AgentUserRequestCard } from './AgentUserRequestCard';
 import { MessageContentParts } from './MessageContentParts';
+import { WorkflowSaveButton } from '../../orchestration/components/WorkflowSaveButton';
 import { getStatusDisplayText } from '../messageDisplayHelpers';
 import { formatMessageTime } from '../../chat/chatHelpers';
 
@@ -153,6 +154,7 @@ export function MessageBubble({
                       >
                         {isCopiedFormatted ? 'Copied' : 'Copy with format'}
                       </button>
+                      <WorkflowSaveButton content={getMessageCopyText(message)} />
                     </>
                   )}
                 </div>
@@ -206,6 +208,7 @@ export function MessageBubble({
                     >
                       {isCopiedFormatted ? 'Copied' : 'Copy with format'}
                     </button>
+                    <WorkflowSaveButton content={message.content || ''} />
                   </>
                 )}
               </div>

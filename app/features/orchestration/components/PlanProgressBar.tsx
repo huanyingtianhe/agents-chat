@@ -57,10 +57,14 @@ export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
       <span className="planProgressTitle">
         📋 Workflow{plan.name && plan.name !== 'plan' ? <>: <strong>{plan.name}</strong></> : null} <span className="planProgressCount">{done}/{total}</span>
       </span>
-      <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
-        💾 Save as…
-      </button>
-      {savedMsg && <span className="planProgressMsg">{savedMsg}</span>}
+      {variant !== 'inline' && (
+        <>
+          <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
+            💾 Save as…
+          </button>
+          {savedMsg && <span className="planProgressMsg">{savedMsg}</span>}
+        </>
+      )}
       <span className="planProgressSep" aria-hidden="true" />
       <div className="planProgressNodes">
         {plan.nodes.map((n) => {

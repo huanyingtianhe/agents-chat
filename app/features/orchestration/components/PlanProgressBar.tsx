@@ -86,10 +86,12 @@ export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
 export function selectActiveWorkflowOrchestration(
   orchestrationsRef: { current: Record<string, OrchestrationState> },
   currentChatId?: string | null,
+  dismissedOrchId?: string | null,
 ): OrchestrationState | null {
   // Among workflow orchestrations in the current chat, prefer an in-progress one;
   // otherwise return the most recently-created completed one so final statuses stay visible.
-  // Insertion order in orchestrationsRef.current reflects creation order.
+  // A completed orchestration the user has "moved on from" (dismissed) is hidden,
+  // but an in-progress one is never hidden — running/awaiting-input must stay visible.
   const all = Object.values(orchestrationsRef.current).filter((o) => {
     if (o.mode !== 'workflow' || !o.workflowPlan) return false;
     if (currentChatId && o.sourceChatId && o.sourceChatId !== currentChatId) return false;
@@ -97,7 +99,8 @@ export function selectActiveWorkflowOrchestration(
   });
   const running = all.filter((o) => !o.summaryStarted);
   if (running.length > 0) return running[running.length - 1];
-  return all.length > 0 ? all[all.length - 1] : null;
+  const completed = dismissedOrchId ? all.filter((o) => o.id !== dismissedOrchId) : all;
+  return completed.length > 0 ? completed[completed.length - 1] : null;
 }
 // reference WorkflowPlan to keep the type import live for consumers
 export type { WorkflowPlan };

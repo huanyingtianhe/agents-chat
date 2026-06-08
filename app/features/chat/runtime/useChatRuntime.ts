@@ -67,6 +67,7 @@ export function useChatRuntime({
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan | null>(null);
   const [dismissedFollowUpOrchId, setDismissedFollowUpOrchId] = useState<string | null>(null);
+  const [dismissedWorkflowBarOrchId, setDismissedWorkflowBarOrchId] = useState<string | null>(null);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -287,6 +288,7 @@ export function useChatRuntime({
         const plan = pendingWorkflowPlan;
         setPendingWorkflowPlan(null);
         setOrchestrationMode('auto');
+        setDismissedWorkflowBarOrchId(null);
         await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
           sourceUserMessageId: userMessageId, attachments: sendAttachments,
         });
@@ -316,6 +318,15 @@ export function useChatRuntime({
           setOrchestrationMode('auto');
         }
         if (followUpActive && followUp) setDismissedFollowUpOrchId(followUp.orchestrationId);
+        // C: if there is a COMPLETED workflow visible in this chat and the
+        // user is sending something unrelated (didn't take the resume path),
+        // hide it from the status bar so it doesn't linger as stale info.
+        for (const o of Object.values(orchestrationsRef.current)) {
+          if (o.mode === 'workflow' && o.workflowPlan && o.summaryStarted
+              && (!o.sourceChatId || o.sourceChatId === sendChatId)) {
+            setDismissedWorkflowBarOrchId(o.id);
+          }
+        }
         await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
       }
     } catch (err) {
@@ -513,6 +524,7 @@ export function useChatRuntime({
     setShareDialog, setExpandedMessages, setOrchestrationMode,
     setPendingWorkflowPlan,
     dismissedFollowUpOrchId, setDismissedFollowUpOrchId,
+    dismissedWorkflowBarOrchId, setDismissedWorkflowBarOrchId,
     /* refs */
     messagesRef, chatMessagesRef, currentChatIdRef, chatNameRef, sessionRunsRef,
     orchestrationsRef, currentAgentSessionsRef, needsContextRestoreRef,

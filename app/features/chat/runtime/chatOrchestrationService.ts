@@ -242,7 +242,10 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
     const effectiveChatId = options?.chatId || ctx.currentChatIdRef.current;
     const promptAttachments = options?.attachments || [];
     const dispatchOptions = { chatId: effectiveChatId, relation: options?.relation, attachments: promptAttachments };
-    const orchestrationMode = ctx.orchestrationModeRef.current;
+    let orchestrationMode = ctx.orchestrationModeRef.current;
+    // Workflow mode is meaningful only when a pending plan was passed via runWorkflowOrchestration.
+    // Reaching dispatchParsedPrompt in workflow mode means no plan — fall back to auto.
+    if (orchestrationMode === 'workflow') orchestrationMode = 'auto';
 
     if (useOrchestration) {
       ctx.orchestrationsRef.current[orchestrationId] = {

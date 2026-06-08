@@ -263,10 +263,14 @@ export function useChatRuntime({
       if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
         const plan = pendingWorkflowPlan;
         setPendingWorkflowPlan(null);
+        setOrchestrationMode('auto');
         await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
           sourceUserMessageId: userMessageId, attachments: sendAttachments,
         });
       } else {
+        if (orchestrationMode === 'workflow' && !pendingWorkflowPlan) {
+          setOrchestrationMode('auto');
+        }
         await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
       }
     } catch (err) {

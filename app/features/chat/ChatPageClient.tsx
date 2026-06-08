@@ -69,7 +69,7 @@ export function ChatPageClient() {
   const [showWorkflowPicker, setShowWorkflowPicker] = useState(false);
   // runVersion is read so the PlanProgressBar re-renders as node statuses change.
   void runVersion;
-  const activeWorkflow = selectActiveWorkflowOrchestration(orchestrationsRef);
+  const activeWorkflow = selectActiveWorkflowOrchestration(orchestrationsRef, currentChatId);
   const nodePanelState = useNodePanelState({ acp, loadAgents: reloadAgents, addMessage });
   const { showNodesPanel, setShowNodesPanel, loadNodes, nodesData } = nodePanelState;
   const agentPanelState = useAgentPanelState({ acp, loadAgents: reloadAgents, addMessage, loadNodes });

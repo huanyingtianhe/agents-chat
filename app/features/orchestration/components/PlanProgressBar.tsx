@@ -79,16 +79,19 @@ export function PlanProgressBar({ orchestration }: Props) {
 
 export function selectActiveWorkflowOrchestration(
   orchestrationsRef: { current: Record<string, OrchestrationState> },
+  currentChatId?: string | null,
 ): OrchestrationState | null {
-  // Prefer an in-progress workflow; fall back to the most recent completed one
-  // so the final node statuses remain visible.
-  let lastCompleted: OrchestrationState | null = null;
-  for (const o of Object.values(orchestrationsRef.current)) {
-    if (o.mode !== 'workflow' || !o.workflowPlan) continue;
-    if (!o.summaryStarted) return o;
-    lastCompleted = o;
-  }
-  return lastCompleted;
+  // Among workflow orchestrations in the current chat, prefer an in-progress one;
+  // otherwise return the most recently-created completed one so final statuses stay visible.
+  // Insertion order in orchestrationsRef.current reflects creation order.
+  const all = Object.values(orchestrationsRef.current).filter((o) => {
+    if (o.mode !== 'workflow' || !o.workflowPlan) return false;
+    if (currentChatId && o.sourceChatId && o.sourceChatId !== currentChatId) return false;
+    return true;
+  });
+  const running = all.filter((o) => !o.summaryStarted);
+  if (running.length > 0) return running[running.length - 1];
+  return all.length > 0 ? all[all.length - 1] : null;
 }
 // reference WorkflowPlan to keep the type import live for consumers
 export type { WorkflowPlan };

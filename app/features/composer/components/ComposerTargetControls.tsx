@@ -44,6 +44,17 @@ export function ComposerTargetControls({
     />
   );
 
+  const workflowPill = onOpenWorkflowPicker ? (
+    <button
+      type="button"
+      className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
+      onClick={onOpenWorkflowPicker}
+      title="Workflow: pick a saved workflow or paste a JSON DAG to run"
+    >
+      📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
+    </button>
+  ) : null;
+
   if (mentionedAgentIds.length > 0) {
     return (
       <div className="targetPills">
@@ -56,23 +67,16 @@ export function ComposerTargetControls({
           <>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('auto')} title="Auto: a scheduler decides which agent to call next based on results">🧠 Auto</button>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('pipeline')} title="Pipeline: agents run sequentially, each receives the previous agent's output">🔀 Pipeline</button>
-            {onOpenWorkflowPicker && (
-              <button
-                type="button"
-                className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
-                onClick={onOpenWorkflowPicker}
-                title="Workflow: pick or paste a JSON DAG to run"
-              >
-                📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
-              </button>
-            )}
           </>
         )}
+        {workflowPill}
       </div>
     );
   }
 
-  if (!effectiveComposerAgentId) return null;
+  if (!effectiveComposerAgentId) {
+    return workflowPill ? <div className="targetPills">{workflowPill}</div> : null;
+  }
   return (
     <div className="targetPills">
       <span className="targetPill rememberedAgentPill modelTargetPill">
@@ -87,6 +91,7 @@ export function ComposerTargetControls({
           />
         ) : null}
       </span>
+      {workflowPill}
     </div>
   );
 }

@@ -185,5 +185,6 @@ export function ChatPageClient() {
     statusBar={<StatusBar statusText={`${agents.length} agent${agents.length !== 1 ? 's' : ''} configured`} targetText={`${messages.filter((m) => m.type === 'user').length} messages`} isRunning={agents.length > 0} />}
     shareDialog={shareDialog ? <ShareDialogComponent dialog={shareDialog} onCopyLink={() => void copyShareDialogLink()} onClose={() => setShareDialog(null)} /> : null}
     imageLightbox={lightboxImage ? <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} /> : null}
-  /><WorkflowPicker open={showWorkflowPicker} onClose={() => setShowWorkflowPicker(false)} onPicked={(plan) => { setPendingWorkflowPlan(plan); setOrchestrationMode('workflow'); }} /></div>;
+    workflowPicker={<WorkflowPicker open={showWorkflowPicker} onClose={() => setShowWorkflowPicker(false)} onPicked={(plan) => { setPendingWorkflowPlan(plan); setOrchestrationMode('workflow'); }} />}
+  /></div>;
 }

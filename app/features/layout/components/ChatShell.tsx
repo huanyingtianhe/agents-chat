@@ -11,6 +11,7 @@ export type ChatShellProps = {
   statusBar: ReactNode;
   shareDialog: ReactNode | null;
   imageLightbox: ReactNode | null;
+  workflowPicker?: ReactNode | null;
   mobilePanel: 'chat' | 'agents' | 'nodes' | 'schedules' | null;
   onMobilePanelChange: (panel: 'chat' | 'agents' | 'nodes' | 'schedules' | null) => void;
   themeStyle: CSSProperties;
@@ -30,6 +31,7 @@ export function ChatShell({
   statusBar,
   shareDialog,
   imageLightbox,
+  workflowPicker,
   mobilePanel,
   onMobilePanelChange,
   themeStyle,
@@ -61,6 +63,7 @@ export function ChatShell({
       </div>
       {shareDialog}
       {imageLightbox}
+      {workflowPicker}
       {statusBar}
     </main>
   );

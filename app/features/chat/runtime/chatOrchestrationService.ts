@@ -8,6 +8,7 @@ import { SCHEDULER_AGENT_ID } from '../chatHelpers';
 import { renderInstruction } from '@/lib/workflow/templating.mjs';
 import { buildPlanPrompt, parseSchedulerPlanResponse } from '@/lib/workflow/scheduler.mjs';
 import type { WorkflowPlan, NodeStatus } from '@/lib/workflow/workflowTypes.mjs';
+import { looksLikeQuestion as looksLikeQuestionStub } from '../../orchestration/workflowFollowUp';
 
 export type OrchestrationContext = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -73,6 +74,14 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       const plan = state.workflowPlan;
       const statuses = state.nodeStatuses ?? (state.nodeStatuses = {});
       const nodeById = new Map(plan.nodes.map((n) => [n.id, n]));
+
+      // Self-heal: if a node is awaiting-input but its stored result no longer
+      // reads as a question, treat it as ok so dependents can proceed.
+      for (const n of plan.nodes) {
+        if (statuses[n.id] !== 'awaiting-input') continue;
+        const text = state.results[n.id] || '';
+        if (!looksLikeQuestionStub(text)) statuses[n.id] = 'ok';
+      }
 
       // Cascade skip on failed/skipped deps.
       let changed = true;

@@ -264,6 +264,15 @@ export function useChatRuntime({
     try {
       const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
       const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
+      // If a LIVE workflow has awaiting nodes and the user's send targets any
+      // of those awaiting agents (whether by @-mention or by default route),
+      // resume the workflow node instead of spawning a fresh orchestration.
+      // Otherwise the dependent nodes stay blocked forever.
+      const liveOrch = followUp ? orchestrationsRef.current[followUp.orchestrationId] : undefined;
+      const intendedAgentIds = explicitlyMentionedAgentIds.length > 0 ? explicitlyMentionedAgentIds : agentIds;
+      const resumeAgentIds = followUp && liveOrch && liveOrch.mode === 'workflow'
+        ? followUp.awaitingAgentIds.filter((a) => intendedAgentIds.includes(a))
+        : [];
       if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
         const plan = pendingWorkflowPlan;
         setPendingWorkflowPlan(null);
@@ -271,11 +280,22 @@ export function useChatRuntime({
         await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
           sourceUserMessageId: userMessageId, attachments: sendAttachments,
         });
+      } else if (followUpActive && followUp && resumeAgentIds.length > 0) {
+        // Resume the workflow: dispatch back into the awaiting node(s) so the
+        // engine can advance dependents when the agent finishes.
+        const statuses = liveOrch!.nodeStatuses || (liveOrch!.nodeStatuses = {});
+        const awaitingNodes = liveOrch!.workflowPlan!.nodes.filter(
+          (n) => statuses[n.id] === 'awaiting-input' && resumeAgentIds.includes(n.agent),
+        );
+        for (const n of awaitingNodes) statuses[n.id] = 'running';
+        notifyRunStateChanged();
+        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+          n.agent, textForAgent, followUp.orchestrationId, 'worker',
+          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id, attachments: sendAttachments },
+        )));
       } else if (followUpActive && followUp && explicitlyMentionedAgentIds.length === 0) {
-        // Continuation reply: one or more workflow nodes ended with a question
-        // and the user typed a reply with no explicit @-mentions. Route the
-        // reply only to the agents that asked, in parallel — do NOT spawn a
-        // new orchestration / scheduler plan.
+        // No live orchestration (e.g. history-derived follow-up). Plain
+        // dispatch to the asking agent(s); no scheduler, no DAG state.
         setDismissedFollowUpOrchId(followUp.orchestrationId);
         await Promise.all(followUp.awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
           agentId, textForAgent, `followup-${makeId()}`, 'worker',

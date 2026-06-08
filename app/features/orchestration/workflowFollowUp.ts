@@ -66,18 +66,20 @@ export function detectWorkflowFollowUp(
     }
   }
 
-  // 2) Message-list fallback: the last completed assistant message in this
-  //    chat reads as a question. This handles the common case where the
-  //    in-memory orchestration state was lost (page reload / hot reload)
-  //    but the chat history still has the agent's question.
+  // 2) Message-list fallback: handles the case where the in-memory
+  //    orchestration state was lost (page reload / hot reload) but the chat
+  //    history still has the agent's question. To avoid spurious follow-ups
+  //    on normal single-agent chats, only kick in when the last completed
+  //    agent message was actually tagged as a workflow node.
   if (messages && messages.length > 0) {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      if (m.type === 'user') return null; // user already replied
+      if (m.type === 'user') return null;
       if (m.type !== 'agent') continue;
-      if (m.pending) return null;          // still streaming
-      if (m.summary) continue;             // skip summary blocks
+      if (m.pending) return null;
+      if (m.summary) continue;
       if (!m.agentId) continue;
+      if (!m.relation || !m.relation.startsWith('Workflow node ')) return null;
       const text = m.content || '';
       if (!looksLikeQuestion(text)) return null;
       return {

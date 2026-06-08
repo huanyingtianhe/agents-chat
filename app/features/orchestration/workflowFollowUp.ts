@@ -17,9 +17,12 @@ export function looksLikeQuestion(text: string): boolean {
   if (!stripped) return false;
   const lastChar = stripped.slice(-1);
   if (lastChar === '?' || lastChar === '？') return true;
-  // Common request phrasings even without trailing '?'
-  const tail = stripped.slice(-300).toLowerCase();
-  return /\b(could you clarify|please (?:clarify|specify|confirm|let me know|provide)|which (?:branch|file|option|one)|would you like|do you want|shall i)\b/.test(tail);
+  // Scan a longer tail and also accept a '?' anywhere near the end (covers
+  // "…X? I can also do Y." style closers).
+  const tail = stripped.slice(-600);
+  if (/[?？]/.test(tail)) return true;
+  const tailLower = tail.toLowerCase();
+  return /\b(could you (?:clarify|confirm|tell me)|please (?:clarify|specify|confirm|let me know|provide|choose|pick|select)|which (?:branch|file|option|one|of)|would you (?:like|prefer)|do you (?:want|prefer|need)|shall i|should i|want me to|let me know|which (?:do|would) you|are you (?:sure|ok))\b/.test(tailLower);
 }
 
 /**

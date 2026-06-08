@@ -48,15 +48,14 @@ export function PlanProgressBar({ orchestration }: Props) {
 
   return (
     <div className="planProgressBar">
-      <div className="planProgressHeader">
-        <span className="planProgressTitle">
-          📋 Workflow: <strong>{plan.name || 'plan'}</strong>
-        </span>
-        <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
-          💾 Save as…
-        </button>
-        {savedMsg && <span className="planProgressMsg">{savedMsg}</span>}
-      </div>
+      <span className="planProgressTitle">
+        📋 <strong>{plan.name || 'plan'}</strong>
+      </span>
+      <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
+        💾 Save as…
+      </button>
+      {savedMsg && <span className="planProgressMsg">{savedMsg}</span>}
+      <span className="planProgressSep" aria-hidden="true" />
       <div className="planProgressNodes">
         {plan.nodes.map((n) => {
           const s = (statuses[n.id] || 'pending') as NodeStatus;

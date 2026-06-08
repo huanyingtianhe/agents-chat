@@ -1,43 +1,53 @@
 .planProgressBar {
-  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
   background: var(--panel-soft, var(--panel-bg)); font-size: 12px;
   color: var(--text);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
-.planProgressHeader { display:flex; align-items:center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
-.planProgressTitle { color: var(--text-soft); }
+.planProgressTitle { color: var(--text-soft); white-space: nowrap; }
 .planProgressTitle strong { color: var(--text); }
 .planProgressSave {
   background: transparent; border: 1px solid var(--border-strong, var(--border));
   color: var(--text-soft); border-radius: 8px; padding: 3px 10px;
   font-size: 11px; cursor: pointer; transition: all 160ms ease;
+  white-space: nowrap;
 }
 .planProgressSave:hover {
   background: var(--accent-soft); color: var(--accent); border-color: var(--accent);
 }
 .planProgressSave:disabled { opacity: 0.5; cursor: not-allowed; }
 .planProgressMsg { color: var(--muted); font-size: 11px; }
-.planProgressNodes { display:flex; flex-wrap: wrap; gap: 6px; }
+.planProgressSep {
+  width: 1px; align-self: stretch; background: var(--border);
+  margin: 0 2px;
+}
+.planProgressNodes { display:flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .planNode {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 10px; border-radius: 999px; font-size: 11px;
   border: 1px solid var(--border); background: var(--input-bg);
-  color: var(--text-soft);
+  color: var(--text);
 }
-.planNodeIcon { font-weight: bold; }
-.planNode-pending { color: var(--muted); }
+.planNodeIcon { font-weight: bold; font-size: 13px; line-height: 1; }
+.planNode-pending { color: var(--text-soft); }
+.planNode-pending .planNodeIcon { color: var(--muted); }
 .planNode-running {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.planNode-running .planNodeIcon { color: var(--accent); }
 .planNode-ok {
   color: var(--success, #4ade80);
   border-color: var(--success, #4ade80);
   background: color-mix(in srgb, var(--success, #4ade80) 12%, transparent);
 }
+.planNode-ok .planNodeIcon { color: var(--success, #4ade80); }
 .planNode-failed {
   color: var(--danger);
   border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
+.planNode-failed .planNodeIcon { color: var(--danger); }
 .planNode-skipped { color: var(--muted); text-decoration: line-through; }
+.planNode-skipped .planNodeIcon { color: var(--muted); text-decoration: none; }

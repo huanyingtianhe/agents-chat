@@ -2,6 +2,12 @@
   width: min(640px, 100%);
   max-height: 80vh;
   overflow-y: auto;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  color: var(--text);
 }
 .chatPageRoot .wfPickerHeader {
   display: flex; justify-content: space-between; align-items: center;

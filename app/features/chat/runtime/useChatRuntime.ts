@@ -381,15 +381,56 @@ export function useChatRuntime({
     for (const agentId of agentIds) {
       try { await acp({ action: 'interrupt', agentId, chatId: stopChatId }); } catch { /* ignore */ }
     }
+    // Track which orchestrations had nodes interrupted so we can finalize them.
+    const stoppedWorkflowOrchIds = new Set<string>();
     for (const [runKey, run] of Object.entries(activeRuns)) {
       updateMessage(run.pendingId, {
         content: run.currentText || '⏹ Stopped', pending: false,
         statusText: undefined, ptyPhase: undefined, userRequest: undefined,
       }, run.chatId);
+      // If this run was a workflow node, mark the node as failed so the bar
+      // shows a final state and dependents cascade-skip rather than hanging.
+      if (run.workflowNodeId) {
+        const orch = orchestrationsRef.current[run.orchestrationId];
+        if (orch && orch.mode === 'workflow') {
+          orch.nodeStatuses = orch.nodeStatuses || {};
+          orch.nodeStatuses[run.workflowNodeId] = 'failed';
+          orch.results[run.workflowNodeId] = run.currentText || '⏹ Stopped';
+          stoppedWorkflowOrchIds.add(run.orchestrationId);
+        }
+      }
       delete sessionRunsRef.current[runKey];
     }
+    // Drop only orchestrations that belong to this chat AND are not workflows
+    // we want to keep visible. Workflow orchestrations stay so the status bar
+    // can show the final (failed/skipped) state of all their nodes.
+    for (const [id, orch] of Object.entries(orchestrationsRef.current)) {
+      const inThisChat = !orch.sourceChatId || orch.sourceChatId === stopChatId;
+      if (!inThisChat) continue;
+      if (orch.mode === 'workflow' && orch.workflowPlan) {
+        // Cascade-skip any pending/running nodes whose deps just failed,
+        // and mark this orchestration as terminal so it's no longer "running".
+        const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const n of orch.workflowPlan.nodes) {
+            const cur = statuses[n.id];
+            if (cur && cur !== 'pending' && cur !== 'running' && cur !== 'awaiting-input') continue;
+            const blocked = n.dependsOn.some((d) => statuses[d] === 'failed' || statuses[d] === 'skipped');
+            if (blocked) { statuses[n.id] = 'skipped'; changed = true; }
+            else if (stoppedWorkflowOrchIds.has(orch.id) && (cur === 'running' || cur === 'awaiting-input')) {
+              statuses[n.id] = 'failed';
+              changed = true;
+            }
+          }
+        }
+        orch.summaryStarted = true;
+      } else {
+        delete orchestrationsRef.current[id];
+      }
+    }
     notifyRunStateChanged();
-    orchestrationsRef.current = {};
     addMessage({ type: 'system', content: '⏹ Conversation stopped.' });
     void persistHandlers.saveCurrentChatToHistory();
   }

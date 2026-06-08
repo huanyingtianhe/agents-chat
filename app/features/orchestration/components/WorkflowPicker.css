@@ -1,47 +1,49 @@
-.wfPickerBackdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-  display: flex; align-items: center; justify-content: center; z-index: 1000;
+.chatPageRoot .wfPickerModal {
+  width: min(640px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
 }
-.wfPickerDialog {
-  background: var(--panel-bg, #1e1e1e); color: var(--text, #e4e4e7);
-  border: 1px solid var(--border, #333); border-radius: 8px;
-  width: min(640px, 92vw); max-height: 80vh; overflow-y: auto;
-  padding: 16px 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-}
-.wfPickerHeader { display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; }
-.wfPickerHeader h3 { margin: 0; font-size: 16px; }
-.wfPickerClose {
-  background:none; border:none; color: var(--text-muted, #999); font-size: 22px;
-  cursor:pointer; padding: 0 6px; line-height: 1;
-}
-.wfPickerClose:hover { color: var(--text, #fff); }
-.wfPickerMsg, .wfPickerEmpty { color: var(--text-muted, #888); font-size: 13px; padding: 4px 0; }
-.wfPickerError {
-  background: rgba(220, 50, 50, 0.15); color: #f88;
-  padding: 6px 10px; border-radius: 4px; font-size: 13px; margin-bottom: 8px;
-}
-.wfPickerSection { margin-bottom: 16px; }
-.wfPickerSection h4 {
-  margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--text-muted, #888); font-weight: 600;
-}
-.wfPickerItem {
+.chatPageRoot .wfPickerHeader {
   display: flex; justify-content: space-between; align-items: center;
-  width: 100%; padding: 8px 12px; margin-bottom: 4px;
-  background: var(--panel-alt-bg, #2a2a2a); border: 1px solid transparent;
-  border-radius: 4px; color: var(--text, #e4e4e7); text-align: left; cursor: pointer;
+  margin-bottom: 12px;
 }
-.wfPickerItem:hover { border-color: var(--accent, #4a9eff); background: var(--panel-hover-bg, #333); }
-.wfPickerItemName { font-size: 13px; }
-.wfPickerItemMeta { font-size: 11px; color: var(--text-muted, #888); }
-.wfPickerJson {
-  width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px;
-  background: var(--input-bg, #0f0f0f); color: var(--text, #e4e4e7);
-  border: 1px solid var(--border, #333); border-radius: 4px; padding: 8px;
-  resize: vertical;
+.chatPageRoot .wfPickerHeader h2 { margin: 0; }
+.chatPageRoot .wfPickerClose {
+  background: transparent; border: none; color: var(--text-soft);
+  font-size: 22px; cursor: pointer; padding: 0 6px; line-height: 1;
 }
-.wfPickerJsonBtn {
-  margin-top: 6px; padding: 6px 14px; background: var(--accent, #4a9eff);
-  color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;
+.chatPageRoot .wfPickerClose:hover { color: var(--accent); }
+.chatPageRoot .wfPickerMsg,
+.chatPageRoot .wfPickerEmpty {
+  color: var(--muted); font-size: 13px; padding: 4px 0;
 }
-.wfPickerJsonBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.chatPageRoot .wfPickerError {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+  padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.chatPageRoot .wfPickerSection { margin-bottom: 18px; }
+.chatPageRoot .wfPickerSection h3 {
+  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--text-soft); font-weight: 600;
+}
+.chatPageRoot .wfPickerItem {
+  display: flex; justify-content: space-between; align-items: center;
+  width: 100%; padding: 10px 14px; margin-bottom: 6px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); text-align: left; cursor: pointer;
+  transition: all 160ms ease;
+}
+.chatPageRoot .wfPickerItem:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.chatPageRoot .wfPickerItemName { font-size: 13px; font-weight: 500; }
+.chatPageRoot .wfPickerItemMeta { font-size: 11px; color: var(--muted); }
+.chatPageRoot .wfPickerSection textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-height: 110px;
+}

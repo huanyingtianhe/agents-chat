@@ -48,16 +48,16 @@ export function WorkflowPicker({ open, onClose, onPicked }: Props) {
   }
 
   return (
-    <div className="wfPickerBackdrop" onClick={onClose}>
-      <div className="wfPickerDialog" onClick={(e) => e.stopPropagation()}>
+    <div className="modalOverlay" onClick={onClose}>
+      <div className="modal wfPickerModal" onClick={(e) => e.stopPropagation()}>
         <div className="wfPickerHeader">
-          <h3>Pick a workflow</h3>
-          <button type="button" className="wfPickerClose" onClick={onClose}>×</button>
+          <h2>Pick a workflow</h2>
+          <button type="button" className="wfPickerClose" onClick={onClose} aria-label="Close">×</button>
         </div>
         {loading && <div className="wfPickerMsg">Loading…</div>}
         {error && <div className="wfPickerError">{error}</div>}
         <div className="wfPickerSection">
-          <h4>Repo workflows</h4>
+          <h3>Repo workflows</h3>
           {repo.length === 0 && <div className="wfPickerEmpty">(none)</div>}
           {repo.map((w) => (
             <button key={w.filePath} type="button" className="wfPickerItem"
@@ -68,7 +68,7 @@ export function WorkflowPicker({ open, onClose, onPicked }: Props) {
           ))}
         </div>
         <div className="wfPickerSection">
-          <h4>Saved workflows</h4>
+          <h3>Saved workflows</h3>
           {user.length === 0 && <div className="wfPickerEmpty">(none)</div>}
           {user.map((w) => (
             <button key={w.id} type="button" className="wfPickerItem"
@@ -79,19 +79,22 @@ export function WorkflowPicker({ open, onClose, onPicked }: Props) {
           ))}
         </div>
         <div className="wfPickerSection">
-          <h4>Paste plan JSON</h4>
+          <h3>Paste plan JSON</h3>
           <textarea
-            className="wfPickerJson"
             placeholder='{"version":1,"nodes":[...]}'
             value={rawJson}
             onChange={(e) => setRawJson(e.target.value)}
             rows={6}
           />
-          <button type="button" className="wfPickerJsonBtn" onClick={pickRaw} disabled={!rawJson.trim()}>
-            Use this plan
-          </button>
+          <div className="modalActions">
+            <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+            <button type="button" className="primary" onClick={pickRaw} disabled={!rawJson.trim()}>
+              Use this plan
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+

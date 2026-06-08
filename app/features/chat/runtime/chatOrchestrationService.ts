@@ -3,9 +3,10 @@ import type { ChatAttachment } from '../../composer/attachmentTypes';
 import { getAttachmentSummaryText } from '../../composer/attachmentHelpers';
 import type { Agent } from '../../agents/agentTypes';
 import type { ChatMessage, DispatchToAgentOptions, OrchestrationMode, OrchestrationState, SessionRunContext } from '../chatTypes';
-import { PromptSendFailedError, AUTO_MAX_STEPS } from './chatRunLoop';
+import { PromptSendFailedError } from './chatRunLoop';
 import { SCHEDULER_AGENT_ID } from '../chatHelpers';
 import { renderInstruction } from '@/lib/workflow/templating.mjs';
+import { buildPlanPrompt, parseSchedulerPlanResponse } from '@/lib/workflow/scheduler.mjs';
 import type { WorkflowPlan, NodeStatus } from '@/lib/workflow/workflowTypes.mjs';
 
 export type OrchestrationContext = {
@@ -151,127 +152,67 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       const ext = state as Record<string, unknown>;
       const phase = ext.autoPhase as string;
       console.log('[Auto] maybeAdvance called, phase:', phase, 'results:', Object.keys(state.results));
-      const autoStep = (ext.autoStep as number) || 0;
-      const schedulerAgentId = SCHEDULER_AGENT_ID;
-      const agentList = (ext.autoAgentList as string) || '';
-      const autoOriginalText = (ext.autoOriginalText as string) || state.originalTask;
-      const autoHistory = (ext.autoHistory as { agent: string; instruction: string; step: number }[]) || [];
-      const promptAttachments = (ext.promptAttachments as ChatAttachment[]) || [];
-      const dispatchedAttachmentAgents = (ext.dispatchedAttachmentAgents as string[]) || [];
-      const dispatchedAttachmentAgentSet = new Set(dispatchedAttachmentAgents);
-      const prepareNextDispatch = async (agentId: string) => {
-        await ctx.acp({ action: 'turn-clear', agentId, chatId: orchestrationChatId }).catch(() => null);
-        await new Promise((r) => setTimeout(r, 800));
-      };
-      try {
-        if (phase === 'awaiting-plan' || phase === 'awaiting-eval') {
-          const lastResult = Object.values(state.results).pop() || '';
-          let decision: { done?: boolean; nextAgent?: string; instruction?: string; summary?: string } = { done: true };
-          try {
-            const jsonMatch = lastResult.match(/\{[\s\S]*\}/);
-            if (jsonMatch) decision = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.warn('[Auto] Failed to parse scheduler JSON:', e, '\nRaw:', lastResult.slice(0, 500));
-          }
-          console.log('[Auto]', phase, 'decision:', JSON.stringify(decision), 'results keys:', Object.keys(state.results));
-          if (decision.done || !decision.nextAgent || autoStep >= AUTO_MAX_STEPS) {
-            ext.autoPhase = 'done';
-            state.summaryStarted = true;
-            const summaryPrompt = [
-              'You are the final coordinator. Summarize the results of this auto-scheduled multi-agent task.',
-              `Original task: ${state.originalTask}`, '',
-              ...autoHistory.map((h, i) => `## Step ${i + 1} — ${h.agent}\n${state.results[h.agent] || '(no result)'}`), '',
-              decision.summary ? `\nScheduler conclusion: ${decision.summary}` : '',
-              '\nPlease output:', '1. What was accomplished', '2. Final result', '3. Any remaining issues or next steps',
-            ].join('\n');
-            await prepareNextDispatch(schedulerAgentId);
-            await dispatchOrchestrationStep(orchestrationId, schedulerAgentId, summaryPrompt, 'summary', { chatId: orchestrationChatId, relation: 'Auto: final summary', summary: true });
-            return;
-          }
-          ext.autoStep = autoStep + 1;
-          ext.autoPhase = 'awaiting-execution';
-          ext.autoCurrentTarget = decision.nextAgent;
-          autoHistory.push({ agent: decision.nextAgent, instruction: decision.instruction || state.originalTask, step: autoStep + 1 });
-          state.results = {};
-          await prepareNextDispatch(decision.nextAgent);
-          const workerAttachments = dispatchedAttachmentAgentSet.has(decision.nextAgent) ? [] : promptAttachments;
-          dispatchedAttachmentAgentSet.add(decision.nextAgent);
-          ext.dispatchedAttachmentAgents = Array.from(dispatchedAttachmentAgentSet);
-          await dispatchOrchestrationStep(orchestrationId, decision.nextAgent, decision.instruction || state.originalTask, 'worker', {
-            chatId: orchestrationChatId, round: autoStep + 1, relation: `Auto: step ${autoStep + 1}`, attachments: workerAttachments,
-          });
-          return;
-        }
-        if (phase === 'awaiting-execution') {
-          const targetAgent = ext.autoCurrentTarget as string;
-          const agentResult = state.results[targetAgent] || '(no response)';
-          ext.autoPhase = 'awaiting-eval';
-          state.results = {};
-          const evalPrompt = [
-            'You are a ROUTING-ONLY scheduler evaluating a step result. Your ONLY job is to decide next action and output JSON.',
-            'DO NOT use any tools. DO NOT read files. DO NOT run commands. Just evaluate and decide.',
-            'Respect explicit agent mentions, role assignments, and ordering in the original user message.',
-            'If the user assigned separate agents to testing/review and coding/fixing, keep those responsibilities separate.',
-            `\nOriginal task: ${state.originalTask}`,
-            `\nOriginal user message with agent mentions: ${autoOriginalText}`,
-            `\nAvailable agents:\n${agentList}`,
-            `\nStep ${autoStep} — Agent "${targetAgent}" responded:\n${agentResult}`,
-            autoHistory.length > 1 ? `\nPrior steps:\n${autoHistory.slice(0, -1).map((h) => `Step ${h.step} (${h.agent}): ${h.instruction}`).join('\n')}` : '',
-            `\nSteps remaining: ${AUTO_MAX_STEPS - autoStep}`,
-            '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
-            'The nextAgent value must be one of the available mentioned agents above.',
-            '- If done: { "done": true, "summary": "<brief conclusion>" }',
-            '- If another agent should act: { "done": false, "nextAgent": "<agent-id>", "instruction": "<what to tell the next agent, include relevant context>" }',
-          ].join('\n');
-          await prepareNextDispatch(schedulerAgentId);
-          await dispatchOrchestrationStep(orchestrationId, schedulerAgentId, evalPrompt, 'worker', {
-            chatId: orchestrationChatId, round: autoStep, relation: 'Auto: scheduler evaluating',
-          });
-          return;
-        }
-      } catch (err) {
-        if (markOrchestrationPromptSendFailed(orchestrationId, err)) return;
-        console.error('[Auto] orchestration step failed:', err);
-        ctx.addMessage({ type: 'system', content: `⚠️ Auto orchestration error: ${err instanceof Error ? err.message : String(err)}` });
+      if (phase !== 'awaiting-plan') return;
+      const lastResult = Object.values(state.results).pop() || '';
+      const parsed = parseSchedulerPlanResponse(lastResult);
+      if (!parsed.ok) {
+        console.warn('[Auto] plan parse failed:', parsed.error, '\nRaw:', lastResult.slice(0, 500));
+        state.summaryStarted = true;
+        ctx.addMessage({
+          type: 'system',
+          content: `⚠️ Auto mode: scheduler did not return a valid workflow plan (${parsed.error}). Please try again or use Workflow mode directly.`,
+        }, orchestrationChatId);
+        ctx.notifyRunStateChanged();
+        return;
       }
+      const allowed = new Set(state.agentIds);
+      const bad = parsed.plan.nodes.find((n: { agent: string }) => !allowed.has(n.agent));
+      if (bad) {
+        state.summaryStarted = true;
+        ctx.addMessage({
+          type: 'system',
+          content: `⚠️ Auto mode: scheduler referenced unknown agent "${bad.agent}". Allowed: ${[...allowed].join(', ')}.`,
+        }, orchestrationChatId);
+        ctx.notifyRunStateChanged();
+        return;
+      }
+      // Transition to workflow mode and execute via the DAG engine.
+      const plan = parsed.plan;
+      const statuses: Record<string, NodeStatus> = {};
+      for (const n of plan.nodes) statuses[n.id] = 'pending';
+      state.mode = 'workflow';
+      state.workflowPlan = plan;
+      state.nodeStatuses = statuses;
+      state.results = {};
+      ctx.notifyRunStateChanged();
+      await maybeAdvanceOrchestration(orchestrationId);
+      return;
     }
   }
 
   async function runAutoOrchestration(orchestrationId: string, agentIds: string[], task: string, originalText: string, chatId: string, promptAttachments: ChatAttachment[] = []) {
     const schedulerAgentId = SCHEDULER_AGENT_ID;
-    const agentList = agentIds.map((id) => {
+    const agentDescriptors = agentIds.map((id) => {
       const a = ctx.agentsRef.current.find((x) => x.id === id);
-      return `- ${id}: ${a?.name || id}`;
-    }).join('\n');
-    const history: { agent: string; instruction: string; step: number }[] = [];
+      return { id, description: a?.name || id };
+    });
+    const attachmentNote = promptAttachments.length ? `\n\n${getAttachmentSummaryText(promptAttachments)}` : '';
+    const userMessage = `${originalText}${attachmentNote}\n\n(Cleaned task: ${task})`;
     const planPrompt = [
-      'You are a ROUTING-ONLY scheduler. Your ONLY job is to pick which agent handles the task and output JSON.',
-      'DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
-      'Just read the task and decide which agent should handle the next step.',
+      buildPlanPrompt({ userMessage, agents: agentDescriptors }),
+      '',
+      'IMPORTANT: DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
+      'Just analyze the user request and return the JSON plan.',
       'Respect explicit agent mentions, role assignments, and ordering in the original user message.',
-      'If the user assigns one agent to test/review/check and another to code/fix/implement, do not combine those responsibilities into one agent.',
-      'For conditional workflows, choose the first required step now; after that agent responds, evaluate whether another mentioned agent should act next.',
-      `\nAvailable agents:\n${agentList}`,
-      `\nOriginal user message with agent mentions: ${originalText}`,
-      `\nCleaned task text: ${task}`,
-      promptAttachments.length ? `\n${getAttachmentSummaryText(promptAttachments)}` : '',
-      '\nRespond with ONLY a raw JSON object — no markdown fences, no explanation, no tool calls:',
-      'The nextAgent value must be one of the available mentioned agents above.',
-      '{ "nextAgent": "<agent-id>", "instruction": "<detailed instruction for that agent>" }',
-      'If no agent is needed: { "done": true, "summary": "<your answer>" }',
+      'If the user assigns separate agents to test/review vs code/fix, keep those as separate nodes.',
     ].join('\n');
     await ctx.dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {
-      chatId, round: 0, relation: 'Auto: scheduler planning',
+      chatId, round: 0, relation: 'Auto: planning workflow',
     });
     const state = ctx.orchestrationsRef.current[orchestrationId];
     if (state) {
-      (state as Record<string, unknown>).autoHistory = history;
-      (state as Record<string, unknown>).autoAgentList = agentList;
-      (state as Record<string, unknown>).autoOriginalText = originalText;
-      (state as Record<string, unknown>).promptAttachments = promptAttachments;
-      (state as Record<string, unknown>).dispatchedAttachmentAgents = [];
-      (state as Record<string, unknown>).autoStep = 0;
       (state as Record<string, unknown>).autoPhase = 'awaiting-plan';
+      (state as Record<string, unknown>).promptAttachments = promptAttachments;
     }
   }
 

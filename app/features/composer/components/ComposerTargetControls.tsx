@@ -56,36 +56,23 @@ export function ComposerTargetControls({
           <>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('auto')} title="Auto: a scheduler decides which agent to call next based on results">🧠 Auto</button>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('pipeline')} title="Pipeline: agents run sequentially, each receives the previous agent's output">🔀 Pipeline</button>
+            {onOpenWorkflowPicker && (
+              <button
+                type="button"
+                className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
+                onClick={onOpenWorkflowPicker}
+                title="Workflow: pick or paste a JSON DAG to run"
+              >
+                📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
+              </button>
+            )}
           </>
-        )}
-        {onOpenWorkflowPicker && (
-          <button
-            type="button"
-            className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
-            onClick={onOpenWorkflowPicker}
-            title="Workflow: pick or paste a JSON DAG to run"
-          >
-            📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
-          </button>
         )}
       </div>
     );
   }
 
-  if (!effectiveComposerAgentId) {
-    return onOpenWorkflowPicker ? (
-      <div className="targetPills">
-        <button
-          type="button"
-          className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
-          onClick={onOpenWorkflowPicker}
-          title="Workflow: pick or paste a JSON DAG to run"
-        >
-          📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
-        </button>
-      </div>
-    ) : null;
-  }
+  if (!effectiveComposerAgentId) return null;
   return (
     <div className="targetPills">
       <span className="targetPill rememberedAgentPill modelTargetPill">
@@ -100,16 +87,6 @@ export function ComposerTargetControls({
           />
         ) : null}
       </span>
-      {onOpenWorkflowPicker && (
-        <button
-          type="button"
-          className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
-          onClick={onOpenWorkflowPicker}
-          title="Workflow: pick or paste a JSON DAG to run"
-        >
-          📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
-        </button>
-      )}
     </div>
   );
 }

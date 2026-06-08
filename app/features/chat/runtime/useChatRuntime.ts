@@ -178,6 +178,9 @@ export function useChatRuntime({
   resumeActiveTurnRef.current = acpHandlers.resumeActiveTurn;
 
   /* ── Persistence service ── */
+  const hydrateOrchestrationsForChatRef = useRef<(chatId: string) => Promise<void>>(async () => {});
+  const reconcileRunningWorkflowNodesRef = useRef<(chatId: string) => void>(() => {});
+
   const persistHandlers = createPersistenceHandlers({
     acp, currentChatIdRef, currentAgentSessionsRef, needsContextRestoreRef,
     chatMessagesRef, messagesRef, chatNameRef, chatAgentFilterRef,
@@ -189,32 +192,73 @@ export function useChatRuntime({
     onClearAgentFilter: () => panelCallbacksRef.current.setSelectedAgentFilter?.(null),
     onCloseChatsPanel: () => panelCallbacksRef.current.setShowChatsPanel?.(false),
     onCloseAgentsPanel: () => panelCallbacksRef.current.setShowAgentsPanel?.(false),
+    prepareResume: (chatId) => hydrateOrchestrationsForChatRef.current(chatId),
+    finalizeResume: (chatId) => reconcileRunningWorkflowNodesRef.current(chatId),
   });
 
   /* ── Orchestration hydration ── */
+  // Load persisted orchestrations into memory AS-IS. We deliberately keep
+  // `running` nodes as `running` here. The session-resume effect runs next
+  // and will either reattach the live ACP turn (node stays running, message
+  // bubble keeps streaming) or, if no live turn exists,
+  // reconcileRunningWorkflowNodes flips it to `awaiting-input`.
   async function hydrateOrchestrationsForChat(chatId: string) {
     if (!chatId) return;
     try {
       const orchs = await loadPersistedOrchestrations(chatId);
       for (const o of orchs) {
         if (!o || !o.id) continue;
-        // Any 'running' node was interrupted by reload -> 'awaiting-input'
-        // with a synthetic prompt so the inline follow-up card reappears.
-        // 'awaiting-input' nodes are preserved as-is.
-        const recovered = recoverInterruptedOrchestration(o);
-        orchestrationsRef.current[recovered.id] = recovered;
+        // Preserve 'awaiting-input' nodes as they were persisted.
+        // 'running' nodes left untouched here — reconciled after resume.
+        orchestrationsRef.current[o.id] = o;
       }
-      if (orchs.length > 0) {
-        setRunVersion((v) => v + 1);
-        // No auto-advance: awaiting-input pauses dependents until the user
-        // replies via the inline follow-up card (or main composer).
-      }
+      if (orchs.length > 0) setRunVersion((v) => v + 1);
     } catch { /* ignore */ }
   }
 
+  /**
+   * After session-resume runs, decide what to do with workflow nodes that
+   * were persisted as 'running':
+   * - If sessionRunsRef has a run for (agent, chatId), the ACP turn is alive
+   *   (resumeActiveTurn registered it). Keep the node running.
+   * - Otherwise the agent's turn is truly gone — apply
+   *   recoverInterruptedOrchestration so the node becomes 'awaiting-input'
+   *   with a synthetic prompt and the inline follow-up card appears.
+   */
+  function reconcileRunningWorkflowNodes(chatId: string) {
+    if (!chatId) return;
+    let changed = false;
+    for (const orch of Object.values(orchestrationsRef.current)) {
+      if (orch.mode !== 'workflow' || !orch.workflowPlan) continue;
+      if (orch.sourceChatId && orch.sourceChatId !== chatId) continue;
+      const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+      let needsRecovery = false;
+      for (const n of orch.workflowPlan.nodes) {
+        if (statuses[n.id] !== 'running') continue;
+        const runKey = `acp:${n.agent}:${chatId}`;
+        if (sessionRunsRef.current[runKey]) continue; // live turn — keep running
+        needsRecovery = true;
+        break;
+      }
+      if (needsRecovery) {
+        const recovered = recoverInterruptedOrchestration(orch);
+        if (recovered !== orch) {
+          orchestrationsRef.current[orch.id] = recovered;
+          changed = true;
+        }
+      }
+    }
+    if (changed) notifyRunStateChanged();
+  }
+
+  hydrateOrchestrationsForChatRef.current = hydrateOrchestrationsForChat;
+  reconcileRunningWorkflowNodesRef.current = reconcileRunningWorkflowNodes;
+
   const wrappedLoadChat = async (chatId: string) => {
+    // persistHandlers.loadChat now invokes hydrate (prepareResume) before
+    // session-resume and reconcile (finalizeResume) after, so no extra
+    // hydrate call needed here.
     await persistHandlers.loadChat(chatId);
-    await hydrateOrchestrationsForChat(chatId);
   };
 
   /* ── Failed send helpers ── */
@@ -528,7 +572,7 @@ export function useChatRuntime({
         currentChatIdRef.current = lastChatId;
         setCurrentChatId(lastChatId);
         setActiveSidebarChatId(lastChatId);
-        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`).then(r => r.json()).then(chatData => {
+        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`).then(r => r.json()).then(async (chatData) => {
           if (chatData.ok && chatData.chat) {
             const agentSessions = chatData.chat.agentSessions || {};
             const isReviewChat = typeof lastChatId === 'string' && lastChatId.startsWith('comment-review:');
@@ -538,8 +582,12 @@ export function useChatRuntime({
             setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
             setChatName(chatData.chat.name || lastChatId);
             needsContextRestoreRef.current = true;
+            // Load workflow orchestrations BEFORE triggering session-resume:
+            // the resume effect pre-seeds sessionRunsRef from running nodes,
+            // and reconcileRunningWorkflowNodes uses sessionRunsRef to decide
+            // which nodes truly need awaiting-input recovery.
+            await hydrateOrchestrationsForChat(lastChatId);
             setLoadedChatIdForResume(lastChatId);
-            void hydrateOrchestrationsForChat(lastChatId);
             if (migration.changed) {
               void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
             }
@@ -571,7 +619,12 @@ export function useChatRuntime({
     const entries = Object.entries(sessions)
       .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
       .filter(([, sid]) => !!sid) as [string, string][];
-    if (entries.length === 0) return;
+    if (entries.length === 0) {
+      // No agent sessions to resume but persisted workflow nodes may still
+      // need awaiting-input recovery.
+      reconcileRunningWorkflowNodes(activeChatId);
+      return;
+    }
     void (async () => {
       try {
         const results = await Promise.allSettled(
@@ -594,6 +647,9 @@ export function useChatRuntime({
             addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
           }
         }
+        // After all resumes have either reattached live turns or shown them
+        // gone, decide which workflow 'running' nodes need awaiting-input.
+        reconcileRunningWorkflowNodes(activeChatId);
       } catch { /* ignore */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

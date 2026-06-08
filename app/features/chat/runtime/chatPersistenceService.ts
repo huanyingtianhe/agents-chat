@@ -28,6 +28,8 @@ export type PersistenceContext = {
   onCloseChatsPanel?: () => void;
   onCloseAgentsPanel?: () => void;
   inputHistoryRef?: MutableRefObject<Record<string, string[]>>;
+  prepareResume?: (chatId: string) => Promise<void> | void;
+  finalizeResume?: (chatId: string) => Promise<void> | void;
 };
 
 export function createPersistenceHandlers(ctx: PersistenceContext) {
@@ -219,6 +221,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
 
     const hasAnySessions = Object.values(agentSessions).some(s => !!lastSessionId(s));
     ctx.needsContextRestoreRef.current = true;
+    if (ctx.prepareResume) await ctx.prepareResume(chatId);
     if (hasAnySessions) {
       const sessionEntries = Object.entries(agentSessions)
         .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
@@ -248,6 +251,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         }
       }
     }
+    if (ctx.finalizeResume) await ctx.finalizeResume(chatId);
     ctx.onCloseChatsPanel?.();
     ctx.onCloseAgentsPanel?.();
   }

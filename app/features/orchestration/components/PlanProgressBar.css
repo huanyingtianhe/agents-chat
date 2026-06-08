@@ -22,32 +22,53 @@
   margin: 0 2px;
 }
 .planProgressNodes { display:flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.planProgressCount {
+  margin-left: 4px; padding: 1px 8px; border-radius: 999px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text-soft); font-size: 11px; font-weight: 500;
+}
 .planNode {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 10px; border-radius: 999px; font-size: 11px;
+  padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 11px;
   border: 1px solid var(--border); background: var(--input-bg);
   color: var(--text);
 }
-.planNodeIcon { font-weight: bold; font-size: 13px; line-height: 1; }
+.planNodeDot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); flex: none;
+}
+.planNodeId { font-weight: 500; }
+.planNodeStatus {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  opacity: 0.85;
+}
 .planNode-pending { color: var(--text-soft); }
-.planNode-pending .planNodeIcon { color: var(--muted); }
+.planNode-pending .planNodeDot { background: var(--muted); }
 .planNode-running {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-.planNode-running .planNodeIcon { color: var(--accent); }
+.planNode-running .planNodeDot {
+  background: var(--accent);
+  animation: planNodePulse 1.2s ease-in-out infinite;
+}
+@keyframes planNodePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
 .planNode-ok {
   color: var(--success, #4ade80);
   border-color: var(--success, #4ade80);
   background: color-mix(in srgb, var(--success, #4ade80) 12%, transparent);
 }
-.planNode-ok .planNodeIcon { color: var(--success, #4ade80); }
+.planNode-ok .planNodeDot { background: var(--success, #4ade80); }
 .planNode-failed {
   color: var(--danger);
   border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
-.planNode-failed .planNodeIcon { color: var(--danger); }
-.planNode-skipped { color: var(--muted); text-decoration: line-through; }
-.planNode-skipped .planNodeIcon { color: var(--muted); text-decoration: none; }
+.planNode-failed .planNodeDot { background: var(--danger); }
+.planNode-skipped { color: var(--muted); }
+.planNode-skipped .planNodeId { text-decoration: line-through; }
+.planNode-skipped .planNodeDot { background: var(--muted); opacity: 0.5; }

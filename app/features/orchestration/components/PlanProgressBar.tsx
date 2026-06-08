@@ -10,11 +10,11 @@ type Props = {
 };
 
 const STATUS_LABEL: Record<NodeStatus, string> = {
-  pending: '○',
-  running: '◐',
-  ok: '✓',
-  failed: '✗',
-  skipped: '–',
+  pending: 'pending',
+  running: 'running',
+  ok: 'done',
+  failed: 'failed',
+  skipped: 'skipped',
 };
 
 export function PlanProgressBar({ orchestration }: Props) {
@@ -24,6 +24,11 @@ export function PlanProgressBar({ orchestration }: Props) {
 
   const plan = orchestration.workflowPlan;
   const statuses = orchestration.nodeStatuses || {};
+  const total = plan.nodes.length;
+  const done = plan.nodes.filter((n) => {
+    const s = statuses[n.id];
+    return s === 'ok' || s === 'failed' || s === 'skipped';
+  }).length;
 
   async function saveAs() {
     const name = window.prompt('Save workflow as:', plan.name || 'my-workflow');
@@ -49,7 +54,7 @@ export function PlanProgressBar({ orchestration }: Props) {
   return (
     <div className="planProgressBar">
       <span className="planProgressTitle">
-        📋 <strong>{plan.name || 'plan'}</strong>
+        📋 <strong>{plan.name || 'plan'}</strong> <span className="planProgressCount">{done}/{total}</span>
       </span>
       <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
         💾 Save as…
@@ -60,9 +65,10 @@ export function PlanProgressBar({ orchestration }: Props) {
         {plan.nodes.map((n) => {
           const s = (statuses[n.id] || 'pending') as NodeStatus;
           return (
-            <span key={n.id} className={`planNode planNode-${s}`} title={`${n.id} (${n.agent}) — ${s}`}>
-              <span className="planNodeIcon">{STATUS_LABEL[s]}</span>
+            <span key={n.id} className={`planNode planNode-${s}`} title={`${n.id} (${n.agent}) — ${STATUS_LABEL[s]}`}>
+              <span className="planNodeDot" aria-hidden="true" />
               <span className="planNodeId">{n.id}</span>
+              <span className="planNodeStatus">{STATUS_LABEL[s]}</span>
             </span>
           );
         })}
@@ -74,10 +80,15 @@ export function PlanProgressBar({ orchestration }: Props) {
 export function selectActiveWorkflowOrchestration(
   orchestrationsRef: { current: Record<string, OrchestrationState> },
 ): OrchestrationState | null {
+  // Prefer an in-progress workflow; fall back to the most recent completed one
+  // so the final node statuses remain visible.
+  let lastCompleted: OrchestrationState | null = null;
   for (const o of Object.values(orchestrationsRef.current)) {
-    if (o.mode === 'workflow' && !o.summaryStarted) return o;
+    if (o.mode !== 'workflow' || !o.workflowPlan) continue;
+    if (!o.summaryStarted) return o;
+    lastCompleted = o;
   }
-  return null;
+  return lastCompleted;
 }
 // reference WorkflowPlan to keep the type import live for consumers
 export type { WorkflowPlan };

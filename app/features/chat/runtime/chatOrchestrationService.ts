@@ -79,7 +79,8 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       while (changed) {
         changed = false;
         for (const n of plan.nodes) {
-          if (statuses[n.id]) continue;
+          const cur = statuses[n.id];
+          if (cur && cur !== 'pending') continue;
           for (const d of n.dependsOn) {
             const ds = statuses[d];
             if (ds === 'failed' || ds === 'skipped') {
@@ -93,8 +94,11 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       ctx.notifyRunStateChanged();
 
       // Dispatch every ready (pending) node whose deps are all ok.
-      const ready = plan.nodes.filter((n) => !statuses[n.id]
-        && n.dependsOn.every((d) => statuses[d] === 'ok'));
+      const ready = plan.nodes.filter((n) => {
+        const s = statuses[n.id];
+        if (s && s !== 'pending') return false;
+        return n.dependsOn.every((d) => statuses[d] === 'ok');
+      });
       for (const n of ready) {
         statuses[n.id] = 'running';
         const upstream: Record<string, string> = {};

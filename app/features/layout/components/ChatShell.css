@@ -207,6 +207,17 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
 }
+.chatPageRoot .chatMessagesArea {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chatPageRoot .chatMessagesArea > .chatContainer {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .chatPageRoot .chatContainer {
   min-height: 0;
   overflow-y: auto;

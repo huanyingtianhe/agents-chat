@@ -92,7 +92,7 @@ export type ShareDialog = {
   copied?: boolean;
 };
 
-export type OrchestrationMode = 'discussion' | 'pipeline' | 'auto';
+export type OrchestrationMode = 'pipeline' | 'auto' | 'workflow';
 
 export type SessionRunContext = {
   agentId: string;
@@ -106,6 +106,7 @@ export type SessionRunContext = {
   relation?: string;
   ptyTurnId?: string;
   ptySendStarted?: boolean;
+  workflowNodeId?: string;
 };
 
 export type DispatchToAgentOptions = {
@@ -115,6 +116,7 @@ export type DispatchToAgentOptions = {
   chatId?: string;
   commentId?: string;
   attachments?: ChatAttachment[];
+  workflowNodeId?: string;
 };
 
 export type OrchestrationState = {
@@ -132,4 +134,8 @@ export type OrchestrationState = {
   sourceAgentIds?: string[];
   sourceMessage?: string;
   sourceAttachments?: ChatAttachment[];
+  /** Workflow-mode fields */
+  workflowPlan?: import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan;
+  nodeStatuses?: Record<string, import('@/lib/workflow/workflowTypes.mjs').NodeStatus>;
+  replanCount?: number;
 };

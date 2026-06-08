@@ -381,6 +381,7 @@
 
 .modelTargetPill {
   gap: 6px;
+  min-width: 120px;
 }
 
 .rememberedAgentPill {

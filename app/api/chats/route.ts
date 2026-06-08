@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat } from '@/lib/chatStore';
+import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -87,5 +87,6 @@ export async function DELETE(req: NextRequest) {
   if (!chatId) return NextResponse.json({ ok: false, error: 'missing_id' }, { status: 400 });
 
   await deleteChat(userId, chatId);
+  try { deleteOrchestrationsForChat(userId, chatId); } catch { /* ignore */ }
   return NextResponse.json({ ok: true });
 }

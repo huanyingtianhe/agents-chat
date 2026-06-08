@@ -9,6 +9,8 @@ import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
 import { createPersistenceHandlers } from './chatPersistenceService';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
+import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
+import { persistOrchestration, deletePersistedOrchestration, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type UseChatRuntimeParams = {
@@ -64,7 +66,9 @@ export function useChatRuntime({
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
-  const [discussionRounds, setDiscussionRounds] = useState(2);
+  const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan | null>(null);
+  const [dismissedFollowUpOrchId, setDismissedFollowUpOrchId] = useState<string | null>(null);
+  const [dismissedWorkflowBarOrchId, setDismissedWorkflowBarOrchId] = useState<string | null>(null);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -82,8 +86,6 @@ export function useChatRuntime({
   const needsContextRestoreRef = useRef(false);
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
-  const discussionRoundsRef = useRef(discussionRounds);
-  discussionRoundsRef.current = discussionRounds;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
 
   /* ── Cross-service callback refs ── */
@@ -128,8 +130,25 @@ export function useChatRuntime({
     setMessagesForChat(chatId, base.filter((m) => m.id !== id));
   }
 
+  // Debounced batch persistence of all orchestrations to SQLite. Each
+  // notifyRunStateChanged schedules a single POST per orchestration ~120ms
+  // later, coalescing rapid status flips while a workflow advances.
+  const orchPersistTimerRef = useRef<number | null>(null);
+  function scheduleOrchestrationPersist() {
+    if (orchPersistTimerRef.current != null) return;
+    orchPersistTimerRef.current = window.setTimeout(() => {
+      orchPersistTimerRef.current = null;
+      for (const o of Object.values(orchestrationsRef.current)) {
+        if (!o.sourceChatId) continue;
+        if (o.mode !== 'workflow') continue; // only workflows benefit from durable resume
+        persistOrchestration(o);
+      }
+    }, 120);
+  }
+
   function notifyRunStateChanged() {
     setRunVersion((v) => v + 1);
+    scheduleOrchestrationPersist();
   }
 
   /* ── ACP service ── */
@@ -145,7 +164,7 @@ export function useChatRuntime({
   /* ── Orchestration service ── */
   const orchHandlers = createOrchestrationHandlers({
     acp, orchestrationsRef, sessionRunsRef, agentsRef,
-    orchestrationModeRef, discussionRoundsRef, currentChatIdRef,
+    orchestrationModeRef, currentChatIdRef,
     dispatchToAgent: (agentId, content, orchestrationId, kind, options) =>
       dispatchToAgentRef.current(agentId, content, orchestrationId, kind, options),
     markUserMessageSendFailed,
@@ -170,6 +189,53 @@ export function useChatRuntime({
     onCloseChatsPanel: () => panelCallbacksRef.current.setShowChatsPanel?.(false),
     onCloseAgentsPanel: () => panelCallbacksRef.current.setShowAgentsPanel?.(false),
   });
+
+  /* ── Orchestration hydration ── */
+  async function hydrateOrchestrationsForChat(chatId: string) {
+    if (!chatId) return;
+    try {
+      const orchs = await loadPersistedOrchestrations(chatId);
+      for (const o of orchs) {
+        if (!o || !o.id) continue;
+        // On hydrate, any 'running' node was interrupted by reload — flip to
+        // 'failed' so cascade-skip / advance logic can finish or replan.
+        // Keep 'awaiting-input' as-is so the inline card shows again.
+        let touched = false;
+        if (o.nodeStatuses) {
+          for (const k of Object.keys(o.nodeStatuses)) {
+            if (o.nodeStatuses[k] === 'running') {
+              o.nodeStatuses[k] = 'failed';
+              o.results = o.results || {};
+              if (!o.results[k]) o.results[k] = '⚠️ Interrupted by page reload';
+              touched = true;
+            }
+          }
+        }
+        if (touched && o.workflowPlan) {
+          const st = o.nodeStatuses || {};
+          const allTerminal = o.workflowPlan.nodes.every((n) => {
+            const s = st[n.id];
+            return s === 'ok' || s === 'failed' || s === 'skipped';
+          });
+          o.summaryStarted = allTerminal;
+        }
+        orchestrationsRef.current[o.id] = o;
+      }
+      if (orchs.length > 0) {
+        setRunVersion((v) => v + 1);
+        for (const o of orchs) {
+          if (o.mode === 'workflow' && !o.summaryStarted) {
+            void orchHandlers.maybeAdvanceOrchestration(o.id);
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  const wrappedLoadChat = async (chatId: string) => {
+    await persistHandlers.loadChat(chatId);
+    await hydrateOrchestrationsForChat(chatId);
+  };
 
   /* ── Failed send helpers ── */
   function looksLikeAgentAuthError(error: string): boolean {
@@ -262,10 +328,112 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
-      await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
+      const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
+      const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
+      // If a LIVE workflow has awaiting nodes and the user's send targets any
+      // of those awaiting agents (whether by @-mention or by default route),
+      // resume the workflow node instead of spawning a fresh orchestration.
+      // Otherwise the dependent nodes stay blocked forever.
+      const liveOrch = followUp ? orchestrationsRef.current[followUp.orchestrationId] : undefined;
+      const liveWorkflowAvailable = !!(liveOrch && liveOrch.mode === 'workflow' && liveOrch.workflowPlan);
+      // If user typed no @-mention OR every @-mention overlaps with an
+      // awaiting agent, resume the workflow node(s). Only fall through to
+      // a brand-new orchestration when the user explicitly addresses an
+      // agent that is NOT awaiting (i.e. they really want a side conversation).
+      let resumeAgentIds: string[] = [];
+      if (followUp && liveWorkflowAvailable) {
+        if (explicitlyMentionedAgentIds.length === 0) {
+          resumeAgentIds = followUp.awaitingAgentIds.slice();
+        } else {
+          const overlap = explicitlyMentionedAgentIds.filter((a) => followUp.awaitingAgentIds.includes(a));
+          if (overlap.length === explicitlyMentionedAgentIds.length) resumeAgentIds = overlap;
+        }
+      }
+      if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
+        const plan = pendingWorkflowPlan;
+        setPendingWorkflowPlan(null);
+        setOrchestrationMode('auto');
+        setDismissedWorkflowBarOrchId(null);
+        await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
+          sourceUserMessageId: userMessageId, attachments: sendAttachments,
+        });
+      } else if (followUpActive && followUp && resumeAgentIds.length > 0) {
+        // Resume the workflow: dispatch back into the awaiting node(s) so the
+        // engine can advance dependents when the agent finishes.
+        const statuses = liveOrch!.nodeStatuses || (liveOrch!.nodeStatuses = {});
+        const awaitingNodes = liveOrch!.workflowPlan!.nodes.filter(
+          (n) => statuses[n.id] === 'awaiting-input' && resumeAgentIds.includes(n.agent),
+        );
+        for (const n of awaitingNodes) statuses[n.id] = 'running';
+        notifyRunStateChanged();
+        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+          n.agent, textForAgent, followUp.orchestrationId, 'worker',
+          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id, attachments: sendAttachments },
+        )));
+      } else if (followUpActive && followUp && explicitlyMentionedAgentIds.length === 0) {
+        // No live orchestration (e.g. history-derived follow-up). Plain
+        // dispatch to the asking agent(s); no scheduler, no DAG state.
+        setDismissedFollowUpOrchId(followUp.orchestrationId);
+        await Promise.all(followUp.awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+          agentId, textForAgent, `followup-${makeId()}`, 'worker',
+          { chatId: sendChatId, relation: 'Workflow follow-up', attachments: sendAttachments },
+        )));
+      } else {
+        if (orchestrationMode === 'workflow' && !pendingWorkflowPlan) {
+          setOrchestrationMode('auto');
+        }
+        if (followUpActive && followUp) setDismissedFollowUpOrchId(followUp.orchestrationId);
+        // C: if there is a COMPLETED workflow visible in this chat and the
+        // user is sending something unrelated (didn't take the resume path),
+        // hide it from the status bar so it doesn't linger as stale info.
+        for (const o of Object.values(orchestrationsRef.current)) {
+          if (o.mode === 'workflow' && o.workflowPlan && o.summaryStarted
+              && (!o.sourceChatId || o.sourceChatId === sendChatId)) {
+            setDismissedWorkflowBarOrchId(o.id);
+          }
+        }
+        await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
+      }
     } catch (err) {
       markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
     }
+  }
+
+  async function sendWorkflowFollowUpReply(text: string, awaitingAgentIds: string[], orchestrationId: string) {
+    const trimmed = (text || '').trim();
+    if (!trimmed || awaitingAgentIds.length === 0) return;
+    const sendChatId = currentChatIdRef.current;
+    if (!sendChatId) return;
+    addMessage({ type: 'user', content: trimmed }, sendChatId);
+    // Don't mark dismissed here: the awaiting nodes will flip to 'running'
+    // below and detection naturally returns null until/unless the same node
+    // asks another question — at which point we DO want the card to reappear.
+    // If the follow-up is anchored to a live workflow orchestration, route the
+    // reply back into the same node so the engine can resume: flip awaiting
+    // nodes to 'running' and re-dispatch with workflowNodeId so finalizeRun
+    // updates the right node and triggers maybeAdvanceOrchestration.
+    const orch = orchestrationsRef.current[orchestrationId];
+    if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
+      const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+      const awaitingNodes = orch.workflowPlan.nodes.filter(
+        (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
+      );
+      if (awaitingNodes.length > 0) {
+        for (const n of awaitingNodes) statuses[n.id] = 'running';
+        notifyRunStateChanged();
+        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+          n.agent, trimmed, orchestrationId, 'worker',
+          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
+        )));
+        return;
+      }
+    }
+    // Fallback (no live orchestration — e.g. msg- id from history scan):
+    // plain dispatch to the asking agent(s), no orchestration tracking.
+    await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+      agentId, trimmed, `followup-${makeId()}`, 'worker',
+      { chatId: sendChatId, relation: 'Workflow follow-up' },
+    )));
   }
 
   async function handleStop() {
@@ -278,15 +446,57 @@ export function useChatRuntime({
     for (const agentId of agentIds) {
       try { await acp({ action: 'interrupt', agentId, chatId: stopChatId }); } catch { /* ignore */ }
     }
+    // Track which orchestrations had nodes interrupted so we can finalize them.
+    const stoppedWorkflowOrchIds = new Set<string>();
     for (const [runKey, run] of Object.entries(activeRuns)) {
       updateMessage(run.pendingId, {
         content: run.currentText || '⏹ Stopped', pending: false,
         statusText: undefined, ptyPhase: undefined, userRequest: undefined,
       }, run.chatId);
+      // If this run was a workflow node, mark the node as failed so the bar
+      // shows a final state and dependents cascade-skip rather than hanging.
+      if (run.workflowNodeId) {
+        const orch = orchestrationsRef.current[run.orchestrationId];
+        if (orch && orch.mode === 'workflow') {
+          orch.nodeStatuses = orch.nodeStatuses || {};
+          orch.nodeStatuses[run.workflowNodeId] = 'failed';
+          orch.results[run.workflowNodeId] = run.currentText || '⏹ Stopped';
+          stoppedWorkflowOrchIds.add(run.orchestrationId);
+        }
+      }
       delete sessionRunsRef.current[runKey];
     }
+    // Drop only orchestrations that belong to this chat AND are not workflows
+    // we want to keep visible. Workflow orchestrations stay so the status bar
+    // can show the final (failed/skipped) state of all their nodes.
+    for (const [id, orch] of Object.entries(orchestrationsRef.current)) {
+      const inThisChat = !orch.sourceChatId || orch.sourceChatId === stopChatId;
+      if (!inThisChat) continue;
+      if (orch.mode === 'workflow' && orch.workflowPlan) {
+        // Cascade-skip any pending/running nodes whose deps just failed,
+        // and mark this orchestration as terminal so it's no longer "running".
+        const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const n of orch.workflowPlan.nodes) {
+            const cur = statuses[n.id];
+            if (cur && cur !== 'pending' && cur !== 'running' && cur !== 'awaiting-input') continue;
+            const blocked = n.dependsOn.some((d) => statuses[d] === 'failed' || statuses[d] === 'skipped');
+            if (blocked) { statuses[n.id] = 'skipped'; changed = true; }
+            else if (stoppedWorkflowOrchIds.has(orch.id) && (cur === 'running' || cur === 'awaiting-input')) {
+              statuses[n.id] = 'failed';
+              changed = true;
+            }
+          }
+        }
+        orch.summaryStarted = true;
+      } else {
+        delete orchestrationsRef.current[id];
+        deletePersistedOrchestration(id);
+      }
+    }
     notifyRunStateChanged();
-    orchestrationsRef.current = {};
     addMessage({ type: 'system', content: '⏹ Conversation stopped.' });
     void persistHandlers.saveCurrentChatToHistory();
   }
@@ -324,6 +534,7 @@ export function useChatRuntime({
             setChatName(chatData.chat.name || lastChatId);
             needsContextRestoreRef.current = true;
             setLoadedChatIdForResume(lastChatId);
+            void hydrateOrchestrationsForChat(lastChatId);
             if (migration.changed) {
               void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
             }
@@ -414,10 +625,14 @@ export function useChatRuntime({
     /* state */
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
-    orchestrationMode, discussionRounds,
+    orchestrationMode,
+    pendingWorkflowPlan,
     /* state setters exposed for page.tsx */
     setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId,
-    setShareDialog, setExpandedMessages, setOrchestrationMode, setDiscussionRounds,
+    setShareDialog, setExpandedMessages, setOrchestrationMode,
+    setPendingWorkflowPlan,
+    dismissedFollowUpOrchId, setDismissedFollowUpOrchId,
+    dismissedWorkflowBarOrchId, setDismissedWorkflowBarOrchId,
     /* refs */
     messagesRef, chatMessagesRef, currentChatIdRef, chatNameRef, sessionRunsRef,
     orchestrationsRef, currentAgentSessionsRef, needsContextRestoreRef,
@@ -436,8 +651,10 @@ export function useChatRuntime({
     maybeAdvanceOrchestration: orchHandlers.maybeAdvanceOrchestration,
     /* persistence handlers */
     ...persistHandlers,
+    loadChat: wrappedLoadChat,
     /* send/stop/answer */
     handleSend, handleStop, retryFailedSend, resendFailedUserMessage,
+    sendWorkflowFollowUpReply,
     answerAgentUserRequest, dismissAgentUserRequest,
   };
 }

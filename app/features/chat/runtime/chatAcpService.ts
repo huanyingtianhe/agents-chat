@@ -4,6 +4,7 @@ import type { ChatAttachment } from '../../composer/attachmentTypes';
 import type { AgentUserRequest, ChatMessage, ContentPart, OrchestrationState, SessionRunContext } from '../chatTypes';
 import { getAcpTurnProgressSignature } from '../chatHelpers';
 import { mapTurnPhase, makeId, PromptSendFailedError } from './chatRunLoop';
+import { looksLikeQuestion } from '../../orchestration/workflowFollowUp';
 
 export type FileCommentCallbacks = {
   extractFileComments: (text: string, agentId: string) => { cleanText: string; comments: any[] };
@@ -43,6 +44,16 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     const orchestration = ctx.orchestrationsRef.current[run.orchestrationId];
     if (orchestration && run.kind === 'worker') {
       orchestration.results[run.agentId] = run.currentText || '';
+      if (run.workflowNodeId) {
+        orchestration.results[run.workflowNodeId] = run.currentText || '';
+        if (!orchestration.nodeStatuses) orchestration.nodeStatuses = {};
+        const text = run.currentText || '';
+        let nextStatus: 'failed' | 'awaiting-input' | 'ok';
+        if (text.startsWith('⚠️')) nextStatus = 'failed';
+        else if (looksLikeQuestion(text)) nextStatus = 'awaiting-input';
+        else nextStatus = 'ok';
+        orchestration.nodeStatuses[run.workflowNodeId] = nextStatus;
+      }
     }
     delete ctx.sessionRunsRef.current[runKey];
     ctx.notifyRunStateChanged();
@@ -129,7 +140,7 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     content: string,
     orchestrationId: string,
     kind: 'worker' | 'summary' = 'worker',
-    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string; attachments?: ChatAttachment[] },
+    options?: { round?: number; relation?: string; summary?: boolean; chatId?: string; commentId?: string; attachments?: ChatAttachment[]; workflowNodeId?: string },
   ): Promise<string> {
     const dispatchChatId = options?.chatId || ctx.currentChatIdRef.current;
     const pendingId = `pending-${makeId()}`;
@@ -145,6 +156,7 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
       agentId, pendingId, orchestrationId, kind,
       currentText: '', chatId: dispatchChatId,
       commentId: options?.commentId, round: options?.round, relation: options?.relation,
+      workflowNodeId: options?.workflowNodeId,
     };
     ctx.notifyRunStateChanged();
     try {

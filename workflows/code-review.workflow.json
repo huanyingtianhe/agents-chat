@@ -1,0 +1,24 @@
+{
+  "name": "code-review",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "lint",
+      "agent": "copilot",
+      "instruction": "Lint the following and list issues:\n{{input}}",
+      "dependsOn": []
+    },
+    {
+      "id": "test",
+      "agent": "claude-code",
+      "instruction": "Run/analyze unit tests for:\n{{input}}",
+      "dependsOn": []
+    },
+    {
+      "id": "review",
+      "agent": "copilot",
+      "instruction": "Summarize a code review based on the following.\n\nLint findings:\n{{lint.output}}\n\nTest results:\n{{test.output}}",
+      "dependsOn": ["lint", "test"]
+    }
+  ]
+}

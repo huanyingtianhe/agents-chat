@@ -207,6 +207,78 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
 }
+.chatPageRoot .chatMessagesArea {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chatPageRoot .chatMessagesArea > .chatContainer {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.chatPageRoot .workflowFollowUpCard {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  color: var(--text);
+  font-size: 13px; line-height: 1.4;
+}
+.chatPageRoot .workflowFollowUpCardHeader {
+  display: flex; align-items: center; gap: 8px;
+}
+.chatPageRoot .workflowFollowUpCardIcon {
+  font-size: 14px; color: var(--accent);
+}
+.chatPageRoot .workflowFollowUpCardTitle {
+  flex: 1; font-weight: 600;
+}
+.chatPageRoot .workflowFollowUpCardDismiss {
+  appearance: none; background: transparent; border: none;
+  color: var(--text-soft); cursor: pointer;
+  padding: 2px 6px; border-radius: 6px; font-size: 14px; line-height: 1;
+}
+.chatPageRoot .workflowFollowUpCardDismiss:hover {
+  background: var(--input-bg); color: var(--text);
+}
+.chatPageRoot .workflowFollowUpCardHint {
+  color: var(--text-soft); font-size: 12px;
+}
+.chatPageRoot .workflowFollowUpCardInput {
+  width: 100%; min-height: 56px; resize: vertical;
+  padding: 8px 10px;
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  font: inherit;
+}
+.chatPageRoot .workflowFollowUpCardInput:focus {
+  outline: none; border-color: var(--accent);
+}
+.chatPageRoot .workflowFollowUpCardError {
+  color: #ff6b6b; font-size: 12px;
+}
+.chatPageRoot .workflowFollowUpCardActions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.chatPageRoot .workflowFollowUpCardSkip,
+.chatPageRoot .workflowFollowUpCardSend {
+  appearance: none; cursor: pointer;
+  padding: 6px 14px; border-radius: 8px;
+  font: inherit; font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--input-bg); color: var(--text);
+}
+.chatPageRoot .workflowFollowUpCardSend {
+  border-color: var(--accent); background: var(--accent); color: #fff;
+}
+.chatPageRoot .workflowFollowUpCardSend:disabled,
+.chatPageRoot .workflowFollowUpCardSkip:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
 .chatPageRoot .chatContainer {
   min-height: 0;
   overflow-y: auto;
@@ -507,6 +579,13 @@
   backdrop-filter: blur(18px);
 }
 .chatPageRoot .statusGroup { display: flex; align-items: center; gap: 8px; }
+.chatPageRoot .statusPlanSlot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+}
 .chatPageRoot .statusDot {
   width: 8px; height: 8px;
   border-radius: 999px;

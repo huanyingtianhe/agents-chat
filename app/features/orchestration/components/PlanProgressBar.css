@@ -1,0 +1,93 @@
+.planProgressBar {
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--panel-soft, var(--panel-bg)); font-size: 12px;
+  color: var(--text);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.planProgressTitle { color: var(--text-soft); white-space: nowrap; }
+.planProgressTitle strong { color: var(--text); }
+.planProgressSave {
+  background: transparent; border: 1px solid var(--border-strong, var(--border));
+  color: var(--text-soft); border-radius: 8px; padding: 3px 10px;
+  font-size: 11px; cursor: pointer; transition: all 160ms ease;
+  white-space: nowrap;
+}
+.planProgressSave:hover {
+  background: var(--accent-soft); color: var(--accent); border-color: var(--accent);
+}
+.planProgressSave:disabled { opacity: 0.5; cursor: not-allowed; }
+.planProgressMsg { color: var(--muted); font-size: 11px; }
+.planProgressSep {
+  width: 1px; align-self: stretch; background: var(--border);
+  margin: 0 2px;
+}
+.planProgressNodes { display:flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.planProgressBar-inline {
+  padding: 0; border-bottom: none; background: transparent;
+  font-size: 11px;
+}
+.planProgressBar-inline .planProgressTitle { font-size: 11px; }
+.planProgressBar-inline .planNode { padding: 2px 8px 2px 6px; font-size: 10px; }
+.planProgressBar-inline .planNodeStatus { font-size: 9px; }
+.planProgressBar-inline .planProgressSave { padding: 2px 8px; font-size: 10px; }
+.planProgressBar-inline .planProgressSep { margin: 0; }
+.planProgressBar-inline .planNodeDot { width: 7px; height: 7px; }
+.planProgressCount {
+  margin-left: 4px; padding: 1px 8px; border-radius: 999px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text-soft); font-size: 11px; font-weight: 500;
+}
+.planNode {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 11px;
+  border: 1px solid var(--border); background: var(--input-bg);
+  color: var(--text);
+}
+.planNodeDot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); flex: none;
+}
+.planNodeId { font-weight: 500; }
+.planNodeStatus {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+.planNode-pending { color: var(--text-soft); }
+.planNode-pending .planNodeDot { background: var(--muted); }
+.planNode-running {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.planNode-running .planNodeDot {
+  background: var(--accent);
+  animation: planNodePulse 1.2s ease-in-out infinite;
+}
+@keyframes planNodePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+.planNode-ok {
+  color: var(--success, #4ade80);
+  border-color: var(--success, #4ade80);
+  background: color-mix(in srgb, var(--success, #4ade80) 12%, transparent);
+}
+.planNode-ok .planNodeDot { background: var(--success, #4ade80); }
+.planNode-failed {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.planNode-failed .planNodeDot { background: var(--danger); }
+.planNode-skipped { color: var(--muted); }
+.planNode-skipped .planNodeId { text-decoration: line-through; }
+.planNode-skipped .planNodeDot { background: var(--muted); opacity: 0.5; }
+.planNode-awaiting-input {
+  color: var(--warning, #f59e0b);
+  border-color: var(--warning, #f59e0b);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
+}
+.planNode-awaiting-input .planNodeDot {
+  background: var(--warning, #f59e0b);
+  animation: planNodePulse 1.6s ease-in-out infinite;
+}

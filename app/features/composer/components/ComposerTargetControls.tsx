@@ -9,7 +9,8 @@ type ComposerTargetControlsProps = {
   mentionedAgentIds: string[];
   orchestrationEnabled: boolean;
   orchestrationMode: OrchestrationMode;
-  discussionRounds: number;
+  pendingWorkflowName?: string | null;
+  onOpenWorkflowPicker?: () => void;
   effectiveComposerAgentId: string | null;
   rememberedComposerAgentId: string | null;
   currentChatId: string;
@@ -21,15 +22,15 @@ type ComposerTargetControlsProps = {
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
   clearLastUsedAgent: () => void;
   setOrchestrationMode: (mode: OrchestrationMode) => void;
-  setDiscussionRounds: (rounds: number) => void;
 };
 
 export function ComposerTargetControls({
-  mentionedAgentIds, orchestrationEnabled, orchestrationMode, discussionRounds,
+  mentionedAgentIds, orchestrationEnabled, orchestrationMode,
+  pendingWorkflowName, onOpenWorkflowPicker,
   effectiveComposerAgentId, rememberedComposerAgentId, currentChatId,
   getAgentModels, getSelectedModelIdForAgent, openModelMenuAgentId, setOpenModelMenuAgentId,
   modelMenuRefs, setSelectedModelForAgent, clearLastUsedAgent,
-  setOrchestrationMode, setDiscussionRounds,
+  setOrchestrationMode,
 }: ComposerTargetControlsProps) {
   const modelSelect = (agentId: string) => (
     <AgentModelSelect
@@ -43,6 +44,17 @@ export function ComposerTargetControls({
     />
   );
 
+  const workflowPill = onOpenWorkflowPicker ? (
+    <button
+      type="button"
+      className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
+      onClick={onOpenWorkflowPicker}
+      title="Workflow: pick a saved workflow or paste a JSON DAG to run"
+    >
+      📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
+    </button>
+  ) : null;
+
   if (mentionedAgentIds.length > 0) {
     return (
       <div className="targetPills">
@@ -55,19 +67,16 @@ export function ComposerTargetControls({
           <>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'auto' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('auto')} title="Auto: a scheduler decides which agent to call next based on results">🧠 Auto</button>
             <button type="button" className={`targetPill orchPill ${orchestrationMode === 'pipeline' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('pipeline')} title="Pipeline: agents run sequentially, each receives the previous agent's output">🔀 Pipeline</button>
-            <button type="button" className={`targetPill orchPill ${orchestrationMode === 'discussion' ? 'orchPillActive' : ''}`} onClick={() => setOrchestrationMode('discussion')} title="Discussion: agents run in parallel, then a summary is generated">💬 Discussion</button>
-            {orchestrationMode === 'discussion' && (
-              <select className="orchRoundsSelect" value={discussionRounds} onChange={(e) => setDiscussionRounds(Number(e.target.value))} title="Number of discussion rounds">
-                {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} {n === 1 ? 'round' : 'rounds'}</option>)}
-              </select>
-            )}
           </>
         )}
+        {workflowPill}
       </div>
     );
   }
 
-  if (!effectiveComposerAgentId) return null;
+  if (!effectiveComposerAgentId) {
+    return workflowPill ? <div className="targetPills">{workflowPill}</div> : null;
+  }
   return (
     <div className="targetPills">
       <span className="targetPill rememberedAgentPill modelTargetPill">
@@ -82,6 +91,7 @@ export function ComposerTargetControls({
           />
         ) : null}
       </span>
+      {workflowPill}
     </div>
   );
 }

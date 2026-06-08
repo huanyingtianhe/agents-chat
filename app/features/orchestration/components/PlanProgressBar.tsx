@@ -7,6 +7,7 @@ import './PlanProgressBar.css';
 
 type Props = {
   orchestration: OrchestrationState | null;
+  variant?: 'bar' | 'inline';
 };
 
 const STATUS_LABEL: Record<NodeStatus, string> = {
@@ -17,7 +18,7 @@ const STATUS_LABEL: Record<NodeStatus, string> = {
   skipped: 'skipped',
 };
 
-export function PlanProgressBar({ orchestration }: Props) {
+export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   if (!orchestration || orchestration.mode !== 'workflow' || !orchestration.workflowPlan) return null;
@@ -52,7 +53,7 @@ export function PlanProgressBar({ orchestration }: Props) {
   }
 
   return (
-    <div className="planProgressBar">
+    <div className={variant === 'inline' ? 'planProgressBar planProgressBar-inline' : 'planProgressBar'}>
       <span className="planProgressTitle">
         📋 <strong>{plan.name || 'plan'}</strong> <span className="planProgressCount">{done}/{total}</span>
       </span>

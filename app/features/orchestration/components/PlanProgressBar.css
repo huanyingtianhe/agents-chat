@@ -22,6 +22,16 @@
   margin: 0 2px;
 }
 .planProgressNodes { display:flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.planProgressBar-inline {
+  padding: 0; border-bottom: none; background: transparent;
+  font-size: 11px;
+}
+.planProgressBar-inline .planProgressTitle { font-size: 11px; }
+.planProgressBar-inline .planNode { padding: 2px 8px 2px 6px; font-size: 10px; }
+.planProgressBar-inline .planNodeStatus { font-size: 9px; }
+.planProgressBar-inline .planProgressSave { padding: 2px 8px; font-size: 10px; }
+.planProgressBar-inline .planProgressSep { margin: 0; }
+.planProgressBar-inline .planNodeDot { width: 7px; height: 7px; }
 .planProgressCount {
   margin-left: 4px; padding: 1px 8px; border-radius: 999px;
   background: var(--input-bg); border: 1px solid var(--border);

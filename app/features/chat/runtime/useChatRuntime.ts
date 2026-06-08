@@ -10,6 +10,7 @@ import { createOrchestrationHandlers } from './chatOrchestrationService';
 import { createPersistenceHandlers } from './chatPersistenceService';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
+import { persistOrchestration, deletePersistedOrchestration, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type UseChatRuntimeParams = {
@@ -129,8 +130,25 @@ export function useChatRuntime({
     setMessagesForChat(chatId, base.filter((m) => m.id !== id));
   }
 
+  // Debounced batch persistence of all orchestrations to SQLite. Each
+  // notifyRunStateChanged schedules a single POST per orchestration ~120ms
+  // later, coalescing rapid status flips while a workflow advances.
+  const orchPersistTimerRef = useRef<number | null>(null);
+  function scheduleOrchestrationPersist() {
+    if (orchPersistTimerRef.current != null) return;
+    orchPersistTimerRef.current = window.setTimeout(() => {
+      orchPersistTimerRef.current = null;
+      for (const o of Object.values(orchestrationsRef.current)) {
+        if (!o.sourceChatId) continue;
+        if (o.mode !== 'workflow') continue; // only workflows benefit from durable resume
+        persistOrchestration(o);
+      }
+    }, 120);
+  }
+
   function notifyRunStateChanged() {
     setRunVersion((v) => v + 1);
+    scheduleOrchestrationPersist();
   }
 
   /* ── ACP service ── */
@@ -171,6 +189,53 @@ export function useChatRuntime({
     onCloseChatsPanel: () => panelCallbacksRef.current.setShowChatsPanel?.(false),
     onCloseAgentsPanel: () => panelCallbacksRef.current.setShowAgentsPanel?.(false),
   });
+
+  /* ── Orchestration hydration ── */
+  async function hydrateOrchestrationsForChat(chatId: string) {
+    if (!chatId) return;
+    try {
+      const orchs = await loadPersistedOrchestrations(chatId);
+      for (const o of orchs) {
+        if (!o || !o.id) continue;
+        // On hydrate, any 'running' node was interrupted by reload — flip to
+        // 'failed' so cascade-skip / advance logic can finish or replan.
+        // Keep 'awaiting-input' as-is so the inline card shows again.
+        let touched = false;
+        if (o.nodeStatuses) {
+          for (const k of Object.keys(o.nodeStatuses)) {
+            if (o.nodeStatuses[k] === 'running') {
+              o.nodeStatuses[k] = 'failed';
+              o.results = o.results || {};
+              if (!o.results[k]) o.results[k] = '⚠️ Interrupted by page reload';
+              touched = true;
+            }
+          }
+        }
+        if (touched && o.workflowPlan) {
+          const st = o.nodeStatuses || {};
+          const allTerminal = o.workflowPlan.nodes.every((n) => {
+            const s = st[n.id];
+            return s === 'ok' || s === 'failed' || s === 'skipped';
+          });
+          o.summaryStarted = allTerminal;
+        }
+        orchestrationsRef.current[o.id] = o;
+      }
+      if (orchs.length > 0) {
+        setRunVersion((v) => v + 1);
+        for (const o of orchs) {
+          if (o.mode === 'workflow' && !o.summaryStarted) {
+            void orchHandlers.maybeAdvanceOrchestration(o.id);
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  const wrappedLoadChat = async (chatId: string) => {
+    await persistHandlers.loadChat(chatId);
+    await hydrateOrchestrationsForChat(chatId);
+  };
 
   /* ── Failed send helpers ── */
   function looksLikeAgentAuthError(error: string): boolean {
@@ -428,6 +493,7 @@ export function useChatRuntime({
         orch.summaryStarted = true;
       } else {
         delete orchestrationsRef.current[id];
+        deletePersistedOrchestration(id);
       }
     }
     notifyRunStateChanged();
@@ -468,6 +534,7 @@ export function useChatRuntime({
             setChatName(chatData.chat.name || lastChatId);
             needsContextRestoreRef.current = true;
             setLoadedChatIdForResume(lastChatId);
+            void hydrateOrchestrationsForChat(lastChatId);
             if (migration.changed) {
               void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
             }
@@ -584,6 +651,7 @@ export function useChatRuntime({
     maybeAdvanceOrchestration: orchHandlers.maybeAdvanceOrchestration,
     /* persistence handlers */
     ...persistHandlers,
+    loadChat: wrappedLoadChat,
     /* send/stop/answer */
     handleSend, handleStop, retryFailedSend, resendFailedUserMessage,
     sendWorkflowFollowUpReply,

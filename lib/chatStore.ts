@@ -184,6 +184,16 @@ export function getDb(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_user_workflows_user_updated ON user_workflows(user_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS orchestrations (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      state_json  TEXT NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orchestrations_user_chat ON orchestrations(user_id, chat_id);
   `);
 
   // Migration: add agent_id column to chats
@@ -388,6 +398,56 @@ export async function listFileComments(agentId: string, filePath: string): Promi
       createdAt: rp.created_at,
   }))));
 }
+
+/* ─────────── Orchestrations CRUD ─────────── */
+
+export type StoredOrchestration = {
+  id: string;
+  chatId: string;
+  state: unknown; // serialized OrchestrationState
+  updatedAt: number;
+};
+
+export async function upsertOrchestration(
+  userId: string, chatId: string, id: string, state: unknown,
+): Promise<void> {
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO orchestrations (id, user_id, chat_id, state_json, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      state_json = excluded.state_json,
+      updated_at = excluded.updated_at
+  `).run(id, userId, chatId, JSON.stringify(state), now);
+}
+
+export async function listOrchestrationsForChat(
+  userId: string, chatId: string,
+): Promise<StoredOrchestration[]> {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT id, chat_id, state_json, updated_at FROM orchestrations WHERE user_id = ? AND chat_id = ? ORDER BY updated_at ASC',
+  ).all(userId, chatId) as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    chatId: r.chat_id,
+    state: JSON.parse(r.state_json),
+    updatedAt: r.updated_at,
+  }));
+}
+
+export async function deleteOrchestration(userId: string, id: string): Promise<void> {
+  const db = getDb();
+  db.prepare('DELETE FROM orchestrations WHERE user_id = ? AND id = ?').run(userId, id);
+}
+
+export async function deleteOrchestrationsForChat(userId: string, chatId: string): Promise<void> {
+  const db = getDb();
+  db.prepare('DELETE FROM orchestrations WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+}
+
+/* ─────────── File comments ─────────── */
 
 /** Create a new file comment. Returns the created comment ID. */
 export async function createFileComment(comment: {

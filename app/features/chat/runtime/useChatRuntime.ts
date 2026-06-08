@@ -299,7 +299,31 @@ export function useChatRuntime({
     const sendChatId = currentChatIdRef.current;
     if (!sendChatId) return;
     addMessage({ type: 'user', content: trimmed }, sendChatId);
-    setDismissedFollowUpOrchId(orchestrationId);
+    // Don't mark dismissed here: the awaiting nodes will flip to 'running'
+    // below and detection naturally returns null until/unless the same node
+    // asks another question — at which point we DO want the card to reappear.
+    // If the follow-up is anchored to a live workflow orchestration, route the
+    // reply back into the same node so the engine can resume: flip awaiting
+    // nodes to 'running' and re-dispatch with workflowNodeId so finalizeRun
+    // updates the right node and triggers maybeAdvanceOrchestration.
+    const orch = orchestrationsRef.current[orchestrationId];
+    if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
+      const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+      const awaitingNodes = orch.workflowPlan.nodes.filter(
+        (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
+      );
+      if (awaitingNodes.length > 0) {
+        for (const n of awaitingNodes) statuses[n.id] = 'running';
+        notifyRunStateChanged();
+        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+          n.agent, trimmed, orchestrationId, 'worker',
+          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
+        )));
+        return;
+      }
+    }
+    // Fallback (no live orchestration — e.g. msg- id from history scan):
+    // plain dispatch to the asking agent(s), no orchestration tracking.
     await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
       agentId, trimmed, `followup-${makeId()}`, 'worker',
       { chatId: sendChatId, relation: 'Workflow follow-up' },

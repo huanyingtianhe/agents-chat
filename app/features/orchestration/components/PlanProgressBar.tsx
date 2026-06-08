@@ -13,6 +13,7 @@ type Props = {
 const STATUS_LABEL: Record<NodeStatus, string> = {
   pending: 'pending',
   running: 'running',
+  'awaiting-input': 'waiting',
   ok: 'done',
   failed: 'failed',
   skipped: 'skipped',

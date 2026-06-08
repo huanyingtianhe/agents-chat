@@ -4,6 +4,7 @@ import type { ChatAttachment } from '../../composer/attachmentTypes';
 import type { AgentUserRequest, ChatMessage, ContentPart, OrchestrationState, SessionRunContext } from '../chatTypes';
 import { getAcpTurnProgressSignature } from '../chatHelpers';
 import { mapTurnPhase, makeId, PromptSendFailedError } from './chatRunLoop';
+import { looksLikeQuestion } from '../../orchestration/workflowFollowUp';
 
 export type FileCommentCallbacks = {
   extractFileComments: (text: string, agentId: string) => { cleanText: string; comments: any[] };
@@ -47,7 +48,11 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
         orchestration.results[run.workflowNodeId] = run.currentText || '';
         if (!orchestration.nodeStatuses) orchestration.nodeStatuses = {};
         const text = run.currentText || '';
-        orchestration.nodeStatuses[run.workflowNodeId] = text.startsWith('⚠️') ? 'failed' : 'ok';
+        let nextStatus: 'failed' | 'awaiting-input' | 'ok';
+        if (text.startsWith('⚠️')) nextStatus = 'failed';
+        else if (looksLikeQuestion(text)) nextStatus = 'awaiting-input';
+        else nextStatus = 'ok';
+        orchestration.nodeStatuses[run.workflowNodeId] = nextStatus;
       }
     }
     delete ctx.sessionRunsRef.current[runKey];

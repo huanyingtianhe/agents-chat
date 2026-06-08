@@ -9,6 +9,7 @@ import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
 import { createPersistenceHandlers } from './chatPersistenceService';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
+import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type UseChatRuntimeParams = {
@@ -65,6 +66,7 @@ export function useChatRuntime({
   const [loadedChatIdForResume, setLoadedChatIdForResume] = useState<string | null>(null);
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('auto');
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan | null>(null);
+  const [dismissedFollowUpOrchId, setDismissedFollowUpOrchId] = useState<string | null>(null);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -260,6 +262,8 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
+      const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId);
+      const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
       if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
         const plan = pendingWorkflowPlan;
         setPendingWorkflowPlan(null);
@@ -267,10 +271,21 @@ export function useChatRuntime({
         await orchHandlers.runWorkflowOrchestration(orchestrationId, plan, textForAgent, sendChatId, {
           sourceUserMessageId: userMessageId, attachments: sendAttachments,
         });
+      } else if (followUpActive && followUp && explicitlyMentionedAgentIds.length === 0) {
+        // Continuation reply: one or more workflow nodes ended with a question
+        // and the user typed a reply with no explicit @-mentions. Route the
+        // reply only to the agents that asked, in parallel — do NOT spawn a
+        // new orchestration / scheduler plan.
+        setDismissedFollowUpOrchId(followUp.orchestrationId);
+        await Promise.all(followUp.awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+          agentId, textForAgent, `followup-${makeId()}`, 'worker',
+          { chatId: sendChatId, relation: 'Workflow follow-up', attachments: sendAttachments },
+        )));
       } else {
         if (orchestrationMode === 'workflow' && !pendingWorkflowPlan) {
           setOrchestrationMode('auto');
         }
+        if (followUpActive && followUp) setDismissedFollowUpOrchId(followUp.orchestrationId);
         await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
       }
     } catch (err) {
@@ -430,6 +445,7 @@ export function useChatRuntime({
     setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId,
     setShareDialog, setExpandedMessages, setOrchestrationMode,
     setPendingWorkflowPlan,
+    dismissedFollowUpOrchId, setDismissedFollowUpOrchId,
     /* refs */
     messagesRef, chatMessagesRef, currentChatIdRef, chatNameRef, sessionRunsRef,
     orchestrationsRef, currentAgentSessionsRef, needsContextRestoreRef,

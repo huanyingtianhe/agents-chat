@@ -218,6 +218,29 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+.chatPageRoot .composerWrap {
+  display: flex; flex-direction: column; min-height: 0;
+}
+.chatPageRoot .workflowFollowUpHint {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 14px; margin: 0 24px 6px;
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: 10px; color: var(--text);
+  font-size: 12px; line-height: 1.4;
+}
+.chatPageRoot .workflowFollowUpHintLabel {
+  font-weight: 600; color: var(--accent);
+}
+.chatPageRoot .workflowFollowUpHint code {
+  background: var(--input-bg); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 6px; font-size: 11px;
+}
+.chatPageRoot .workflowFollowUpHintDismiss {
+  margin-left: auto; background: transparent; border: none;
+  color: var(--text-soft); cursor: pointer; font-size: 13px;
+  padding: 0 4px; line-height: 1;
+}
+.chatPageRoot .workflowFollowUpHintDismiss:hover { color: var(--text); }
 .chatPageRoot .chatContainer {
   min-height: 0;
   overflow-y: auto;

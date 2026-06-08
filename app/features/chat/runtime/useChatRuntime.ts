@@ -293,6 +293,19 @@ export function useChatRuntime({
     }
   }
 
+  async function sendWorkflowFollowUpReply(text: string, awaitingAgentIds: string[], orchestrationId: string) {
+    const trimmed = (text || '').trim();
+    if (!trimmed || awaitingAgentIds.length === 0) return;
+    const sendChatId = currentChatIdRef.current;
+    if (!sendChatId) return;
+    addMessage({ type: 'user', content: trimmed }, sendChatId);
+    setDismissedFollowUpOrchId(orchestrationId);
+    await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+      agentId, trimmed, `followup-${makeId()}`, 'worker',
+      { chatId: sendChatId, relation: 'Workflow follow-up' },
+    )));
+  }
+
   async function handleStop() {
     const stopChatId = currentChatIdRef.current;
     const activeRuns = Object.fromEntries(
@@ -466,6 +479,7 @@ export function useChatRuntime({
     ...persistHandlers,
     /* send/stop/answer */
     handleSend, handleStop, retryFailedSend, resendFailedUserMessage,
+    sendWorkflowFollowUpReply,
     answerAgentUserRequest, dismissAgentUserRequest,
   };
 }

@@ -180,6 +180,14 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
         ctx.notifyRunStateChanged();
         return;
       }
+      const usedAgents = new Set(parsed.plan.nodes.map((n: { agent: string }) => n.agent));
+      const missing = state.agentIds.filter((id) => !usedAgents.has(id));
+      if (missing.length > 0) {
+        ctx.addMessage({
+          type: 'system',
+          content: `⚠️ Auto mode: scheduler's plan did not include mentioned agent(s): ${missing.join(', ')}. Running the plan as-is, but you may want to retry or use Workflow mode for full control.`,
+        }, orchestrationChatId);
+      }
       // Transition to workflow mode and execute via the DAG engine.
       const plan = parsed.plan;
       const statuses: Record<string, NodeStatus> = {};
@@ -207,8 +215,10 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       '',
       'IMPORTANT: DO NOT use any tools. DO NOT read files. DO NOT run commands. DO NOT explore the codebase.',
       'Just analyze the user request and return the JSON plan.',
-      'Respect explicit agent mentions, role assignments, and ordering in the original user message.',
-      'If the user assigns separate agents to test/review vs code/fix, keep those as separate nodes.',
+      'You MUST include EVERY agent listed above as the `agent` of at least one node — the user explicitly @mentioned all of them and expects each to contribute. Do not drop or merge agents.',
+      'Respect explicit role assignments and ordering in the original user message.',
+      'If the user assigns separate agents to test/review vs code/fix, keep those as separate nodes with the right `dependsOn` so dependent nodes can reference {{<id>.output}}.',
+      'When two agents can work independently on the same input, give them dependsOn: [] so they run in parallel.',
     ].join('\n');
     await ctx.dispatchToAgent(schedulerAgentId, planPrompt, orchestrationId, 'worker', {
       chatId, round: 0, relation: 'Auto: planning workflow',

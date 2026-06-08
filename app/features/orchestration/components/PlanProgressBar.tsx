@@ -55,7 +55,7 @@ export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
   return (
     <div className={variant === 'inline' ? 'planProgressBar planProgressBar-inline' : 'planProgressBar'}>
       <span className="planProgressTitle">
-        📋 <strong>{plan.name || 'plan'}</strong> <span className="planProgressCount">{done}/{total}</span>
+        📋 Workflow{plan.name && plan.name !== 'plan' ? <>: <strong>{plan.name}</strong></> : null} <span className="planProgressCount">{done}/{total}</span>
       </span>
       <button type="button" className="planProgressSave" onClick={saveAs} disabled={saving} title="Save this plan as a workflow">
         💾 Save as…

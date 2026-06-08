@@ -269,10 +269,20 @@ export function useChatRuntime({
       // resume the workflow node instead of spawning a fresh orchestration.
       // Otherwise the dependent nodes stay blocked forever.
       const liveOrch = followUp ? orchestrationsRef.current[followUp.orchestrationId] : undefined;
-      const intendedAgentIds = explicitlyMentionedAgentIds.length > 0 ? explicitlyMentionedAgentIds : agentIds;
-      const resumeAgentIds = followUp && liveOrch && liveOrch.mode === 'workflow'
-        ? followUp.awaitingAgentIds.filter((a) => intendedAgentIds.includes(a))
-        : [];
+      const liveWorkflowAvailable = !!(liveOrch && liveOrch.mode === 'workflow' && liveOrch.workflowPlan);
+      // If user typed no @-mention OR every @-mention overlaps with an
+      // awaiting agent, resume the workflow node(s). Only fall through to
+      // a brand-new orchestration when the user explicitly addresses an
+      // agent that is NOT awaiting (i.e. they really want a side conversation).
+      let resumeAgentIds: string[] = [];
+      if (followUp && liveWorkflowAvailable) {
+        if (explicitlyMentionedAgentIds.length === 0) {
+          resumeAgentIds = followUp.awaitingAgentIds.slice();
+        } else {
+          const overlap = explicitlyMentionedAgentIds.filter((a) => followUp.awaitingAgentIds.includes(a));
+          if (overlap.length === explicitlyMentionedAgentIds.length) resumeAgentIds = overlap;
+        }
+      }
       if (pendingWorkflowPlan && orchestrationMode === 'workflow') {
         const plan = pendingWorkflowPlan;
         setPendingWorkflowPlan(null);

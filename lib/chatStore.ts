@@ -185,15 +185,31 @@ export function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_user_workflows_user_updated ON user_workflows(user_id, updated_at DESC);
 
+    DROP TABLE IF EXISTS orchestrations;
+
     CREATE TABLE IF NOT EXISTS orchestrations (
-      id          TEXT PRIMARY KEY,
-      user_id     TEXT NOT NULL,
-      chat_id     TEXT NOT NULL,
-      state_json  TEXT NOT NULL,
-      updated_at  INTEGER NOT NULL
+      id              TEXT PRIMARY KEY,
+      user_id         TEXT NOT NULL,
+      chat_id         TEXT NOT NULL,
+      mode            TEXT NOT NULL,
+      plan_json       TEXT NOT NULL,
+      summary_started INTEGER NOT NULL DEFAULT 0,
+      updated_at      INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_orchestrations_user_chat ON orchestrations(user_id, chat_id);
+
+    CREATE TABLE IF NOT EXISTS orchestration_nodes (
+      orchestration_id TEXT NOT NULL,
+      node_id          TEXT NOT NULL,
+      status           TEXT NOT NULL,
+      result           TEXT,
+      updated_at       INTEGER NOT NULL,
+      PRIMARY KEY (orchestration_id, node_id),
+      FOREIGN KEY (orchestration_id) REFERENCES orchestrations(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orchestration_nodes_orch ON orchestration_nodes(orchestration_id);
   `);
 
   // Migration: add agent_id column to chats
@@ -401,39 +417,114 @@ export async function listFileComments(agentId: string, filePath: string): Promi
 
 /* ─────────── Orchestrations CRUD ─────────── */
 
-export type StoredOrchestration = {
-  id: string;
-  chatId: string;
-  state: unknown; // serialized OrchestrationState
+export type StoredOrchestrationNode = {
+  nodeId: string;
+  status: string;
+  result: string | null;
   updatedAt: number;
 };
 
-export async function upsertOrchestration(
-  userId: string, chatId: string, id: string, state: unknown,
+export type StoredOrchestration = {
+  id: string;
+  chatId: string;
+  mode: string;
+  plan: unknown;            // workflowPlan + immutable metadata (sourceChatId, etc.)
+  summaryStarted: boolean;
+  updatedAt: number;
+  nodes: StoredOrchestrationNode[];
+};
+
+/** UPSERT the parent orchestration row. Does NOT touch node rows. */
+export async function upsertOrchestrationParent(
+  userId: string,
+  chatId: string,
+  id: string,
+  mode: string,
+  plan: unknown,
+  summaryStarted: boolean,
 ): Promise<void> {
   const db = getDb();
   const now = Date.now();
   db.prepare(`
-    INSERT INTO orchestrations (id, user_id, chat_id, state_json, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO orchestrations (id, user_id, chat_id, mode, plan_json, summary_started, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      state_json = excluded.state_json,
+      chat_id         = excluded.chat_id,
+      mode            = excluded.mode,
+      plan_json       = excluded.plan_json,
+      summary_started = excluded.summary_started,
+      updated_at      = excluded.updated_at
+  `).run(id, userId, chatId, mode, JSON.stringify(plan), summaryStarted ? 1 : 0, now);
+}
+
+/**
+ * UPSERT a single node row. Returns false if the parent orchestration
+ * does not exist for this user (caller should PUT the parent first).
+ */
+export async function upsertOrchestrationNode(
+  userId: string,
+  orchestrationId: string,
+  nodeId: string,
+  status: string,
+  result: string | null,
+): Promise<boolean> {
+  const db = getDb();
+  const parent = db.prepare(
+    'SELECT 1 FROM orchestrations WHERE id = ? AND user_id = ?',
+  ).get(orchestrationId, userId);
+  if (!parent) return false;
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO orchestration_nodes (orchestration_id, node_id, status, result, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(orchestration_id, node_id) DO UPDATE SET
+      status     = excluded.status,
+      result     = excluded.result,
       updated_at = excluded.updated_at
-  `).run(id, userId, chatId, JSON.stringify(state), now);
+  `).run(orchestrationId, nodeId, status, result, now);
+  return true;
 }
 
 export async function listOrchestrationsForChat(
   userId: string, chatId: string,
 ): Promise<StoredOrchestration[]> {
   const db = getDb();
-  const rows = db.prepare(
-    'SELECT id, chat_id, state_json, updated_at FROM orchestrations WHERE user_id = ? AND chat_id = ? ORDER BY updated_at ASC',
-  ).all(userId, chatId) as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    chatId: r.chat_id,
-    state: JSON.parse(r.state_json),
-    updatedAt: r.updated_at,
+  const parents = db.prepare(`
+    SELECT id, chat_id, mode, plan_json, summary_started, updated_at
+    FROM orchestrations
+    WHERE user_id = ? AND chat_id = ?
+    ORDER BY updated_at ASC
+  `).all(userId, chatId) as any[];
+  if (parents.length === 0) return [];
+
+  const ids = parents.map((p) => p.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const nodeRows = db.prepare(`
+    SELECT orchestration_id, node_id, status, result, updated_at
+    FROM orchestration_nodes
+    WHERE orchestration_id IN (${placeholders})
+  `).all(...ids) as any[];
+
+  const nodesByOrch = new Map<string, StoredOrchestrationNode[]>();
+  for (const r of nodeRows) {
+    const arr = nodesByOrch.get(r.orchestration_id) ?? [];
+    arr.push({
+      nodeId: r.node_id,
+      status: r.status,
+      result: r.result,
+      updatedAt: r.updated_at,
+    });
+    nodesByOrch.set(r.orchestration_id, arr);
+  }
+
+  return parents.map((p) => ({
+    id: p.id,
+    chatId: p.chat_id,
+    mode: p.mode,
+    plan: JSON.parse(p.plan_json),
+    summaryStarted: !!p.summary_started,
+    updatedAt: p.updated_at,
+    nodes: nodesByOrch.get(p.id) ?? [],
   }));
 }
 

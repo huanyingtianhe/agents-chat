@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import {
-  upsertOrchestration,
+  upsertOrchestrationParent,
   listOrchestrationsForChat,
   deleteOrchestration,
   deleteOrchestrationsForChat,
+  StoredOrchestration,
 } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
@@ -19,24 +20,49 @@ async function auth(req: NextRequest) {
   return getUserId(token);
 }
 
+/** Rebuild an OrchestrationState-shaped object from parent + node rows. */
+function reconstructState(stored: StoredOrchestration): unknown {
+  const plan = (stored.plan && typeof stored.plan === 'object') ? stored.plan as Record<string, unknown> : {};
+  const nodeStatuses: Record<string, string> = {};
+  const results: Record<string, string> = {};
+  for (const n of stored.nodes) {
+    nodeStatuses[n.nodeId] = n.status;
+    if (n.result != null) results[n.nodeId] = n.result;
+  }
+  return {
+    ...plan,
+    id: stored.id,
+    mode: stored.mode,
+    sourceChatId: stored.chatId,
+    summaryStarted: stored.summaryStarted,
+    nodeStatuses,
+    results,
+  };
+}
+
 export async function GET(req: NextRequest) {
   const userId = await auth(req);
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const chatId = req.nextUrl.searchParams.get('chatId');
   if (!chatId) return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
-  const items = await listOrchestrationsForChat(userId, chatId);
+  const stored = await listOrchestrationsForChat(userId, chatId);
+  const items = stored.map((s) => ({ id: s.id, state: reconstructState(s) }));
   return NextResponse.json({ ok: true, items });
 }
 
-export async function POST(req: NextRequest) {
+/**
+ * PUT — UPSERT the parent orchestration row (immutable plan + summary flag).
+ * Body: { id, chatId, mode, plan, summaryStarted }
+ */
+export async function PUT(req: NextRequest) {
   const userId = await auth(req);
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
-  const { id, chatId, state } = body || {};
-  if (typeof id !== 'string' || typeof chatId !== 'string' || !state) {
+  const { id, chatId, mode, plan, summaryStarted } = body || {};
+  if (typeof id !== 'string' || typeof chatId !== 'string' || typeof mode !== 'string' || plan == null) {
     return NextResponse.json({ ok: false, error: 'missing_fields' }, { status: 400 });
   }
-  await upsertOrchestration(userId, chatId, id, state);
+  await upsertOrchestrationParent(userId, chatId, id, mode, plan, !!summaryStarted);
   return NextResponse.json({ ok: true });
 }
 

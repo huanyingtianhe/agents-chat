@@ -10,7 +10,8 @@ import { createOrchestrationHandlers } from './chatOrchestrationService';
 import { createPersistenceHandlers } from './chatPersistenceService';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
-import { persistOrchestration, deletePersistedOrchestration, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
+import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
+import { recoverInterruptedOrchestration } from '@/lib/workflow/recoverInterrupted.mjs';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type UseChatRuntimeParams = {
@@ -141,7 +142,7 @@ export function useChatRuntime({
       for (const o of Object.values(orchestrationsRef.current)) {
         if (!o.sourceChatId) continue;
         if (o.mode !== 'workflow') continue; // only workflows benefit from durable resume
-        persistOrchestration(o);
+        void persistOrchestrationDiff(o);
       }
     }, 120);
   }
@@ -197,37 +198,16 @@ export function useChatRuntime({
       const orchs = await loadPersistedOrchestrations(chatId);
       for (const o of orchs) {
         if (!o || !o.id) continue;
-        // On hydrate, any 'running' node was interrupted by reload — flip to
-        // 'failed' so cascade-skip / advance logic can finish or replan.
-        // Keep 'awaiting-input' as-is so the inline card shows again.
-        let touched = false;
-        if (o.nodeStatuses) {
-          for (const k of Object.keys(o.nodeStatuses)) {
-            if (o.nodeStatuses[k] === 'running') {
-              o.nodeStatuses[k] = 'failed';
-              o.results = o.results || {};
-              if (!o.results[k]) o.results[k] = '⚠️ Interrupted by page reload';
-              touched = true;
-            }
-          }
-        }
-        if (touched && o.workflowPlan) {
-          const st = o.nodeStatuses || {};
-          const allTerminal = o.workflowPlan.nodes.every((n) => {
-            const s = st[n.id];
-            return s === 'ok' || s === 'failed' || s === 'skipped';
-          });
-          o.summaryStarted = allTerminal;
-        }
-        orchestrationsRef.current[o.id] = o;
+        // Any 'running' node was interrupted by reload -> 'awaiting-input'
+        // with a synthetic prompt so the inline follow-up card reappears.
+        // 'awaiting-input' nodes are preserved as-is.
+        const recovered = recoverInterruptedOrchestration(o);
+        orchestrationsRef.current[recovered.id] = recovered;
       }
       if (orchs.length > 0) {
         setRunVersion((v) => v + 1);
-        for (const o of orchs) {
-          if (o.mode === 'workflow' && !o.summaryStarted) {
-            void orchHandlers.maybeAdvanceOrchestration(o.id);
-          }
-        }
+        // No auto-advance: awaiting-input pauses dependents until the user
+        // replies via the inline follow-up card (or main composer).
       }
     } catch { /* ignore */ }
   }
@@ -364,12 +344,23 @@ export function useChatRuntime({
         const awaitingNodes = liveOrch!.workflowPlan!.nodes.filter(
           (n) => statuses[n.id] === 'awaiting-input' && resumeAgentIds.includes(n.agent),
         );
-        for (const n of awaitingNodes) statuses[n.id] = 'running';
-        notifyRunStateChanged();
-        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
-          n.agent, textForAgent, followUp.orchestrationId, 'worker',
-          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id, attachments: sendAttachments },
-        )));
+        // Literal "skip" reply: mark nodes skipped and let engine cascade.
+        if (textForAgent.trim().toLowerCase() === 'skip') {
+          for (const n of awaitingNodes) {
+            statuses[n.id] = 'skipped';
+            liveOrch!.results = liveOrch!.results || {};
+            if (!liveOrch!.results[n.id]) liveOrch!.results[n.id] = '⏭ Skipped by user';
+          }
+          notifyRunStateChanged();
+          void orchHandlers.maybeAdvanceOrchestration(followUp.orchestrationId);
+        } else {
+          for (const n of awaitingNodes) statuses[n.id] = 'running';
+          notifyRunStateChanged();
+          await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+            n.agent, textForAgent, followUp.orchestrationId, 'worker',
+            { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id, attachments: sendAttachments },
+          )));
+        }
       } else if (followUpActive && followUp && explicitlyMentionedAgentIds.length === 0) {
         // No live orchestration (e.g. history-derived follow-up). Plain
         // dispatch to the asking agent(s); no scheduler, no DAG state.
@@ -418,6 +409,18 @@ export function useChatRuntime({
       const awaitingNodes = orch.workflowPlan.nodes.filter(
         (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
       );
+      // Literal "skip" reply: mark awaiting nodes skipped and advance.
+      // Dependents will cascade-skip via the engine's normal logic.
+      if (awaitingNodes.length > 0 && trimmed.toLowerCase() === 'skip') {
+        for (const n of awaitingNodes) {
+          statuses[n.id] = 'skipped';
+          orch.results = orch.results || {};
+          if (!orch.results[n.id]) orch.results[n.id] = '⏭ Skipped by user';
+        }
+        notifyRunStateChanged();
+        void orchHandlers.maybeAdvanceOrchestration(orchestrationId);
+        return;
+      }
       if (awaitingNodes.length > 0) {
         for (const n of awaitingNodes) statuses[n.id] = 'running';
         notifyRunStateChanged();
@@ -459,7 +462,7 @@ export function useChatRuntime({
         const orch = orchestrationsRef.current[run.orchestrationId];
         if (orch && orch.mode === 'workflow') {
           orch.nodeStatuses = orch.nodeStatuses || {};
-          orch.nodeStatuses[run.workflowNodeId] = 'failed';
+          orch.nodeStatuses[run.workflowNodeId] = 'stopped';
           orch.results[run.workflowNodeId] = run.currentText || '⏹ Stopped';
           stoppedWorkflowOrchIds.add(run.orchestrationId);
         }
@@ -473,7 +476,7 @@ export function useChatRuntime({
       const inThisChat = !orch.sourceChatId || orch.sourceChatId === stopChatId;
       if (!inThisChat) continue;
       if (orch.mode === 'workflow' && orch.workflowPlan) {
-        // Cascade-skip any pending/running nodes whose deps just failed,
+        // Cascade-skip any pending/running nodes whose deps just terminated,
         // and mark this orchestration as terminal so it's no longer "running".
         const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
         let changed = true;
@@ -482,10 +485,13 @@ export function useChatRuntime({
           for (const n of orch.workflowPlan.nodes) {
             const cur = statuses[n.id];
             if (cur && cur !== 'pending' && cur !== 'running' && cur !== 'awaiting-input') continue;
-            const blocked = n.dependsOn.some((d) => statuses[d] === 'failed' || statuses[d] === 'skipped');
+            const blocked = n.dependsOn.some((d) => {
+              const s = statuses[d];
+              return s === 'failed' || s === 'skipped' || s === 'stopped';
+            });
             if (blocked) { statuses[n.id] = 'skipped'; changed = true; }
             else if (stoppedWorkflowOrchIds.has(orch.id) && (cur === 'running' || cur === 'awaiting-input')) {
-              statuses[n.id] = 'failed';
+              statuses[n.id] = 'stopped';
               changed = true;
             }
           }
@@ -493,7 +499,6 @@ export function useChatRuntime({
         orch.summaryStarted = true;
       } else {
         delete orchestrationsRef.current[id];
-        deletePersistedOrchestration(id);
       }
     }
     notifyRunStateChanged();

@@ -21,7 +21,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 NO_BUILD=0
 USE_CLOUDFLARE=0
@@ -37,7 +38,7 @@ done
 
 # ── Logging defaults (matching start.ps1) ──────────────────────────────────────
 : "${LOG_LEVEL:=info}"
-: "${LOG_DIR:=$SCRIPT_DIR/logs}"
+: "${LOG_DIR:=$PROJECT_DIR/logs}"
 : "${LOG_FILE:=app.log}"
 : "${LOG_ROTATE_FREQUENCY:=daily}"
 : "${LOG_ROTATE_SIZE:=10m}"
@@ -50,9 +51,9 @@ echo "Logs -> $LOG_DIR/$LOG_FILE (level=$LOG_LEVEL, rotate=$LOG_ROTATE_FREQUENCY
 
 # ── Build (skip with --no-build) ───────────────────────────────────────────────
 if [[ "$NO_BUILD" -eq 0 ]]; then
-  echo "[$SCRIPT_DIR] Cleaning .next cache..."
+  echo "[$PROJECT_DIR] Cleaning .next cache..."
   rm -rf .next
-  echo "[$SCRIPT_DIR] Building..."
+  echo "[$PROJECT_DIR] Building..."
   npm run build
 fi
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Install Agents-Chat as a systemd service on Ubuntu/Debian.
 #
-# Usage:
-#   sudo ./install-systemd-service.sh                       # install + enable + start
-#   sudo SERVICE_USER=myuser ./install-systemd-service.sh   # override the run-as user
+# Usage (run from the project root or from scripts/, either works):
+#   sudo ./scripts/install-systemd-service.sh                       # install + enable + start
+#   sudo SERVICE_USER=myuser ./scripts/install-systemd-service.sh   # override the run-as user
 #
 # Idempotent: re-running rewrites the unit and runs `systemctl daemon-reload`.
 #
@@ -20,8 +20,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$SCRIPT_DIR"
-UNIT_TEMPLATE="$PROJECT_DIR/agents-chat.service"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+UNIT_TEMPLATE="$SCRIPT_DIR/agents-chat.service"
 UNIT_DEST="/etc/systemd/system/agents-chat.service"
 SERVICE_NAME="agents-chat"
 
@@ -39,13 +39,11 @@ if [[ ! -f "$UNIT_TEMPLATE" ]]; then
   echo "Unit template not found: $UNIT_TEMPLATE" >&2
   exit 1
 fi
-if [[ ! -x "$PROJECT_DIR/start.sh" ]]; then
-  echo "Making start.sh executable..."
-  chmod +x "$PROJECT_DIR/start.sh"
-fi
+chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" 2>/dev/null || true
 
 echo "Installing $SERVICE_NAME.service"
 echo "  Project dir : $PROJECT_DIR"
+echo "  Scripts dir : $SCRIPT_DIR"
 echo "  Run as user : $SERVICE_USER ($SERVICE_GROUP)"
 
 # Render the template into /etc/systemd/system
@@ -53,6 +51,7 @@ sed \
   -e "s|__USER__|$SERVICE_USER|g" \
   -e "s|__GROUP__|$SERVICE_GROUP|g" \
   -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+  -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
   "$UNIT_TEMPLATE" > "$UNIT_DEST"
 
 chmod 644 "$UNIT_DEST"

@@ -12,7 +12,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 SERVICE_NAME="agents-chat"
 SKIP_GIT_PULL=0
@@ -49,9 +50,9 @@ step() { echo -e "\033[36m[$(date '+%Y-%m-%d %H:%M:%S')] $*\033[0m"; }
 
 run_as_service_user() {
   if [[ "$SERVICE_USER" == "root" ]]; then
-    bash -c "cd '$SCRIPT_DIR' && $*"
+    bash -c "cd '$PROJECT_DIR' && $*"
   else
-    sudo -u "$SERVICE_USER" -H bash -c "cd '$SCRIPT_DIR' && $*"
+    sudo -u "$SERVICE_USER" -H bash -c "cd '$PROJECT_DIR' && $*"
   fi
 }
 

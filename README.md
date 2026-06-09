@@ -32,12 +32,12 @@ Open [https://localhost:3010](https://localhost:3010).
 npm run build
 npm start            # serves on port 3000
 # or
-.\start.ps1               # Windows: builds + serves with a Dev Tunnel (permanent URL)
-.\start.ps1 -Cloudflare   # Windows: builds + serves with a Cloudflare quick tunnel
-.\start.ps1 -NoTunnel     # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
-./start.sh                # Linux: builds + serves on $PORT (default 3010)
-./start.sh --cloudflare   # Linux: also start a Cloudflare quick tunnel
-./start.sh --no-build     # Linux: skip the build step
+.\start.ps1                       # Windows: builds + serves with a Dev Tunnel (permanent URL)
+.\start.ps1 -Cloudflare           # Windows: builds + serves with a Cloudflare quick tunnel
+.\start.ps1 -NoTunnel             # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
+./scripts/start.sh                # Linux: builds + serves on $PORT (default 3010)
+./scripts/start.sh --cloudflare   # Linux: also start a Cloudflare quick tunnel
+./scripts/start.sh --no-build     # Linux: skip the build step
 ```
 
 ### Deployment (Windows Scheduled Task)
@@ -68,14 +68,24 @@ Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.lo
 
 ### Deployment (Linux systemd)
 
-For persistent deployment on Ubuntu/Debian, install the bundled systemd unit. The installer renders `agents-chat.service` for the current user, runs `npm run build` once, and enables + starts the unit.
+For persistent deployment on Ubuntu/Debian, install the bundled systemd unit. The Linux scripts live under `scripts/`:
+
+```
+scripts/
+├── start.sh                    # launcher (used by systemd or directly)
+├── deploy.sh                   # one-shot updater (git pull + build + restart)
+├── install-systemd-service.sh  # one-time installer (renders the unit + enables it)
+└── agents-chat.service         # systemd unit template
+```
+
+The installer renders `agents-chat.service` for the current user, runs `npm run build` once, and enables + starts the unit.
 
 ```bash
 # One-time install (also enables auto-start at boot)
-sudo ./install-systemd-service.sh
+sudo ./scripts/install-systemd-service.sh
 
 # Override the run-as user (defaults to $SUDO_USER)
-sudo SERVICE_USER=myuser ./install-systemd-service.sh
+sudo SERVICE_USER=myuser ./scripts/install-systemd-service.sh
 ```
 
 Manage the service:
@@ -90,10 +100,10 @@ sudo journalctl -u agents-chat -f          # live log stream
 Update to latest code (pulls, installs, builds, restarts, waits for health check):
 
 ```bash
-sudo ./deploy.sh                    # full update
-sudo ./deploy.sh --skip-git-pull    # rebuild + restart without pulling
-sudo ./deploy.sh --skip-install     # skip npm ci (no dep changes)
-sudo ./deploy.sh --wait 180         # custom health-check timeout (default 120, 0 to skip)
+sudo ./scripts/deploy.sh                    # full update
+sudo ./scripts/deploy.sh --skip-git-pull    # rebuild + restart without pulling
+sudo ./scripts/deploy.sh --skip-install     # skip npm ci (no dep changes)
+sudo ./scripts/deploy.sh --wait 180         # custom health-check timeout (default 120, 0 to skip)
 ```
 
 Override environment variables without editing the unit by writing `/etc/agents-chat.env` (KEY=VALUE per line):
@@ -107,7 +117,7 @@ EOF
 sudo systemctl restart agents-chat
 ```
 
-You can also run `./start.sh` directly without systemd. Pass `--no-build` to skip the build step on restart.
+You can also run `./scripts/start.sh` directly without systemd. Pass `--no-build` to skip the build step on restart.
 
 ### Logging
 

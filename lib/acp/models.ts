@@ -1,9 +1,20 @@
 import * as configStore from '@/lib/configStore';
 import type { AgentConfig, AgentModel, AgentProcess } from './types';
 import { getAgentProcesses } from './runtimeState';
+import { createLogger } from '@/lib/logger';
 
-function ts(): string { return new Date().toISOString().slice(11, 23); }
-const log = (...args: unknown[]) => console.log(`[${ts()}]`, ...args);
+const logger = createLogger('acp.models');
+
+const log = (...args: unknown[]) => {
+  if (args.length === 0) return;
+  const [first, ...rest] = args;
+  if (rest.length === 0) {
+    logger.info(typeof first === 'string' ? first : { value: first }, typeof first === 'string' ? undefined : 'log');
+    return;
+  }
+  const parts = args.map(a => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()));
+  logger.info(parts.join(' '));
+};
 
 export function normalizeSessionModels(input: unknown): AgentModel[] {
   if (!Array.isArray(input)) return [];

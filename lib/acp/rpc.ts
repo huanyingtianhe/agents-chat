@@ -1,5 +1,8 @@
 import type { ChildProcess } from 'child_process';
 import type { NdjsonRpc, PendingRequest } from './types';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('acp.rpc');
 
 /* ─────────── Minimal NDJSON-RPC over raw Node streams ─────────── */
 
@@ -17,7 +20,7 @@ export function createNdjsonRpc(cp: ChildProcess): NdjsonRpc {
     send(method, params, timeoutMs?: number) {
       const id = ++nextId;
       const msg = JSON.stringify({ jsonrpc: '2.0', method, id, params }) + '\n';
-      console.log(`[ACP] → ${method} (id=${id})`);
+      logger.debug({ method, id }, `[ACP] → ${method} (id=${id})`);
       cp.stdin!.write(msg);
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
@@ -144,7 +147,7 @@ export function createRelayNdjsonRpc(connectionName: string): Promise<NdjsonRpc>
       send(method, params, timeoutMs?: number) {
         const id = ++nextId;
         const msg = JSON.stringify({ jsonrpc: '2.0', method, id, params }) + '\n';
-        console.log(`[ACP-RELAY] → ${method} (id=${id})`);
+        logger.debug({ method, id, connectionName }, `[ACP-RELAY] → ${method} (id=${id})`);
         ws.send(msg);
         return new Promise((resolve, reject) => {
           pending.set(id, { resolve, reject });
@@ -178,7 +181,7 @@ export function createRelayNdjsonRpc(connectionName: string): Promise<NdjsonRpc>
 
     ws.on('open', () => {
       connected = true;
-      console.log(`[ACP-RELAY] Connected to ${connectionName}`);
+      logger.info({ connectionName }, `[ACP-RELAY] Connected to ${connectionName}`);
       resolveRpc(rpc);
     });
 
@@ -188,14 +191,14 @@ export function createRelayNdjsonRpc(connectionName: string): Promise<NdjsonRpc>
     });
 
     ws.on('close', () => {
-      console.log(`[ACP-RELAY] Connection closed: ${connectionName}`);
+      logger.info({ connectionName }, `[ACP-RELAY] Connection closed: ${connectionName}`);
       for (const p of pending.values()) p.reject(new Error('Relay connection closed'));
       pending.clear();
       rpc.onClose?.('connection closed');
     });
 
     ws.on('error', (err: Error) => {
-      console.error(`[ACP-RELAY] Error: ${err.message}`);
+      logger.error({ connectionName, err: err.message }, `[ACP-RELAY] Error: ${err.message}`);
       if (!connected) {
         rejectRpc(err);
       }

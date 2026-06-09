@@ -1,4 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('acp.terminal');
 
 /* ─────────────── Terminal Management ─────────────── */
 
@@ -28,7 +31,7 @@ export function handleTerminalCreate(params: Record<string, unknown>, cwd: strin
   const command = String(params.command ?? (process.platform === 'win32' ? 'cmd' : 'bash'));
   const args = (params.args as string[] | undefined) ?? [];
   const termCwd = String(params.cwd ?? cwd ?? process.cwd());
-  console.log(`[ACP-TERM] create ${id}: ${command} ${args.join(' ')} (cwd: ${termCwd})`);
+  logger.info({ termId: id, command, args, cwd: termCwd }, `[ACP-TERM] create ${id}: ${command} ${args.join(' ')} (cwd: ${termCwd})`);
 
   const cp = spawn(command, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -54,12 +57,12 @@ export function handleTerminalCreate(params: Record<string, unknown>, cwd: strin
     terminal.done = true;
     for (const w of terminal.waiters) w({ exitCode: code, signal });
     terminal.waiters = [];
-    console.log(`[ACP-TERM] ${id} exited (code=${code})`);
+    logger.info({ termId: id, exitCode: code }, `[ACP-TERM] ${id} exited (code=${code})`);
     // Auto-cleanup finished terminal after 5 min to prevent memory leak
     setTimeout(() => { getTerminals().delete(id); }, 5 * 60_000);
   });
   cp.on('error', (err) => {
-    console.error(`[ACP-TERM] ${id} spawn error:`, err.message);
+    logger.error({ termId: id, err: err.message }, `[ACP-TERM] ${id} spawn error: ${err.message}`);
     terminal.done = true;
     terminal.exitCode = -1;
     for (const w of terminal.waiters) w({ exitCode: -1, signal: null });

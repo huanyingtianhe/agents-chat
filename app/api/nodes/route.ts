@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
 import { getNodeOwner } from '@/lib/nodeOwner';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('nodes');
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -56,7 +59,7 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
     });
 
     if (!res.ok) {
-      console.error(`[Nodes] ARM API error: ${res.status} ${res.statusText}`);
+      logger.error({ status: res.status, statusText: res.statusText }, `[Nodes] ARM API error: ${res.status} ${res.statusText}`);
       return discoveryCache?.nodes || [];
     }
 
@@ -70,7 +73,7 @@ async function discoverHybridConnections(): Promise<DiscoveredNode[]> {
     discoveryCache = { nodes, ts: Date.now() };
     return nodes;
   } catch (err) {
-    console.error('[Nodes] Discovery failed:', err);
+    logger.error({ err }, '[Nodes] Discovery failed');
     return discoveryCache?.nodes || [];
   }
 }
@@ -128,11 +131,11 @@ async function probeNode(connectionName: string): Promise<boolean> {
 
     const uri = HycoWebSocket.createRelaySendUri(ns, connectionName);
     const token = HycoWebSocket.createRelayToken(uri, keyName, key);
-    console.log('[probeNode]', connectionName, 'uri:', uri, 'keyName:', keyName);
+    logger.debug({ connectionName, uri, keyName }, `[probeNode] ${connectionName} uri:${uri} keyName:${keyName}`);
 
     const online = await new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
-        console.log('[probeNode]', connectionName, 'TIMEOUT');
+        logger.debug({ connectionName }, `[probeNode] ${connectionName} TIMEOUT`);
         try { ws.close(); } catch { /* ignore */ }
         resolve(false);
       }, 5_000);
@@ -141,14 +144,14 @@ async function probeNode(connectionName: string): Promise<boolean> {
       const ws = HycoWebSocket.relayedConnect(uri, token);
 
       ws.on('open', () => {
-        console.log('[probeNode]', connectionName, 'OPEN');
+        logger.debug({ connectionName }, `[probeNode] ${connectionName} OPEN`);
         clearTimeout(timeout);
         try { ws.close(); } catch { /* ignore */ }
         resolve(true);
       });
 
       ws.on('error', (err: Error) => {
-        console.log('[probeNode]', connectionName, 'ERROR:', err?.message);
+        logger.debug({ connectionName, err: err?.message }, `[probeNode] ${connectionName} ERROR: ${err?.message}`);
         clearTimeout(timeout);
         resolve(false);
       });
@@ -158,11 +161,11 @@ async function probeNode(connectionName: string): Promise<boolean> {
       });
     });
 
-    console.log('[probeNode]', connectionName, 'result:', online);
+    logger.debug({ connectionName, online }, `[probeNode] ${connectionName} result: ${online}`);
     probeCache.set(connectionName, { online, ts: Date.now() });
     return online;
   } catch (err) {
-    console.log('[probeNode]', connectionName, 'CATCH:', err);
+    logger.debug({ connectionName, err }, `[probeNode] ${connectionName} CATCH`);
     probeCache.set(connectionName, { online: false, ts: Date.now() });
     return false;
   }
@@ -260,11 +263,11 @@ export async function POST(req: NextRequest) {
           });
 
           if (!res.ok && res.status !== 404) {
-            console.error(`[Nodes] Failed to delete hybrid connection ${name}: ${res.status} ${res.statusText}`);
+            logger.error({ name, status: res.status, statusText: res.statusText }, `[Nodes] Failed to delete hybrid connection ${name}: ${res.status} ${res.statusText}`);
             return NextResponse.json({ ok: false, error: `Azure delete failed: ${res.status}` }, { status: 500 });
           }
         } catch (err) {
-          console.error(`[Nodes] Error deleting hybrid connection ${name}:`, err);
+          logger.error({ name, err }, `[Nodes] Error deleting hybrid connection ${name}`);
           return NextResponse.json({ ok: false, error: `Azure delete error: ${err}` }, { status: 500 });
         }
       }
@@ -277,7 +280,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: false, error: 'unknown action' }, { status: 400 });
   } catch (err) {
-    console.error('[Nodes API]', err);
+    logger.error({ err }, '[Nodes API] error');
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
   }
 }

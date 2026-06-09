@@ -36,6 +36,7 @@ npm start            # serves on port 3000
 .\start.ps1 -Cloudflare   # Windows: builds + serves with a Cloudflare quick tunnel
 .\start.ps1 -NoTunnel     # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
 ./start.sh                # Linux: builds + serves on $PORT (default 3010)
+./start.sh --cloudflare   # Linux: also start a Cloudflare quick tunnel
 ./start.sh --no-build     # Linux: skip the build step
 ```
 

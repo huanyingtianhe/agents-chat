@@ -41,6 +41,14 @@ assert.match(
   /const \[showAccount, setShowAccount\] = useState\(false\)/,
   'PageHeader should track popover visibility with showAccount state',
 );
+
+// 2b. The chip avatar shows the account photo when available, with a
+//     letter fallback when there is no image.
+assert.match(
+  headerSource,
+  /userImage \? \([\s\S]*?className="userAvatar userAvatarImage"[\s\S]*?src=\{userImage\}[\s\S]*?\) : \([\s\S]*?className="userAvatar">\{\(authLabel \|\| '\?'\)\[0\]\.toUpperCase\(\)\}/,
+  'The chip avatar should render the user photo when present and fall back to the initial',
+);
 assert.match(
   headerSource,
   /className="userName userNameButton"[\s\S]{0,200}onClick=\{\(\) => setShowAccount\(\(v\) => !v\)\}/,

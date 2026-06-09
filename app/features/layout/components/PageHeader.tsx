@@ -266,7 +266,12 @@ export function PageHeader({
         </div>
         {authLabel && (
           <div className="userChip" ref={accountRef}>
-            <span className="userAvatar">{(authLabel || '?')[0].toUpperCase()}</span>
+            {userImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="userAvatar userAvatarImage" src={userImage} alt="" />
+            ) : (
+              <span className="userAvatar">{(authLabel || '?')[0].toUpperCase()}</span>
+            )}
             <button
               type="button"
               className="userName userNameButton"

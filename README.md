@@ -32,8 +32,10 @@ Open [https://localhost:3010](https://localhost:3010).
 npm run build
 npm start            # serves on port 3000
 # or
-.\start.ps1          # builds + serves with a Dev Tunnel (permanent URL)
-.\start.ps1 -Cloudflare  # builds + serves with a Cloudflare quick tunnel
+.\start.ps1          # Windows: builds + serves with a Dev Tunnel (permanent URL)
+.\start.ps1 -Cloudflare  # Windows: builds + serves with a Cloudflare quick tunnel
+./start.sh           # Linux: builds + serves on $PORT (default 3010)
+./start.sh --no-build  # Linux: skip the build step
 ```
 
 ### Deployment (Windows Scheduled Task)
@@ -61,6 +63,60 @@ The deploy script:
 4. Waits up to 180s for `localhost:3000` to respond
 
 Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.log`.
+
+### Deployment (Linux systemd)
+
+For persistent deployment on Ubuntu/Debian, install the bundled systemd unit. The installer renders `agents-chat.service` for the current user, runs `npm run build` once, and enables + starts the unit.
+
+```bash
+# One-time install (also enables auto-start at boot)
+sudo ./install-systemd-service.sh
+
+# Override the run-as user (defaults to $SUDO_USER)
+sudo SERVICE_USER=myuser ./install-systemd-service.sh
+```
+
+Manage the service:
+
+```bash
+sudo systemctl status   agents-chat
+sudo systemctl restart  agents-chat
+sudo systemctl stop     agents-chat
+sudo journalctl -u agents-chat -f          # live log stream
+```
+
+Override environment variables without editing the unit by writing `/etc/agents-chat.env` (KEY=VALUE per line):
+
+```bash
+sudo tee /etc/agents-chat.env > /dev/null <<EOF
+PORT=8080
+LOG_LEVEL=debug
+LOG_DIR=/var/log/agents-chat
+EOF
+sudo systemctl restart agents-chat
+```
+
+You can also run `./start.sh` directly without systemd. Pass `--no-build` to skip the build step on restart.
+
+### Logging
+
+The server uses **pino + pino-roll** for structured logs. Defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `LOG_DIR` | `<project>/logs` | Absolute or relative path |
+| `LOG_FILE` | `app.log` | Base file name |
+| `LOG_ROTATE_FREQUENCY` | `daily` | `daily` / `hourly` / milliseconds |
+| `LOG_ROTATE_SIZE` | `10m` | Max size before mid-period rotation |
+| `LOG_RETENTION` | `7` | Number of rotated files to keep |
+
+Files written under `$LOG_DIR`:
+
+- `app.<date>.<n>.log` — pino structured JSON (rotated)
+- `server.log` / `server-error.log` — Next.js stdout/stderr (overwritten on each `start.ps1` / `start.sh` launch)
+
+On Linux, stdout/stderr are also captured by journald (`journalctl -u agents-chat`).
 
 ## Features
 

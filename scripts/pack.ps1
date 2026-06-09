@@ -4,7 +4,7 @@
 param([switch]$NoHistory)
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $ZipName = "acp-chat.zip"
 $ZipPath = Join-Path $ProjectDir $ZipName
 $TempDir = Join-Path $env:TEMP "acp-chat-pack-$PID"
@@ -20,7 +20,7 @@ $items = @(
     "agents.json", ".env.local",
     "package.json", "package-lock.json",
     "tsconfig.json", "next.config.ts", "next-env.d.ts",
-    "middleware.ts", "start.ps1", "setup.ps1",
+    "middleware.ts", "scripts",
     "globals.css"
 )
 if (-not $NoHistory) { $items += ".data\chats.db" }
@@ -48,4 +48,4 @@ Write-Host ""
 Write-Host "Transfer this zip to the new device, then run:" -ForegroundColor Yellow
 Write-Host "  Expand-Archive acp-chat.zip -DestinationPath agents-chat" -ForegroundColor White
 Write-Host "  cd agents-chat" -ForegroundColor White
-Write-Host "  .\setup.ps1" -ForegroundColor White
+Write-Host "  .\scripts\setup.ps1" -ForegroundColor White

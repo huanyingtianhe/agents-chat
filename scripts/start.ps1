@@ -13,7 +13,7 @@ if ($Cloudflare -and $NoTunnel) {
 }
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $ProjectDir ".env.local"
 
 function Read-DotEnvFile {

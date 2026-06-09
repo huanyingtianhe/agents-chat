@@ -3,8 +3,8 @@
 
 $ErrorActionPreference = 'Continue'
 
-$ProjectDir = 'Q:\repos\Agents-Chat'
-$StartScript = Join-Path $ProjectDir 'start.ps1'
+$ProjectDir = Split-Path -Parent $PSScriptRoot
+$StartScript = Join-Path $PSScriptRoot 'start.ps1'
 $LogDir = Join-Path $ProjectDir 'logs'
 $LogFile = Join-Path $LogDir 'service-watchdog.log'
 $StopFile = Join-Path $ProjectDir '.service-stop'

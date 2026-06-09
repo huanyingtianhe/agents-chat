@@ -4,7 +4,7 @@
 
 param(
     [string]$TaskName = 'Agents-Chat-Startup',
-    [string]$ProjectDir = 'Q:\repos\Agents-Chat',
+    [string]$ProjectDir = (Split-Path -Parent $PSScriptRoot),
     [switch]$SkipGitPull,
     [switch]$RemoveTask,
     [ValidateSet('Interactive', 'S4U')]
@@ -24,7 +24,7 @@ function Test-IsAdministrator {
 }
 
 if (-not (Test-IsAdministrator)) {
-    throw "deploy.ps1 controls the '$TaskName' Scheduled Task and must be run from an elevated PowerShell session. Run PowerShell as Administrator, or use .\start.ps1 for a foreground local start."
+    throw "deploy.ps1 controls the '$TaskName' Scheduled Task and must be run from an elevated PowerShell session. Run PowerShell as Administrator, or use .\scripts\start.ps1 for a foreground local start."
 }
 
 $WatchdogLog = Join-Path $ProjectDir 'logs\service-watchdog.log'
@@ -72,7 +72,7 @@ function Test-TaskMatchesExpectedConfiguration {
 }
 
 function Install-AgentsChatTask {
-    $InstallScript = Join-Path $ProjectDir 'install-scheduled-task.ps1'
+    $InstallScript = Join-Path $PSScriptRoot 'install-scheduled-task.ps1'
     if (-not (Test-Path $InstallScript)) {
         throw "Install script not found: $InstallScript"
     }
@@ -173,7 +173,7 @@ if (-not $taskStarted) {
             TriggerClasses = ($task.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ', '
         } | ConvertTo-Json -Compress | Write-Host -ForegroundColor Yellow
     }
-    throw "Scheduled Task '$TaskName' did not start. Re-run this elevated deploy so it can reinstall the task as $TaskLogonType/$TaskTriggerType, or remove it with .\deploy.ps1 -RemoveTask and try again."
+    throw "Scheduled Task '$TaskName' did not start. Re-run this elevated deploy so it can reinstall the task as $TaskLogonType/$TaskTriggerType, or remove it with .\scripts\deploy.ps1 -RemoveTask and try again."
 }
 
 if ($NoWait) {

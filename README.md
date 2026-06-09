@@ -32,9 +32,9 @@ Open [https://localhost:3010](https://localhost:3010).
 npm run build
 npm start            # serves on port 3000
 # or
-.\start.ps1                       # Windows: builds + serves with a Dev Tunnel (permanent URL)
-.\start.ps1 -Cloudflare           # Windows: builds + serves with a Cloudflare quick tunnel
-.\start.ps1 -NoTunnel             # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
+.\scripts\start.ps1                       # Windows: builds + serves with a Dev Tunnel (permanent URL)
+.\scripts\start.ps1 -Cloudflare           # Windows: builds + serves with a Cloudflare quick tunnel
+.\scripts\start.ps1 -NoTunnel             # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
 ./scripts/start.sh                # Linux: builds + serves on $PORT (default 3010)
 ./scripts/start.sh --cloudflare   # Linux: also start a Cloudflare quick tunnel
 ./scripts/start.sh --no-build     # Linux: skip the build step
@@ -42,20 +42,31 @@ npm start            # serves on port 3000
 
 ### Deployment (Windows Scheduled Task)
 
-For persistent deployment on a Windows machine, use `deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot:
+For persistent deployment on a Windows machine, use `scripts\deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot. All Windows scripts live under `scripts\`:
+
+```
+scripts\
+├── start.ps1                  # launcher (used by the Scheduled Task or directly)
+├── deploy.ps1                 # one-shot updater (git pull + restart + health check)
+├── install-scheduled-task.ps1 # one-time installer (registers the Scheduled Task)
+├── service-watchdog.ps1       # supervisor that restarts start.ps1 if it exits
+├── tunnel-watchdog.ps1        # keeps the Dev Tunnel alive
+├── setup.ps1                  # initial machine setup (Dev Tunnel + .env)
+└── pack.ps1                   # bundle the project into a zip for transfer
+```
 
 ```powershell
 # Deploy (pulls latest code, restarts the service, waits for readiness)
-.\deploy.ps1
+.\scripts\deploy.ps1
 
 # Deploy without git pull
-.\deploy.ps1 -SkipGitPull
+.\scripts\deploy.ps1 -SkipGitPull
 
 # Deploy with AtStartup trigger (runs even without login)
-.\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
+.\scripts\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
 
 # Remove the scheduled task entirely
-.\deploy.ps1 -RemoveTask
+.\scripts\deploy.ps1 -RemoveTask
 ```
 
 The deploy script:

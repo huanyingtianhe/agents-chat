@@ -40,25 +40,45 @@ done
 (( EUID == 0 )) || { echo "Run with sudo (need systemctl access)." >&2; exit 1; }
 [[ -f "$unit_src" ]] || { echo "Missing unit template: $unit_src" >&2; exit 1; }
 
+command -v npm >/dev/null 2>&1 || {
+  echo "npm not found in root's PATH." >&2
+  echo "If you installed Node via nvm, the service won't find it either." >&2
+  echo "Install Node system-wide:" >&2
+  echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -" >&2
+  echo "  sudo apt install -y nodejs" >&2
+  exit 1
+}
+
 user="$(id -un)"
 group="$(id -gn)"
+npm_bin="$(command -v npm)"
 
-# ── First-time install (renders the unit) ─────────────────────────────────────
+# ── Render unit (always — picks up template changes on every deploy) ──────────
 first_install=0
-if [[ ! -f "$unit_dest" ]]; then
-  first_install=1
+[[ -f "$unit_dest" ]] || first_install=1
+
+if (( first_install )); then
   echo "→ installing $service.service (user=$user)"
+else
+  echo "→ refreshing $service.service"
+fi
 
-  sed \
-    -e "s|__USER__|$user|g" \
-    -e "s|__GROUP__|$group|g" \
-    -e "s|__PROJECT_DIR__|$project_dir|g" \
-    -e "s|__SCRIPT_DIR__|$script_dir|g" \
-    "$unit_src" > "$unit_dest"
+rendered=$(sed \
+  -e "s|__USER__|$user|g" \
+  -e "s|__GROUP__|$group|g" \
+  -e "s|__PROJECT_DIR__|$project_dir|g" \
+  -e "s|__SCRIPT_DIR__|$script_dir|g" \
+  -e "s|__NPM__|$npm_bin|g" \
+  "$unit_src")
+
+if [[ ! -f "$unit_dest" ]] || ! diff -q <(echo "$rendered") "$unit_dest" >/dev/null 2>&1; then
+  echo "$rendered" > "$unit_dest"
   chmod 644 "$unit_dest"
-
-  mkdir -p logs .next .data
   systemctl daemon-reload
+fi
+
+if (( first_install )); then
+  mkdir -p logs .next .data
   systemctl enable "$service"
 fi
 

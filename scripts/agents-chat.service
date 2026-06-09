@@ -12,7 +12,7 @@ WorkingDirectory=__PROJECT_DIR__
 
 # Load project env (KEY=VALUE per line). Leading '-' = file is optional.
 # Next.js also auto-loads .env.local at runtime; this line makes the same
-# values available to start.sh (PORT, LOG_DIR, etc.) before npm start runs.
+# values available to systemd / Node before the process starts.
 EnvironmentFile=-__PROJECT_DIR__/.env.local
 
 # Optional machine-level overrides (takes precedence over .env.local)
@@ -20,14 +20,15 @@ EnvironmentFile=-/etc/agents-chat.env
 
 Environment=NODE_ENV=production
 
-ExecStart=__SCRIPT_DIR__/start.sh --no-build
+# Absolute path required — systemd's PATH doesn't include nvm.
+# If npm lives elsewhere, override with: sudo systemctl edit agents-chat
+ExecStart=__NPM__ start
 
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 KillSignal=SIGTERM
 
-# journald captures stdout/stderr in addition to start.sh's tee'd files
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=agents-chat

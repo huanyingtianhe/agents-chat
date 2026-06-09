@@ -437,6 +437,120 @@
 .chatPageRoot .logoutBtn:hover {
   color: var(--accent);
 }
+.chatPageRoot .userChip {
+  position: relative;
+}
+.chatPageRoot .userNameButton {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.chatPageRoot .userNameButton:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.chatPageRoot .accountMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  min-width: 240px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.chatPageRoot .accountMenuHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.chatPageRoot .accountMenuAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+.chatPageRoot .accountMenuAvatarFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+}
+.chatPageRoot .accountMenuIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.chatPageRoot .accountMenuName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chatPageRoot .accountMenuRole {
+  font-size: 11px;
+  color: var(--muted);
+}
+.chatPageRoot .accountMenuRole.isAdmin {
+  color: var(--accent);
+}
+.chatPageRoot .accountMenuRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+}
+.chatPageRoot .accountMenuLabel {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.chatPageRoot .accountMenuValue {
+  color: var(--text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.chatPageRoot .accountMenuSeparator {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0;
+}
+.chatPageRoot .accountMenuSignOut {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+.chatPageRoot .accountMenuSignOut:hover {
+  background: var(--panel);
+  color: var(--accent);
+}
 .chatPageRoot .themeMenuWrap {
   position: relative;
 }

@@ -87,6 +87,15 @@ sudo systemctl stop     agents-chat
 sudo journalctl -u agents-chat -f          # live log stream
 ```
 
+Update to latest code (pulls, installs, builds, restarts, waits for health check):
+
+```bash
+sudo ./deploy.sh                    # full update
+sudo ./deploy.sh --skip-git-pull    # rebuild + restart without pulling
+sudo ./deploy.sh --skip-install     # skip npm ci (no dep changes)
+sudo ./deploy.sh --wait 180         # custom health-check timeout (default 120, 0 to skip)
+```
+
 Override environment variables without editing the unit by writing `/etc/agents-chat.env` (KEY=VALUE per line):
 
 ```bash

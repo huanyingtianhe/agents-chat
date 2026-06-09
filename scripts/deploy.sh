@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# One-shot updater for the agents-chat systemd service.
+# Install / update the agents-chat systemd service.
 #
-# Usage:
-#   sudo ./scripts/deploy.sh                 # pull + install + build + restart
-#   sudo ./scripts/deploy.sh --no-pull       # skip git pull
-#   sudo ./scripts/deploy.sh --no-install    # skip npm ci
-#   sudo ./scripts/deploy.sh --wait 0        # don't wait for health check (default 120s)
+# Whoever runs this script is the user the service runs as. With sudo,
+# that means root — git pull, npm ci, npm run build, and the service
+# itself all run as root.
 #
-# Requires install-systemd-service.sh to have been run once.
+# First run on a machine:
+#   sudo ./scripts/deploy.sh                # installs the unit, builds, starts
+#
+# Subsequent runs (idempotent):
+#   sudo ./scripts/deploy.sh                # pull + npm ci + build + restart
+#   sudo ./scripts/deploy.sh --no-pull      # skip git pull
+#   sudo ./scripts/deploy.sh --no-install   # skip npm ci
+#   sudo ./scripts/deploy.sh --wait 0       # don't wait for health check (default 120s)
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-project_dir="$PWD"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+project_dir="$(cd "$script_dir/.." && pwd)"
+cd "$project_dir"
+
 service=agents-chat
+unit_src="$script_dir/agents-chat.service"
+unit_dest="/etc/systemd/system/agents-chat.service"
 
 pull=1
 install=1
@@ -29,33 +38,47 @@ while [[ $# -gt 0 ]]; do
 done
 
 (( EUID == 0 )) || { echo "Run with sudo (need systemctl access)." >&2; exit 1; }
+[[ -f "$unit_src" ]] || { echo "Missing unit template: $unit_src" >&2; exit 1; }
 
-systemctl list-unit-files "${service}.service" --no-legend | grep -q . || {
-  echo "Service '$service' not installed. Run: sudo ./scripts/install-systemd-service.sh" >&2
-  exit 1
-}
+user="$(id -un)"
+group="$(id -gn)"
 
-# Run npm/git as the service user so file ownership stays consistent.
-user=$(systemctl show -p User --value "$service")
-[[ -z "$user" ]] && user="${SUDO_USER:-root}"
+# ── First-time install (renders the unit) ─────────────────────────────────────
+first_install=0
+if [[ ! -f "$unit_dest" ]]; then
+  first_install=1
+  echo "→ installing $service.service (user=$user)"
 
-as_user() {
-  if [[ "$user" == "root" ]]; then
-    bash -c "$*"
-  else
-    sudo -u "$user" -H bash -c "$*"
-  fi
-}
+  sed \
+    -e "s|__USER__|$user|g" \
+    -e "s|__GROUP__|$group|g" \
+    -e "s|__PROJECT_DIR__|$project_dir|g" \
+    -e "s|__SCRIPT_DIR__|$script_dir|g" \
+    "$unit_src" > "$unit_dest"
+  chmod 644 "$unit_dest"
 
-(( pull ))    && { echo "→ git pull";       as_user "git pull --ff-only"; }
-(( install )) && { echo "→ npm ci";         as_user "npm ci --no-audit --no-fund"; }
-                  echo "→ npm run build";   as_user "npm run build"
+  mkdir -p logs .next .data
+  systemctl daemon-reload
+  systemctl enable "$service"
+fi
 
-echo "→ systemctl restart $service"
-systemctl restart "$service"
+# ── Update steps ──────────────────────────────────────────────────────────────
+# On first install, skip git pull (you presumably just cloned) but always
+# install + build so the service has something to run.
+(( !first_install && pull )) && { echo "→ git pull";   git pull --ff-only; }
+(( install ))                && { echo "→ npm ci";     npm ci --no-audit --no-fund; }
+                                 echo "→ npm run build"; npm run build
 
+if (( first_install )); then
+  echo "→ systemctl start $service"
+  systemctl start "$service"
+else
+  echo "→ systemctl restart $service"
+  systemctl restart "$service"
+fi
+
+# ── Health check ──────────────────────────────────────────────────────────────
 if (( wait_secs > 0 )); then
-  # Pull PORT from .env.local if present, else fall back to start.sh's default.
   port=3010
   if [[ -f .env.local ]]; then
     v=$(awk -F= '/^[[:space:]]*PORT[[:space:]]*=/ {gsub(/[ \t"'\'']/, "", $2); print $2}' .env.local | tail -n1)
@@ -67,7 +90,15 @@ if (( wait_secs > 0 )); then
   deadline=$(( $(date +%s) + wait_secs ))
   while (( $(date +%s) < deadline )); do
     if curl -sf -o /dev/null --max-time 3 "$url"; then
-      echo "✓ service healthy"
+      echo "✓ service healthy on :$port"
+      (( first_install )) && cat <<EOF
+
+Installed. Useful commands:
+  sudo systemctl status  $service
+  sudo systemctl restart $service
+  sudo journalctl -u $service -f
+  sudo ./scripts/deploy.sh        # pull + rebuild + restart
+EOF
       exit 0
     fi
     sleep 2

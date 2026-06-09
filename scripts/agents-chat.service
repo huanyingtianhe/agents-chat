@@ -10,18 +10,15 @@ User=__USER__
 Group=__GROUP__
 WorkingDirectory=__PROJECT_DIR__
 
-# Optional: drop overrides into /etc/agents-chat.env (KEY=VALUE per line)
+# Load project env (KEY=VALUE per line). Leading '-' = file is optional.
+# Next.js also auto-loads .env.local at runtime; this line makes the same
+# values available to start.sh (PORT, LOG_DIR, etc.) before npm start runs.
+EnvironmentFile=-__PROJECT_DIR__/.env.local
+
+# Optional machine-level overrides (takes precedence over .env.local)
 EnvironmentFile=-/etc/agents-chat.env
 
-# Sensible defaults (overridden by EnvironmentFile or by .env.local that Next loads)
 Environment=NODE_ENV=production
-Environment=PORT=3010
-Environment=LOG_LEVEL=info
-Environment=LOG_DIR=__PROJECT_DIR__/logs
-Environment=LOG_FILE=app.log
-Environment=LOG_ROTATE_FREQUENCY=daily
-Environment=LOG_ROTATE_SIZE=10m
-Environment=LOG_RETENTION=7
 
 ExecStart=__SCRIPT_DIR__/start.sh --no-build
 

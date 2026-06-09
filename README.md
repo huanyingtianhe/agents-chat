@@ -117,7 +117,12 @@ sudo ./scripts/deploy.sh --skip-install     # skip npm ci (no dep changes)
 sudo ./scripts/deploy.sh --wait 180         # custom health-check timeout (default 120, 0 to skip)
 ```
 
-Override environment variables without editing the unit by writing `/etc/agents-chat.env` (KEY=VALUE per line):
+Environment variables are loaded from two files (later wins):
+
+1. **`.env.local`** in the project root — the same file Next.js reads. systemd loads it into the unit's environment so `start.sh` (and `npm start`) see `PORT`, `LOG_*`, etc. before Node starts.
+2. **`/etc/agents-chat.env`** (optional) — machine-level overrides that take precedence over `.env.local`.
+
+> systemd's `EnvironmentFile` parser accepts `KEY=value` or `KEY="value"` per line. It does **not** support `export KEY=...`, single quotes, or `${VAR}` interpolation. Keep `.env.local` to plain `KEY=VALUE` lines if you want the unit to read them.
 
 ```bash
 sudo tee /etc/agents-chat.env > /dev/null <<EOF

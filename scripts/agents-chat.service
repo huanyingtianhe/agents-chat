@@ -19,6 +19,7 @@ EnvironmentFile=-__PROJECT_DIR__/.env.local
 EnvironmentFile=-/etc/agents-chat.env
 
 Environment=NODE_ENV=production
+Environment=PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Absolute path required — systemd's PATH doesn't include nvm.
 # If npm lives elsewhere, override with: sudo systemctl edit agents-chat
@@ -36,7 +37,7 @@ SyslogIdentifier=agents-chat
 # Light sandboxing
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=read-only
+ProtectHome=false
 PrivateTmp=true
 
 [Install]

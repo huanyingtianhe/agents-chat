@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --port 3010 --experimental-https",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 3010",
     "start:prod": "next build && next start --port 3010"
   },
   "dependencies": {

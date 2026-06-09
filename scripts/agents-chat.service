@@ -1,0 +1,42 @@
+[Unit]
+Description=Agents-Chat (Next.js multi-agent chat UI)
+Documentation=https://github.com/huanyingtianhe/agents-chat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__PROJECT_DIR__
+
+# Load project env (KEY=VALUE per line). Leading '-' = file is optional.
+# Next.js also auto-loads .env.local at runtime; this line makes the same
+# values available to start.sh (PORT, LOG_DIR, etc.) before npm start runs.
+EnvironmentFile=-__PROJECT_DIR__/.env.local
+
+# Optional machine-level overrides (takes precedence over .env.local)
+EnvironmentFile=-/etc/agents-chat.env
+
+Environment=NODE_ENV=production
+
+ExecStart=__SCRIPT_DIR__/start.sh --no-build
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# journald captures stdout/stderr in addition to start.sh's tee'd files
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agents-chat
+
+# Light sandboxing
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

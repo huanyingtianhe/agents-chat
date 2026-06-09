@@ -32,26 +32,41 @@ Open [https://localhost:3010](https://localhost:3010).
 npm run build
 npm start            # serves on port 3000
 # or
-.\start.ps1          # builds + serves with a Dev Tunnel (permanent URL)
-.\start.ps1 -Cloudflare  # builds + serves with a Cloudflare quick tunnel
+.\scripts\start.ps1                       # Windows: builds + serves with a Dev Tunnel (permanent URL)
+.\scripts\start.ps1 -Cloudflare           # Windows: builds + serves with a Cloudflare quick tunnel
+.\scripts\start.ps1 -NoTunnel             # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
+./scripts/start.sh                # Linux: builds + serves on $PORT (default 3010)
+./scripts/start.sh --cloudflare   # Linux: also start a Cloudflare quick tunnel
+./scripts/start.sh --no-build     # Linux: skip the build step
 ```
 
 ### Deployment (Windows Scheduled Task)
 
-For persistent deployment on a Windows machine, use `deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot:
+For persistent deployment on a Windows machine, use `scripts\deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot. All Windows scripts live under `scripts\`:
+
+```
+scripts\
+├── start.ps1                  # launcher (used by the Scheduled Task or directly)
+├── deploy.ps1                 # one-shot updater (git pull + restart + health check)
+├── install-scheduled-task.ps1 # one-time installer (registers the Scheduled Task)
+├── service-watchdog.ps1       # supervisor that restarts start.ps1 if it exits
+├── tunnel-watchdog.ps1        # keeps the Dev Tunnel alive
+├── setup.ps1                  # initial machine setup (Dev Tunnel + .env)
+└── pack.ps1                   # bundle the project into a zip for transfer
+```
 
 ```powershell
 # Deploy (pulls latest code, restarts the service, waits for readiness)
-.\deploy.ps1
+.\scripts\deploy.ps1
 
 # Deploy without git pull
-.\deploy.ps1 -SkipGitPull
+.\scripts\deploy.ps1 -SkipGitPull
 
 # Deploy with AtStartup trigger (runs even without login)
-.\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
+.\scripts\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
 
 # Remove the scheduled task entirely
-.\deploy.ps1 -RemoveTask
+.\scripts\deploy.ps1 -RemoveTask
 ```
 
 The deploy script:
@@ -61,6 +76,84 @@ The deploy script:
 4. Waits up to 180s for `localhost:3000` to respond
 
 Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.log`.
+
+### Deployment (Linux systemd)
+
+For persistent deployment on Ubuntu/Debian, install the bundled systemd unit. The Linux scripts live under `scripts/`:
+
+```
+scripts/
+├── start.sh                    # launcher (used by systemd or directly)
+├── deploy.sh                   # one-shot updater (git pull + build + restart)
+├── install-systemd-service.sh  # one-time installer (renders the unit + enables it)
+└── agents-chat.service         # systemd unit template
+```
+
+The installer renders `agents-chat.service` for the current user, runs `npm run build` once, and enables + starts the unit.
+
+```bash
+# One-time install (also enables auto-start at boot)
+sudo ./scripts/install-systemd-service.sh
+
+# Override the run-as user (defaults to $SUDO_USER)
+sudo SERVICE_USER=myuser ./scripts/install-systemd-service.sh
+```
+
+Manage the service:
+
+```bash
+sudo systemctl status   agents-chat
+sudo systemctl restart  agents-chat
+sudo systemctl stop     agents-chat
+sudo journalctl -u agents-chat -f          # live log stream
+```
+
+Update to latest code (pulls, installs, builds, restarts, waits for health check):
+
+```bash
+sudo ./scripts/deploy.sh                    # pull + npm ci + build + restart + health check
+sudo ./scripts/deploy.sh --no-pull          # rebuild + restart without git pull
+sudo ./scripts/deploy.sh --no-install       # skip npm ci (no dep changes)
+sudo ./scripts/deploy.sh --wait 0           # don't wait for health check (default 120s)
+```
+
+Environment variables are loaded from two files (later wins):
+
+1. **`.env.local`** in the project root — the same file Next.js reads. systemd loads it into the unit's environment so `start.sh` (and `npm start`) see `PORT`, `LOG_*`, etc. before Node starts.
+2. **`/etc/agents-chat.env`** (optional) — machine-level overrides that take precedence over `.env.local`.
+
+> systemd's `EnvironmentFile` parser accepts `KEY=value` or `KEY="value"` per line. It does **not** support `export KEY=...`, single quotes, or `${VAR}` interpolation. Keep `.env.local` to plain `KEY=VALUE` lines if you want the unit to read them.
+
+```bash
+sudo tee /etc/agents-chat.env > /dev/null <<EOF
+PORT=8080
+LOG_LEVEL=debug
+LOG_DIR=/var/log/agents-chat
+EOF
+sudo systemctl restart agents-chat
+```
+
+You can also run `./scripts/start.sh` directly without systemd. Pass `--no-build` to skip the build step on restart.
+
+### Logging
+
+The server uses **pino + pino-roll** for structured logs. Defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `LOG_DIR` | `<project>/logs` | Absolute or relative path |
+| `LOG_FILE` | `app.log` | Base file name |
+| `LOG_ROTATE_FREQUENCY` | `daily` | `daily` / `hourly` / milliseconds |
+| `LOG_ROTATE_SIZE` | `10m` | Max size before mid-period rotation |
+| `LOG_RETENTION` | `7` | Number of rotated files to keep |
+
+Files written under `$LOG_DIR`:
+
+- `app.<date>.<n>.log` — pino structured JSON (rotated)
+- `server.log` / `server-error.log` — Next.js stdout/stderr (overwritten on each `start.ps1` / `start.sh` launch)
+
+On Linux, stdout/stderr are also captured by journald (`journalctl -u agents-chat`).
 
 ## Features
 

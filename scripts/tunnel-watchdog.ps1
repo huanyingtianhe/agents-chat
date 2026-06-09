@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $ProjectDir ".env.local"
 
 # Read tunnel config from .env.local

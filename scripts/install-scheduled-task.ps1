@@ -3,7 +3,7 @@
 
 param(
     [string]$TaskName = 'Agents-Chat-Startup',
-    [string]$ProjectDir = 'Q:\repos\Agents-Chat',
+    [string]$ProjectDir = (Split-Path -Parent $PSScriptRoot),
     [string]$UserId = 'FAREAST\wulei',
     [ValidateSet('Interactive', 'S4U')]
     [string]$LogonType = 'Interactive',
@@ -23,7 +23,7 @@ if (-not (Test-IsAdministrator)) {
     throw "install-scheduled-task.ps1 registers a highest-privilege Scheduled Task and must be run from an elevated PowerShell session. Run PowerShell as Administrator and try again."
 }
 
-$WatchdogScript = Join-Path $ProjectDir 'service-watchdog.ps1'
+$WatchdogScript = Join-Path $PSScriptRoot 'service-watchdog.ps1'
 if (-not (Test-Path $WatchdogScript)) {
     throw "Watchdog script not found: $WatchdogScript"
 }

@@ -1,10 +1,19 @@
-# Start ACP Chat with tunnel (Dev Tunnel or Cloudflare)
+# Start ACP Chat with tunnel (Dev Tunnel or Cloudflare) or just the local server
 # Usage: .\start.ps1              → uses Dev Tunnel (permanent URL)
 #        .\start.ps1 -Cloudflare  → uses Cloudflare quick tunnel (random URL)
-param([switch]$Cloudflare)
+#        .\start.ps1 -NoTunnel    → just start the local server (no tunnel, no Azure AD update)
+param(
+    [switch]$Cloudflare,
+    [switch]$NoTunnel
+)
+
+if ($Cloudflare -and $NoTunnel) {
+    Write-Host "-Cloudflare and -NoTunnel are mutually exclusive" -ForegroundColor Red
+    exit 2
+}
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $ProjectDir ".env.local"
 
 function Read-DotEnvFile {
@@ -46,9 +55,15 @@ function Get-RequiredEnvValue {
 }
 
 $DotEnv = Read-DotEnvFile -Path $EnvFile
-$AppId = Get-RequiredEnvValue -Values $DotEnv -Name "AZURE_AD_CLIENT_ID"
-$DevTunnelName = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_NAME"
-$DevTunnelUrl = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_URL"
+if ($NoTunnel) {
+    $AppId = $null
+    $DevTunnelName = $null
+    $DevTunnelUrl = $null
+} else {
+    $AppId = Get-RequiredEnvValue -Values $DotEnv -Name "AZURE_AD_CLIENT_ID"
+    $DevTunnelName = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_NAME"
+    $DevTunnelUrl = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_URL"
+}
 
 Write-Host "[$ProjectDir] Cleaning .next cache..." -ForegroundColor Cyan
 Set-Location $ProjectDir
@@ -58,7 +73,10 @@ Write-Host "[$ProjectDir] Building..." -ForegroundColor Cyan
 npm run build
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed" -ForegroundColor Red; exit 1 }
 
-if ($Cloudflare) {
+if ($NoTunnel) {
+    Write-Host "No tunnel mode: serving on http://localhost:3000 only" -ForegroundColor Cyan
+    $tunnelUrl = "http://localhost:3000"
+} elseif ($Cloudflare) {
     # --- Cloudflare quick tunnel (random URL each time) ---
     Write-Host "Starting Cloudflare tunnel..." -ForegroundColor Cyan
     $tunnelLog = "$env:TEMP\cloudflared-$PID.log"
@@ -145,7 +163,7 @@ $serverErr = Join-Path $env:LOG_DIR "server-error.log"
 $server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
 Start-Sleep -Seconds 2
 
-if (-not $Cloudflare) {
+if (-not $Cloudflare -and -not $NoTunnel) {
     Write-Host "Starting Dev Tunnel ($DevTunnelName)..." -ForegroundColor Cyan
     $tunnel = Start-Process -FilePath "devtunnel" -ArgumentList "host $DevTunnelName" -PassThru -NoNewWindow
     Start-Sleep -Seconds 3

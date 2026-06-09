@@ -3,7 +3,7 @@
     {
       "id": "copilot",
       "name": "GitHub Copilot",
-      "command": "copilot.exe",
+      "command": "copilot",
       "args": ["--acp"],
       "cwd": "",
       "yolo": true
@@ -22,7 +22,7 @@
     {
       "id": "scheduler",
       "name": "Scheduler",
-      "command": "copilot.exe",
+      "command": "copilot",
       "args": ["--acp"],
       "cwd": "",
       "noTools": true

@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 
 Write-Host "=== ACP Chat Setup ===" -ForegroundColor Cyan
 Write-Host ""
@@ -113,7 +113,7 @@ if (Test-Path $envFile) {
 }
 
 # Update start.ps1
-$startFile = Join-Path $ProjectDir "start.ps1"
+$startFile = Join-Path $PSScriptRoot "start.ps1"
 if (Test-Path $startFile) {
     $content = Get-Content $startFile -Raw
     $content = $content -replace '(\$DevTunnelUrl\s*=\s*")[^"]*(")', "`$1$tunnelUrl`$2"
@@ -152,6 +152,6 @@ Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "To start:" -ForegroundColor White
-Write-Host "  .\start.ps1" -ForegroundColor Yellow
+Write-Host "  .\scripts\start.ps1" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Tunnel URL: $tunnelUrl" -ForegroundColor Cyan

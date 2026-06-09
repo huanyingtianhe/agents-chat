@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const scriptPath = path.resolve(__dirname, '..', 'start.ps1');
+const scriptPath = path.resolve(__dirname, '..', 'scripts', 'start.ps1');
 const script = fs.readFileSync(scriptPath, 'utf8');
 
 function includesAll(...needles) {

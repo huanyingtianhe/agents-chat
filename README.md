@@ -32,10 +32,11 @@ Open [https://localhost:3010](https://localhost:3010).
 npm run build
 npm start            # serves on port 3000
 # or
-.\start.ps1          # Windows: builds + serves with a Dev Tunnel (permanent URL)
-.\start.ps1 -Cloudflare  # Windows: builds + serves with a Cloudflare quick tunnel
-./start.sh           # Linux: builds + serves on $PORT (default 3010)
-./start.sh --no-build  # Linux: skip the build step
+.\start.ps1               # Windows: builds + serves with a Dev Tunnel (permanent URL)
+.\start.ps1 -Cloudflare   # Windows: builds + serves with a Cloudflare quick tunnel
+.\start.ps1 -NoTunnel     # Windows: builds + serves locally on http://localhost:3000 (no tunnel)
+./start.sh                # Linux: builds + serves on $PORT (default 3010)
+./start.sh --no-build     # Linux: skip the build step
 ```
 
 ### Deployment (Windows Scheduled Task)

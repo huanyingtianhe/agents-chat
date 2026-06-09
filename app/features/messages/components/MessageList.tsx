@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent } from '../../agents/agentTypes';
 import type { ChatMessage, AgentUserRequestResponse } from '../../chat/chatTypes';
+import { useStableCallback } from '../../chat/hooks/useStableCallback';
 import type { FailedSendByMessageId } from '../messageTypes';
 import { MessageBubble, getMessageCopyText } from './MessageBubble';
 
@@ -35,7 +36,17 @@ export function MessageList({
     setMounted(true);
   }, []);
 
-  function handleCopy(message: ChatMessage) {
+  const messagesById = useMemo(() => {
+    const map = new Map<string, ChatMessage>();
+    for (const m of messages) map.set(m.id, m);
+    return map;
+  }, [messages]);
+  const messagesByIdRef = useRef(messagesById);
+  messagesByIdRef.current = messagesById;
+
+  const handleCopy = useStableCallback((messageId: string) => {
+    const message = messagesByIdRef.current.get(messageId);
+    if (!message) return;
     const text = getMessageCopyText(message);
     navigator.clipboard.writeText(text).then(() => {
       setCopiedMessageId(message.id);
@@ -45,9 +56,11 @@ export function MessageList({
     }).catch((err) => {
       console.error('Failed to copy message', err);
     });
-  }
+  });
 
-  function handleCopyFormatted(message: ChatMessage, html: string, text: string) {
+  const handleCopyFormatted = useStableCallback((messageId: string, html: string, text: string) => {
+    const message = messagesByIdRef.current.get(messageId);
+    if (!message) return;
     const flagCopied = () => {
       setCopiedFormattedMessageId(message.id);
       window.setTimeout(() => {
@@ -72,7 +85,14 @@ export function MessageList({
         console.error('Failed to copy message', err);
       });
     }
-  }
+  });
+
+  // Stabilize callback identities so React.memo on MessageBubble works.
+  const stableToggleExpanded = useStableCallback(onToggleExpanded);
+  const stableRetryFailedSend = useStableCallback(onRetryFailedSend);
+  const stableOpenImage = useStableCallback(onOpenImage);
+  const stableAnswerRequest = useStableCallback(onAnswerAgentUserRequest);
+  const stableDismissRequest = useStableCallback(onDismissAgentUserRequest);
 
   return (
     <>
@@ -86,13 +106,13 @@ export function MessageList({
           mounted={mounted}
           isCopied={copiedMessageId === message.id}
           isCopiedFormatted={copiedFormattedMessageId === message.id}
-          onCopy={() => handleCopy(message)}
-          onCopyFormatted={(html, text) => handleCopyFormatted(message, html, text)}
-          onToggleExpanded={() => onToggleExpanded(message.id)}
-          onRetryFailedSend={() => onRetryFailedSend(message.id)}
-          onOpenImage={onOpenImage}
-          onAnswerAgentUserRequest={onAnswerAgentUserRequest}
-          onDismissAgentUserRequest={onDismissAgentUserRequest}
+          onCopy={handleCopy}
+          onCopyFormatted={handleCopyFormatted}
+          onToggleExpanded={stableToggleExpanded}
+          onRetryFailedSend={stableRetryFailedSend}
+          onOpenImage={stableOpenImage}
+          onAnswerAgentUserRequest={stableAnswerRequest}
+          onDismissAgentUserRequest={stableDismissRequest}
         />
       ))}
     </>

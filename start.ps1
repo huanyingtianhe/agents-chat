@@ -140,7 +140,9 @@ New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
 Write-Host "Logs -> $($env:LOG_DIR)\$($env:LOG_FILE) (level=$($env:LOG_LEVEL), rotate=$($env:LOG_ROTATE_FREQUENCY)/$($env:LOG_ROTATE_SIZE), keep=$($env:LOG_RETENTION))" -ForegroundColor DarkGray
 
 Write-Host "Starting Next.js server..." -ForegroundColor Cyan
-$server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden
+$serverOut = Join-Path $env:LOG_DIR "server.log"
+$serverErr = Join-Path $env:LOG_DIR "server-error.log"
+$server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
 Start-Sleep -Seconds 2
 
 if (-not $Cloudflare) {

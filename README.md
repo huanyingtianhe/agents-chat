@@ -83,20 +83,25 @@ For persistent deployment on Ubuntu/Debian, install the bundled systemd unit. Th
 
 ```
 scripts/
-├── start.sh                    # launcher (used by systemd or directly)
-├── deploy.sh                   # one-shot updater (git pull + build + restart)
-├── install-systemd-service.sh  # one-time installer (renders the unit + enables it)
-└── agents-chat.service         # systemd unit template
+├── start.sh              # manual launcher (build + npm start, used by systemd unit too)
+├── deploy.sh             # install on first run, then update on subsequent runs
+└── agents-chat.service   # systemd unit template
 ```
 
-The installer renders `agents-chat.service` for the current user, runs `npm run build` once, and enables + starts the unit.
+`deploy.sh` is idempotent — the first invocation installs the unit, the rest update it.
 
 ```bash
-# One-time install (also enables auto-start at boot)
-sudo ./scripts/install-systemd-service.sh
+# First time on a machine (installs the unit, builds, enables auto-start, starts)
+sudo ./scripts/deploy.sh
 
-# Override the run-as user (defaults to $SUDO_USER)
-sudo SERVICE_USER=myuser ./scripts/install-systemd-service.sh
+# Override the run-as user on first install (defaults to $SUDO_USER)
+sudo SERVICE_USER=myuser ./scripts/deploy.sh
+
+# Subsequent updates: git pull + npm ci + build + restart + health check
+sudo ./scripts/deploy.sh
+sudo ./scripts/deploy.sh --no-pull          # rebuild + restart without git pull
+sudo ./scripts/deploy.sh --no-install       # skip npm ci (no dep changes)
+sudo ./scripts/deploy.sh --wait 0           # don't wait for health check (default 120s)
 ```
 
 Manage the service:
@@ -106,15 +111,6 @@ sudo systemctl status   agents-chat
 sudo systemctl restart  agents-chat
 sudo systemctl stop     agents-chat
 sudo journalctl -u agents-chat -f          # live log stream
-```
-
-Update to latest code (pulls, installs, builds, restarts, waits for health check):
-
-```bash
-sudo ./scripts/deploy.sh                    # pull + npm ci + build + restart + health check
-sudo ./scripts/deploy.sh --no-pull          # rebuild + restart without git pull
-sudo ./scripts/deploy.sh --no-install       # skip npm ci (no dep changes)
-sudo ./scripts/deploy.sh --wait 0           # don't wait for health check (default 120s)
 ```
 
 Environment variables are loaded from two files (later wins):

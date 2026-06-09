@@ -79,13 +79,32 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     }
     const runKey = `acp:${agentId}:${resumeChatId}`;
     if (!ctx.sessionRunsRef.current[runKey]) {
+      // If a workflow node is persisted as 'running' for this (agent, chat),
+      // bind the resumed turn back to it so finalizeRun updates the correct
+      // node and maybeAdvanceOrchestration fires dependents on completion.
+      let resumedOrchestrationId: string | null = null;
+      let resumedWorkflowNodeId: string | undefined;
+      for (const orch of Object.values(ctx.orchestrationsRef.current)) {
+        if (orch.mode !== 'workflow' || !orch.workflowPlan) continue;
+        if (orch.sourceChatId && orch.sourceChatId !== resumeChatId) continue;
+        const statuses = orch.nodeStatuses || {};
+        const node = orch.workflowPlan.nodes.find(
+          (n) => n.agent === agentId && statuses[n.id] === 'running',
+        );
+        if (node) {
+          resumedOrchestrationId = orch.id;
+          resumedWorkflowNodeId = node.id;
+          break;
+        }
+      }
       ctx.sessionRunsRef.current[runKey] = {
         agentId,
         pendingId,
-        orchestrationId: `orch-resume-${makeId()}`,
+        orchestrationId: resumedOrchestrationId ?? `orch-resume-${makeId()}`,
         kind: 'worker',
         currentText: turn.fullText || '',
         chatId: resumeChatId,
+        workflowNodeId: resumedWorkflowNodeId,
       };
       ctx.notifyRunStateChanged();
       void pollAcpAgent(agentId, resumeChatId);

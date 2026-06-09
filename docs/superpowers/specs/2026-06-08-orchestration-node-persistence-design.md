@@ -281,12 +281,30 @@ initial mount → useEffect → fetch last-chat
 
 ## Testing
 
-Manual end-to-end (Playwright spec added if existing orchestration
-coverage exists; otherwise deferred):
+### Unit tests (`node:test`)
+
+- **`test/workflow-hydration.test.mjs`** — covers the pure recovery helper
+  `recoverInterruptedOrchestration(state)`:
+  - A node in ``running`` becomes ``awaiting-input`` with the synthetic
+    reload-recovery prompt — the inline follow-up card therefore reappears
+    on the next render, and replying to it routes through the existing
+    resume path so retry continues the workflow.
+  - Existing partial result text is preserved (synthetic prompt only fills
+    when result is empty).
+  - Non-running statuses (``pending``, ``awaiting-input``, ``ok``,
+    ``failed``, ``skipped``) are not touched.
+  - ``summaryStarted`` is recomputed: ``true`` iff all plan nodes are
+    terminal (``ok|failed|skipped|stopped``).
+  - The input state object is not mutated.
+
+### Manual end-to-end
 
 1. 3-node workflow runs to completion → refresh → all nodes `ok`, bar gone.
 2. While node 1 is `running`, refresh → node 1 = `awaiting-input` with
-   reload-prompt; card visible; nodes 2/3 still `pending`.
+   reload-prompt; card visible; nodes 2/3 still `pending`. Reply to the
+   card → node 1 retries and finishes, node 2 fires (covered by the
+   unit test above at the state-shape level; manual run confirms the
+   UI loop).
 3. Reply to reload-prompt with normal text → node 1 retries, finishes,
    node 2 fires.
 4. Reply with `skip` → node 1 = `skipped`, dependents cascade-skip.

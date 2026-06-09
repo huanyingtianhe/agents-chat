@@ -1,4 +1,4 @@
-export type NodeStatus = 'pending' | 'running' | 'awaiting-input' | 'ok' | 'failed' | 'skipped';
+export type NodeStatus = 'pending' | 'running' | 'awaiting-input' | 'ok' | 'failed' | 'skipped' | 'stopped';
 
 export interface WorkflowNode {
   id: string;

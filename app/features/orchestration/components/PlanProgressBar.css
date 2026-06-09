@@ -91,3 +91,5 @@
   background: var(--warning, #f59e0b);
   animation: planNodePulse 1.6s ease-in-out infinite;
 }
+.planNode-stopped { color: var(--text-soft); }
+.planNode-stopped .planNodeDot { background: var(--muted); }

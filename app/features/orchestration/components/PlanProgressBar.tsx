@@ -17,6 +17,7 @@ const STATUS_LABEL: Record<NodeStatus, string> = {
   ok: 'done',
   failed: 'failed',
   skipped: 'skipped',
+  stopped: 'stopped',
 };
 
 export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
@@ -29,7 +30,7 @@ export function PlanProgressBar({ orchestration, variant = 'bar' }: Props) {
   const total = plan.nodes.length;
   const done = plan.nodes.filter((n) => {
     const s = statuses[n.id];
-    return s === 'ok' || s === 'failed' || s === 'skipped';
+    return s === 'ok' || s === 'failed' || s === 'skipped' || s === 'stopped';
   }).length;
 
   async function saveAs() {

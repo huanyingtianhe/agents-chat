@@ -122,7 +122,7 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       // Done? All nodes terminal AND no running runs left.
       const allTerminal = plan.nodes.every((n) => {
         const s = statuses[n.id];
-        return s === 'ok' || s === 'failed' || s === 'skipped';
+        return s === 'ok' || s === 'failed' || s === 'skipped' || s === 'stopped';
       });
       if (allTerminal) {
         state.summaryStarted = true;

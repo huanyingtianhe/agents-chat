@@ -55,9 +55,11 @@ export function detectWorkflowFollowUp(
     const awaitingAgentIds: string[] = [];
     for (const node of latest.workflowPlan!.nodes) {
       const s = statuses[node.id];
-      if (s !== 'ok') continue;
+      // A workflow node is "awaiting input" either because finalizeRun
+      // explicitly marked it so (output looked like a question) or because
+      // it finished ok but the stored result reads like a question.
       const text = latest.results[node.id] || latest.results[node.agent] || '';
-      if (!looksLikeQuestion(text)) continue;
+      if (s !== 'awaiting-input' && !(s === 'ok' && looksLikeQuestion(text))) continue;
       awaitingNodeIds.push(node.id);
       if (!awaitingAgentIds.includes(node.agent)) awaitingAgentIds.push(node.agent);
     }

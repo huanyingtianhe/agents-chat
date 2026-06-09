@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { memo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { mdComponents } from '../markdownHelpers';
@@ -25,7 +25,7 @@ function getMessageCopyText(message: ChatMessage): string {
   return message.content || '';
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   agents,
   failedSend,
@@ -48,10 +48,10 @@ export function MessageBubble({
   mounted: boolean;
   isCopied: boolean;
   isCopiedFormatted: boolean;
-  onCopy: () => void;
-  onCopyFormatted: (html: string, text: string) => void;
-  onToggleExpanded: () => void;
-  onRetryFailedSend: () => void;
+  onCopy: (messageId: string) => void;
+  onCopyFormatted: (messageId: string, html: string, text: string) => void;
+  onToggleExpanded: (messageId: string) => void;
+  onRetryFailedSend: (messageId: string) => void;
   onOpenImage: (src: string) => void;
   onAnswerAgentUserRequest: (requestId: string, response: AgentUserRequestResponse) => Promise<void>;
   onDismissAgentUserRequest: (requestId: string) => void;
@@ -65,7 +65,7 @@ export function MessageBubble({
     const node = ref.current;
     if (!node) {
       const fallback = getMessageCopyText(message);
-      onCopyFormatted('', fallback);
+      onCopyFormatted(message.id, '', fallback);
       return;
     }
     let htmlParts: string[] = [];
@@ -82,7 +82,7 @@ export function MessageBubble({
     }
     const html = htmlParts.join('\n');
     const text = textParts.join('\n').trim() || getMessageCopyText(message);
-    onCopyFormatted(html, text);
+    onCopyFormatted(message.id, html, text);
   };
 
   return (
@@ -129,11 +129,11 @@ export function MessageBubble({
                 )}
                 <div className={messageActionsClassName}>
                   {partsLong && !message.pending && (
-                    <button className="collapseToggle" onClick={onToggleExpanded}>
+                    <button className="collapseToggle" onClick={() => onToggleExpanded(message.id)}>
                       {isCollapsed ? 'Expand' : 'Collapse'}
                     </button>
                   )}
-                  <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend()} />
+                  <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend(message.id)} />
                   {message.type !== 'user' && (
                     <>
                       <button
@@ -141,7 +141,7 @@ export function MessageBubble({
                         className="messageCopyButton"
                         aria-label="Copy answer"
                         title="Copy answer"
-                        onClick={onCopy}
+                        onClick={() => onCopy(message.id)}
                       >
                         {isCopied ? 'Copied' : 'Copy'}
                       </button>
@@ -183,11 +183,11 @@ export function MessageBubble({
               )}
               <div className={messageActionsClassName}>
                 {isLong && (
-                  <button className="collapseToggle" onClick={onToggleExpanded}>
+                  <button className="collapseToggle" onClick={() => onToggleExpanded(message.id)}>
                     {isCollapsed ? 'Expand' : 'Collapse'}
                   </button>
                 )}
-                <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend()} />
+                <FailedSendActions message={message} failure={failedSend} onResend={() => onRetryFailedSend(message.id)} />
                 {message.type !== 'user' && (
                   <>
                     <button
@@ -195,7 +195,7 @@ export function MessageBubble({
                       className="messageCopyButton"
                       aria-label="Copy answer"
                       title="Copy answer"
-                      onClick={onCopy}
+                      onClick={() => onCopy(message.id)}
                     >
                       {isCopied ? 'Copied' : 'Copy'}
                     </button>
@@ -218,6 +218,6 @@ export function MessageBubble({
       )}
     </div>
   );
-}
+});
 
 export { getMessageCopyText };

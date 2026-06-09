@@ -111,10 +111,10 @@ sudo journalctl -u agents-chat -f          # live log stream
 Update to latest code (pulls, installs, builds, restarts, waits for health check):
 
 ```bash
-sudo ./scripts/deploy.sh                    # full update
-sudo ./scripts/deploy.sh --skip-git-pull    # rebuild + restart without pulling
-sudo ./scripts/deploy.sh --skip-install     # skip npm ci (no dep changes)
-sudo ./scripts/deploy.sh --wait 180         # custom health-check timeout (default 120, 0 to skip)
+sudo ./scripts/deploy.sh                    # pull + npm ci + build + restart + health check
+sudo ./scripts/deploy.sh --no-pull          # rebuild + restart without git pull
+sudo ./scripts/deploy.sh --no-install       # skip npm ci (no dep changes)
+sudo ./scripts/deploy.sh --wait 0           # don't wait for health check (default 120s)
 ```
 
 Environment variables are loaded from two files (later wins):

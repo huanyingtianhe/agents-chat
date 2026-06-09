@@ -129,8 +129,20 @@ $oldPids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | 
 foreach ($p in $oldPids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
 if ($oldPids) { Write-Host "Killed old server on port 3000" -ForegroundColor Yellow; Start-Sleep -Seconds 1 }
 
+# Logging defaults for pino + pino-roll (override via .env.local if needed)
+if (-not $env:LOG_LEVEL)            { $env:LOG_LEVEL = "info" }
+if (-not $env:LOG_DIR)              { $env:LOG_DIR = Join-Path $ProjectDir "logs" }
+if (-not $env:LOG_FILE)             { $env:LOG_FILE = "app.log" }
+if (-not $env:LOG_ROTATE_FREQUENCY) { $env:LOG_ROTATE_FREQUENCY = "daily" }
+if (-not $env:LOG_ROTATE_SIZE)      { $env:LOG_ROTATE_SIZE = "10m" }
+if (-not $env:LOG_RETENTION)        { $env:LOG_RETENTION = "7" }
+New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
+Write-Host "Logs -> $($env:LOG_DIR)\$($env:LOG_FILE) (level=$($env:LOG_LEVEL), rotate=$($env:LOG_ROTATE_FREQUENCY)/$($env:LOG_ROTATE_SIZE), keep=$($env:LOG_RETENTION))" -ForegroundColor DarkGray
+
 Write-Host "Starting Next.js server..." -ForegroundColor Cyan
-$server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden
+$serverOut = Join-Path $env:LOG_DIR "server.log"
+$serverErr = Join-Path $env:LOG_DIR "server-error.log"
+$server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
 Start-Sleep -Seconds 2
 
 if (-not $Cloudflare) {

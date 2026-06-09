@@ -15,14 +15,23 @@ import { getTerminals, handleTerminalCreate, handleTerminalKill, handleTerminalO
 import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
 import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
 import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
+import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-function ts(): string {
-  return new Date().toISOString().slice(11, 23);
-}
-const log = (...args: unknown[]) => console.log(`[${ts()}]`, ...args);
+const logger = createLogger('acp');
+
+const log = (...args: unknown[]) => {
+  if (args.length === 0) return;
+  const [first, ...rest] = args;
+  if (rest.length === 0) {
+    logger.info(typeof first === 'string' ? first : { value: first }, typeof first === 'string' ? undefined : 'log');
+    return;
+  }
+  const parts = args.map(a => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()));
+  logger.info(parts.join(' '));
+};
 
 /**
  * ACP (Agent Client Protocol) backend for multiple ACP agents.
@@ -174,7 +183,7 @@ async function warmLocalAgents(): Promise<WarmLocalAgentResult[]> {
       return { agentId: agent.id, status: 'started' };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      console.error(`[ACP:${agent.id}] Warmup failed:`, error);
+      logger.error({ agentId: agent.id, err: error }, `[ACP:${agent.id}] Warmup failed`);
       return { agentId: agent.id, status: 'failed', error };
     }
   }));
@@ -301,7 +310,7 @@ async function doBootAgent(agentId: string): Promise<void> {
       if (method === 'session/request_input' || method === 'session/request_user_input') {
         const queued = queueUserRequestForTurn(rpc, id, agentId, method, params ?? {});
         if (!queued) {
-          console.warn(`[ACP:${agentId}] Unable to attach ${method} request to an active turn; leaving request pending for user input`);
+          logger.warn({ agentId, method }, `[ACP:${agentId}] Unable to attach ${method} request to an active turn; leaving request pending for user input`);
         }
         return;
       }
@@ -485,7 +494,7 @@ async function doBootAgent(agentId: string): Promise<void> {
     log(`[ACP:${agentId}] Ready. Awaiting user sessions.`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[ACP:${agentId}] Boot failed:`, msg);
+    logger.error({ agentId, err: msg }, `[ACP:${agentId}] Boot failed`);
     proc.error = msg;
     proc.booting = false;
     if (proc.rpc) {
@@ -518,7 +527,7 @@ function normalizeMcpServerConfig(name: string, cfg: Record<string, unknown>): R
   if (type === 'http' || type === 'sse') {
     const url = typeof cfg.url === 'string' ? cfg.url.trim() : '';
     if (!url) {
-      console.warn(`[MCP] Skipping ${name}: ${type} server is missing url`);
+      logger.warn({ mcp: name, type }, `[MCP] Skipping ${name}: ${type} server is missing url`);
       return null;
     }
     return {
@@ -531,7 +540,7 @@ function normalizeMcpServerConfig(name: string, cfg: Record<string, unknown>): R
 
   const command = typeof cfg.command === 'string' ? cfg.command.trim() : '';
   if (!command) {
-    console.warn(`[MCP] Skipping ${name}: server is missing command or supported type/url`);
+    logger.warn({ mcp: name }, `[MCP] Skipping ${name}: server is missing command or supported type/url`);
     return null;
   }
   return {
@@ -819,7 +828,7 @@ function scheduleTurnPersist(turn: TurnState): void {
   turn.persistTimer = setTimeout(() => {
     turn.persistTimer = undefined;
     void persistTurnSnapshot(turn).catch(err => {
-      console.warn(`[ACP:${turn.agentId}] Failed to persist turn snapshot:`, err instanceof Error ? err.message : String(err));
+      logger.warn({ agentId: turn.agentId, err: err instanceof Error ? err.message : String(err) }, `[ACP:${turn.agentId}] Failed to persist turn snapshot`);
     });
   }, delay);
 }
@@ -830,7 +839,7 @@ async function flushTurnPersist(turn: TurnState): Promise<void> {
     turn.persistTimer = undefined;
   }
   await persistTurnSnapshot(turn).catch(err => {
-    console.warn(`[ACP:${turn.agentId}] Failed to flush turn snapshot:`, err instanceof Error ? err.message : String(err));
+    logger.warn({ agentId: turn.agentId, err: err instanceof Error ? err.message : String(err) }, `[ACP:${turn.agentId}] Failed to flush turn snapshot`);
   });
 }
 
@@ -1186,7 +1195,7 @@ function clearPendingUserRequestForTurn(turn: TurnState, reason: string, request
     pending.rpc.respond(pending.rpcRequestId, buildAbandonedUserRequestResponse(request));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[ACP:${pending.agentId}] Failed to clean up pending user request (${reason}): ${message}`);
+    logger.warn({ agentId: pending.agentId, reason, err: message }, `[ACP:${pending.agentId}] Failed to clean up pending user request (${reason}): ${message}`);
   } finally {
     pendingUserRequestResponders.delete(request.id);
   }
@@ -1845,7 +1854,7 @@ export async function POST(req: NextRequest) {
             getUserSessions().delete(key);
           }
         }
-        bootAgent(agentId).catch(err => console.error(`[ACP:${agentId}] Restart failed:`, err));
+        bootAgent(agentId).catch(err => logger.error({ agentId, err: err instanceof Error ? err.message : String(err) }, `[ACP:${agentId}] Restart failed`));
         restarted = true;
       }
 
@@ -2047,7 +2056,7 @@ export async function POST(req: NextRequest) {
 
     if (action === 'start') {
       if (!proc.ready && !proc.booting) {
-        bootAgent(agentId).catch(err => console.error(`[ACP:${agentId}] Boot failed:`, err));
+        bootAgent(agentId).catch(err => logger.error({ agentId, err: err instanceof Error ? err.message : String(err) }, `[ACP:${agentId}] Boot failed`));
       }
       return NextResponse.json({
         ok: true,
@@ -2426,7 +2435,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: false, error: 'unsupported_action' }, { status: 400 });
   } catch (error) {
-    console.error(`[ACP] POST error:`, error instanceof Error ? error.message : String(error));
+    logger.error({ err: error instanceof Error ? error.message : String(error) }, `[ACP] POST error`);
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : String(error) },
       { status: 500 },

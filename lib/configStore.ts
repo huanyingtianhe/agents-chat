@@ -1,6 +1,9 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import Database from 'better-sqlite3';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('configStore');
 
 /**
  * Server-side config storage for agents and nodes — SQLite backend.
@@ -167,9 +170,9 @@ function runMigrations(): void {
         db.prepare('INSERT INTO migrations (key) VALUES (?)').run('agents_json_import');
       });
       tx();
-      console.log(`[ConfigStore] Migrated ${agents.length} agents from agents.json (owner=${defaultOwner})`);
+      logger.info({ count: agents.length, owner: defaultOwner }, `[ConfigStore] Migrated ${agents.length} agents from agents.json (owner=${defaultOwner})`);
     } catch (err: any) {
-      if (err?.code !== 'ENOENT') console.error('[ConfigStore] agents.json migration error:', err);
+      if (err?.code !== 'ENOENT') logger.error({ err }, '[ConfigStore] agents.json migration error');
       // Mark as done even if file doesn't exist
       db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('agents_json_import');
     }
@@ -195,9 +198,9 @@ function runMigrations(): void {
         db.prepare('INSERT INTO migrations (key) VALUES (?)').run('nodes_json_import');
       });
       tx();
-      console.log(`[ConfigStore] Migrated ${nodes.length} nodes from nodes.json (owner=${defaultOwner})`);
+      logger.info({ count: nodes.length, owner: defaultOwner }, `[ConfigStore] Migrated ${nodes.length} nodes from nodes.json (owner=${defaultOwner})`);
     } catch (err: any) {
-      if (err?.code !== 'ENOENT') console.error('[ConfigStore] nodes.json migration error:', err);
+      if (err?.code !== 'ENOENT') logger.error({ err }, '[ConfigStore] nodes.json migration error');
       db.prepare('INSERT OR IGNORE INTO migrations (key) VALUES (?)').run('nodes_json_import');
     }
   }

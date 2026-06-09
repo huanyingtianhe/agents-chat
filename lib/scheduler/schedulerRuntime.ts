@@ -1,6 +1,9 @@
 import type { ScheduleStore } from "./scheduleStore.ts";
 import type { CronJob, CronRun } from "../../app/features/scheduler/scheduleTypes.ts";
 import { nextFires } from "../../app/features/scheduler/scheduleSpec.ts";
+import { createLogger } from "../logger.ts";
+
+const logger = createLogger("scheduler");
 
 type Runner = { runAgentOnce: (job: CronJob, opts?: { timeoutMs?: number }) => Promise<{ replyText: string; rawLog: string; error: string | null }> };
 type CronTaskLike = { stop: () => void; destroy?: () => void };
@@ -127,7 +130,7 @@ export async function ensureRuntime(): Promise<SchedulerRuntime | null> {
       await rt.start();
       return rt;
     } catch (err) {
-      console.error("[scheduler] ensureRuntime failed:", err);
+      logger.error({ err }, "[scheduler] ensureRuntime failed");
       g.__scheduler_ensure = null;
       return null;
     }

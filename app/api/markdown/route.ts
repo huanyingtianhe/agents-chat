@@ -8,6 +8,9 @@ import { getAuthToken, canTalkTo } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
 import { getAgentProcess, getAgentProcesses } from '@/lib/acp/runtimeState';
 import { createRelayNdjsonRpc } from '@/lib/acp/rpc';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('markdown');
 
 const execFileAsync = promisify(execFile);
 
@@ -128,7 +131,7 @@ export async function GET(req: NextRequest) {
     if (!proc || !proc.rpc) {
       try {
         const connName = agent.relayConnectionName || agentId;
-        console.log(`[markdown] Auto-connecting relay for ${agentId} (connection: ${connName})`);
+        logger.info({ agentId, connectionName: connName }, `[markdown] Auto-connecting relay for ${agentId} (connection: ${connName})`);
         const rpc = await createRelayNdjsonRpc(connName);
         if (!proc) {
           proc = getAgentProcess(agentId, agent as any);
@@ -141,7 +144,7 @@ export async function GET(req: NextRequest) {
           proc!.ready = false;
         };
       } catch (err: any) {
-        console.error(`[markdown] Failed to connect relay for ${agentId}:`, err.message);
+        logger.error({ agentId, err: err.message }, `[markdown] Failed to connect relay for ${agentId}: ${err.message}`);
         return NextResponse.json({ error: `relay connection failed: ${err.message}` }, { status: 503 });
       }
     }
@@ -151,15 +154,15 @@ export async function GET(req: NextRequest) {
 
     if (!filePath) {
       try {
-        console.log(`[markdown] Sending fs/list_files to relay agent ${agentId} (cwd: ${agentCwd})`);
+        logger.info({ agentId, cwd: agentCwd }, `[markdown] Sending fs/list_files to relay agent ${agentId} (cwd: ${agentCwd})`);
         const result = await proc.rpc.send('fs/list_files', { cwd: agentCwd || '/', diff: diffOnly }, 30_000) as any;
-        console.log(`[markdown] fs/list_files result:`, JSON.stringify(result).slice(0, 200));
+        logger.debug({ agentId, preview: JSON.stringify(result).slice(0, 200) }, `[markdown] fs/list_files result`);
         if (result?.error) {
           return NextResponse.json({ error: result.error }, { status: 400 });
         }
         return NextResponse.json({ files: result?.files || [] });
       } catch (err: any) {
-        console.error(`[markdown] fs/list_files error:`, err.message);
+        logger.error({ agentId, err: err.message }, `[markdown] fs/list_files error: ${err.message}`);
         return NextResponse.json({ error: `relay error: ${err.message}` }, { status: 502 });
       }
     } else {

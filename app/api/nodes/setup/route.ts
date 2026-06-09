@@ -5,6 +5,9 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { renderSetupNodeScript, normalizeLauncher } from '../../../../lib/setupNodeTemplate.mjs';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('nodes.setup');
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -65,7 +68,7 @@ export async function GET(req: Request) {
         try {
           await fs.rm(tempDir, { recursive: true, force: true });
         } catch (cleanupErr) {
-          console.warn('[Setup ZIP] Failed to clean up temporary setup files', cleanupErr);
+          logger.warn({ err: cleanupErr }, '[Setup ZIP] Failed to clean up temporary setup files');
         }
       }
     })();
@@ -78,7 +81,7 @@ export async function GET(req: Request) {
       },
     });
   } catch (err) {
-    console.error('[Setup ZIP]', err);
+    logger.error({ err }, '[Setup ZIP] error');
     return NextResponse.json(
       { ok: false, error: 'Failed to generate setup zip: ' + String(err) },
       { status: 500 }

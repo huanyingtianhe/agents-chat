@@ -7,6 +7,8 @@ import { useFullscreen } from '../useFullscreen';
 export type PageHeaderProps = {
   authLabel: string;
   isAdmin: boolean;
+  userEmail?: string | null;
+  userImage?: string | null;
   onSignOut: () => void;
   themeMenu: ReactNode;
   showChatsPanel: boolean;
@@ -27,6 +29,8 @@ export type PageHeaderProps = {
 export function PageHeader({
   authLabel,
   isAdmin,
+  userEmail,
+  userImage,
   onSignOut,
   themeMenu,
   showChatsPanel,
@@ -45,8 +49,10 @@ export function PageHeader({
 }: PageHeaderProps) {
   const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const headerOverflowRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const accountRef = useRef<HTMLDivElement | null>(null);
   const currentThemeId = normalizeThemeId(normalizedThemeId || activeThemeId);
   const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen();
 
@@ -71,6 +77,24 @@ export function PageHeader({
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [showSettings]);
+
+  useEffect(() => {
+    if (!showAccount) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (!accountRef.current?.contains(event.target as Node)) {
+        setShowAccount(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowAccount(false);
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showAccount]);
 
   return (
     <header className="header">
@@ -241,10 +265,56 @@ export function PageHeader({
           )}
         </div>
         {authLabel && (
-          <div className="userChip">
-            <span className="userAvatar">{(authLabel || '?')[0].toUpperCase()}</span>
-            <span className="userName">{authLabel}{isAdmin ? ' ★' : ''}</span>
+          <div className="userChip" ref={accountRef}>
+            {userImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="userAvatar userAvatarImage" src={userImage} alt="" />
+            ) : (
+              <span className="userAvatar">{(authLabel || '?')[0].toUpperCase()}</span>
+            )}
+            <button
+              type="button"
+              className="userName userNameButton"
+              onClick={() => setShowAccount((v) => !v)}
+              aria-haspopup="dialog"
+              aria-expanded={showAccount}
+              title="View account details"
+            >
+              {authLabel}{isAdmin ? ' ★' : ''}
+            </button>
             <button className="logoutBtn" onClick={onSignOut} title="Sign out">↗</button>
+            {showAccount && (
+              <div className="accountMenu" role="dialog" aria-label="Account details">
+                <div className="accountMenuHeader">
+                  {userImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img className="accountMenuAvatar" src={userImage} alt="" />
+                  ) : (
+                    <span className="accountMenuAvatar accountMenuAvatarFallback">{(authLabel || '?')[0].toUpperCase()}</span>
+                  )}
+                  <div className="accountMenuIdentity">
+                    <span className="accountMenuName">{authLabel}</span>
+                    <span className={`accountMenuRole ${isAdmin ? 'isAdmin' : ''}`}>{isAdmin ? '★ Administrator' : 'User'}</span>
+                  </div>
+                </div>
+                <div className="accountMenuRow">
+                  <span className="accountMenuLabel">Name</span>
+                  <span className="accountMenuValue">{authLabel}</span>
+                </div>
+                <div className="accountMenuRow">
+                  <span className="accountMenuLabel">Email</span>
+                  <span className="accountMenuValue">{userEmail || '—'}</span>
+                </div>
+                <div className="accountMenuRow">
+                  <span className="accountMenuLabel">Role</span>
+                  <span className="accountMenuValue">{isAdmin ? 'Administrator' : 'User'}</span>
+                </div>
+                <div className="accountMenuSeparator" />
+                <button type="button" className="accountMenuSignOut" onClick={() => { setShowAccount(false); onSignOut(); }}>
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

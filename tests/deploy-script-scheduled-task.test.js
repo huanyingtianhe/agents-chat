@@ -20,6 +20,11 @@ assert(
 );
 
 assert(
+  includesAll('Installing npm dependencies', 'npm install --no-audit --no-fund', "throw 'npm install failed'"),
+  'deploy.ps1 should install npm dependencies before restarting the Scheduled Task'
+);
+
+assert(
   !script.includes('if ((Test-Path $WatchdogLog) -or ($task -and $task.State -eq \'Running\') -or ($taskInfo -and $taskInfo.LastRunTime -ne $lastRunBefore))'),
   'deploy.ps1 should not treat an existing stale watchdog log or LastRunTime change alone as a successful task start'
 );

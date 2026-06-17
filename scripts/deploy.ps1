@@ -147,6 +147,10 @@ if (-not $SkipGitPull -and (Test-Path (Join-Path $ProjectDir '.git'))) {
     if ($LASTEXITCODE -ne 0) { throw 'git pull failed' }
 }
 
+Write-Step 'Installing npm dependencies...'
+npm install --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+
 Write-Step "Stopping Scheduled Task '$TaskName'..."
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3

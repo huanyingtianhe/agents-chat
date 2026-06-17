@@ -10,7 +10,7 @@ function includesAll(...needles) {
 }
 
 assert(
-  includesAll('Health check failed', 'Invoke-WebRequest', 'http://localhost:3000/api/auth/providers'),
+  includesAll('Health check failed', 'Invoke-WebRequest', '$healthCheckUrl = "http://localhost:$AppPort/api/auth/providers"'),
   'start.ps1 should continuously health-check the /api/auth/providers endpoint and fail when it is unhealthy'
 );
 
@@ -22,6 +22,21 @@ assert(
 assert(
   includesAll('$server.HasExited', '$tunnel.HasExited'),
   'start.ps1 should monitor both the Next.js server process and the tunnel process'
+);
+
+assert(
+  includesAll('$tunnelHealthCheckUrl', '$tunnelHealthFailures', '$DevTunnelUrl', 'Tunnel health check failed'),
+  'start.ps1 should probe the public dev tunnel URL and fail when the tunnel is unreachable even if the process is still running'
+);
+
+assert(
+  includesAll('-ge 200 -and $tunnelResponse.StatusCode -lt 400', '-ge 200 -and $statusCode -lt 400'),
+  'start.ps1 should treat HTTP 4xx and 5xx tunnel health responses as failures'
+);
+
+assert(
+  includesAll('$AppPort = 3000', 'next start --port $AppPort'),
+  'start.ps1 should start Next.js on the same port it health-checks and exposes through the dev tunnel'
 );
 
 assert(

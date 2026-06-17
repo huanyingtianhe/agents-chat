@@ -31,6 +31,7 @@ $WatchdogLog = Join-Path $ProjectDir 'logs\service-watchdog.log'
 $ChildLog = Join-Path $ProjectDir 'logs\start-service-child.log'
 $ChildErrLog = Join-Path $ProjectDir 'logs\start-service-child.err.log'
 $StopFile = Join-Path $ProjectDir '.service-stop'
+$ExpectedWatchdogScript = Join-Path $PSScriptRoot 'service-watchdog.ps1'
 
 function Write-Step {
     param([string]$Message)
@@ -62,13 +63,24 @@ function Test-TaskMatchesExpectedConfiguration {
     param([Parameter(Mandatory=$true)]$Task)
 
     $hasExpectedLogon = $Task.Principal.LogonType.ToString() -eq $TaskLogonType
+    $hasExpectedAction = $false
+    foreach ($action in $Task.Actions) {
+        $arguments = if ($action.Arguments) { $action.Arguments } else { '' }
+        $workingDirectory = if ($action.WorkingDirectory) { $action.WorkingDirectory } else { '' }
+        if ($action.Execute -ieq 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -and
+            $arguments.IndexOf($ExpectedWatchdogScript, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $workingDirectory -ieq $ProjectDir) {
+            $hasExpectedAction = $true
+            break
+        }
+    }
     $hasExpectedTrigger = if ($TaskTriggerType -eq 'AtStartup') {
         $Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }
     } else {
         $Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }
     }
 
-    return $hasExpectedLogon -and [bool]$hasExpectedTrigger
+    return $hasExpectedLogon -and $hasExpectedAction -and [bool]$hasExpectedTrigger
 }
 
 function Install-AgentsChatTask {
@@ -120,7 +132,7 @@ if (-not $task) {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task) { throw "Scheduled Task still not found after running install-scheduled-task.ps1" }
 } elseif (-not (Test-TaskMatchesExpectedConfiguration -Task $task)) {
-    Write-Step "Scheduled Task '$TaskName' uses $($task.Principal.LogonType)/older trigger settings; reinstalling as $TaskLogonType/$TaskTriggerType..."
+    Write-Step "Scheduled Task '$TaskName' uses older action/logon/trigger settings; reinstalling as $TaskLogonType/$TaskTriggerType with $ExpectedWatchdogScript..."
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Install-AgentsChatTask
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -135,6 +147,10 @@ if (-not $SkipGitPull -and (Test-Path (Join-Path $ProjectDir '.git'))) {
     if ($LASTEXITCODE -ne 0) { throw 'git pull failed' }
 }
 
+Write-Step 'Installing npm dependencies...'
+npm install --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+
 Write-Step "Stopping Scheduled Task '$TaskName'..."
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
@@ -148,6 +164,7 @@ Stop-Port3000Processes
 
 Write-Step "Starting Scheduled Task '$TaskName'..."
 $lastRunBefore = (Get-ScheduledTaskInfo -TaskName $TaskName).LastRunTime
+$watchdogLogLastWriteBefore = if (Test-Path $WatchdogLog) { (Get-Item $WatchdogLog).LastWriteTimeUtc } else { $null }
 Start-ScheduledTask -TaskName $TaskName
 
 $taskStarted = $false
@@ -155,7 +172,12 @@ for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Seconds 1
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ((Test-Path $WatchdogLog) -or ($task -and $task.State -eq 'Running') -or ($taskInfo -and $taskInfo.LastRunTime -ne $lastRunBefore)) {
+    $watchdogLogUpdated = $false
+    if (Test-Path $WatchdogLog) {
+        $watchdogLogLastWriteCurrent = (Get-Item $WatchdogLog).LastWriteTimeUtc
+        $watchdogLogUpdated = (-not $watchdogLogLastWriteBefore) -or ($watchdogLogLastWriteCurrent -gt $watchdogLogLastWriteBefore)
+    }
+    if ($watchdogLogUpdated -or ($task -and $task.State -eq 'Running')) {
         $taskStarted = $true
         break
     }
@@ -170,6 +192,9 @@ if (-not $taskStarted) {
             LastRunTime = $taskInfo.LastRunTime.ToString('s')
             LastTaskResult = $taskInfo.LastTaskResult
             LogonType = $task.Principal.LogonType.ToString()
+            ExpectedWatchdogScript = $ExpectedWatchdogScript
+            ActionArguments = ($task.Actions | ForEach-Object { $_.Arguments }) -join '; '
+            ActionWorkingDirectory = ($task.Actions | ForEach-Object { $_.WorkingDirectory }) -join '; '
             TriggerClasses = ($task.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ', '
         } | ConvertTo-Json -Compress | Write-Host -ForegroundColor Yellow
     }

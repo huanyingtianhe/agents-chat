@@ -83,7 +83,10 @@ export function WorkflowPicker({ open, onClose, onPicked, agentIds }: Props) {
             <div key={w.filePath} className="wfPickerItemRow">
               <button type="button" className="wfPickerItem"
                 onClick={() => { onPicked({ ...w.plan, name: w.name }); onClose(); }}>
-                <span className="wfPickerItemName">📋 {w.name}</span>
+                <span className="wfPickerItemName">
+                  <span className="wfPickerItemIcon" aria-hidden="true">#</span>
+                  <span>{w.name}</span>
+                </span>
                 <span className="wfPickerItemMeta">{w.plan.nodes.length} nodes</span>
               </button>
               <button type="button" className="wfPickerEditBtn" title="Edit this plan as JSON below"
@@ -98,7 +101,10 @@ export function WorkflowPicker({ open, onClose, onPicked, agentIds }: Props) {
             <div key={w.id} className="wfPickerItemRow">
               <button type="button" className="wfPickerItem"
                 onClick={() => { onPicked(w.plan); onClose(); }}>
-                <span className="wfPickerItemName">💾 {w.name}</span>
+                <span className="wfPickerItemName">
+                  <span className="wfPickerItemIcon" aria-hidden="true">#</span>
+                  <span>{w.name}</span>
+                </span>
                 <span className="wfPickerItemMeta">{w.plan.nodes.length} nodes</span>
               </button>
               <button type="button" className="wfPickerEditBtn" title="Edit this plan as JSON below"

@@ -88,6 +88,11 @@ assert.match(
   /className="accountMenuSignOut"[\s\S]{0,120}onClick=\{\(\) => \{ setShowAccount\(false\); onSignOut\(\); \}\}/,
   'Account popover should offer a Sign out action that closes the popover',
 );
+assert.doesNotMatch(
+  headerSource,
+  /className="logoutBtn"/,
+  'The header user chip should not render a second sign-out button beside the account icon',
+);
 
 // 4. The popover closes on outside-click and Escape.
 assert.match(

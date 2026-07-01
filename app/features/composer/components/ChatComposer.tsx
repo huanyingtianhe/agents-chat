@@ -147,7 +147,7 @@ export function ChatComposer({
               </div>
               <div className="composerActions composerToolbarActions">
                 {isSending
-                  ? <button className="sendButton stopButton" onClick={onStop} aria-label="Stop generation">⏹</button>
+                  ? <button className="sendButton stopButton" onClick={onStop} aria-label="Stop generation"><span className="stopButtonIcon" aria-hidden="true" /></button>
                   : <button className="sendButton" onClick={onSend} disabled={sendDisabled} aria-label="Send message">
                       <span className="sendButtonIcon">↑</span>
                     </button>

@@ -282,7 +282,6 @@ export function PageHeader({
             >
               {authLabel}{isAdmin ? ' ★' : ''}
             </button>
-            <button className="logoutBtn" onClick={onSignOut} title="Sign out">↗</button>
             {showAccount && (
               <div className="accountMenu" role="dialog" aria-label="Account details">
                 <div className="accountMenuHeader">

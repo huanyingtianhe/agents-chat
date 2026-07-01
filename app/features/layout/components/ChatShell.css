@@ -501,19 +501,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chatPageRoot .logoutBtn {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 2px;
-  font-size: 14px;
-  line-height: 1;
-  transition: color 150ms;
-}
-.chatPageRoot .logoutBtn:hover {
-  color: var(--accent);
-}
 .chatPageRoot .userChip {
   position: relative;
 }

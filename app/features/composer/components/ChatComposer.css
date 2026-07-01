@@ -379,6 +379,7 @@
 .targetPill {
   display: inline-flex;
   align-items: center;
+  min-height: 28px;
   padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);

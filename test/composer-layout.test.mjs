@@ -63,6 +63,11 @@ assert.match(
 	/@media \(max-width: 560px\) \{[\s\S]*?\.targetPill\s*\{[\s\S]*?white-space:\s*nowrap;/,
 	'mobile target pills should keep their labels on one line',
 );
+assert.match(
+	composerCss,
+	/\.targetPill\s*\{[\s\S]*?min-height:\s*28px;/,
+	'target pills should share a stable height whether or not they include a model selector',
+);
 assert.doesNotMatch(
 	composerCss,
 	/\.stopButton\s*\{[\s\S]*?linear-gradient\(135deg, var\(--danger\)/,

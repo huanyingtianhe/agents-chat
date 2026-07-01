@@ -73,7 +73,7 @@ jobs:
           exit 1
 
       - name: Run Playwright tests
-        run: npx playwright test --config test/playwright.config.ts
+        run: npx playwright test --config tests/playwright.config.ts
 
       - name: Upload Playwright artifacts
         if: failure()

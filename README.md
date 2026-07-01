@@ -460,9 +460,9 @@ Tests are Playwright E2E plus lightweight Node regression checks. Playwright exp
 
 ```bash
 # Backend/source regression checks
-node test/session-mcp-routing.test.mjs
-node test/session-prompt-stop-reason.test.mjs
-node test/markdown-file-limit.test.mjs
+node tests/session-mcp-routing.test.mjs
+node tests/session-prompt-stop-reason.test.mjs
+node tests/markdown-file-limit.test.mjs
 
 # Type/build checks
 npx tsc --noEmit
@@ -471,11 +471,11 @@ npm run build
 # Playwright E2E
 NEXT_PUBLIC_E2E_TESTS=1 npm run dev
 PLAYWRIGHT_BASE_URL=https://localhost:3010 NODE_TLS_REJECT_UNAUTHORIZED=0 \
-  npx playwright test --config test/playwright.config.ts
+  npx playwright test --config tests/playwright.config.ts
 
 # Single spec / single test
-npx playwright test --config test/playwright.config.ts test/test-ui.spec.ts
-npx playwright test --config test/playwright.config.ts -g "test name"
+npx playwright test --config tests/playwright.config.ts tests/test-ui.spec.ts
+npx playwright test --config tests/playwright.config.ts -g "test name"
 ```
 
 ## License

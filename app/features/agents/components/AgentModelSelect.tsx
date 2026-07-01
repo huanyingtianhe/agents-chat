@@ -57,7 +57,7 @@ export function AgentModelSelect({
   
   const selectedModel = models.find((model) => model.modelId === selectedModelId) || models[0];
   const selectedModelLabel = selectedModel?.name || selectedModel?.modelId || '';
-  const portalHost = typeof document !== 'undefined' ? document.querySelector('.chatPageRoot') || document.body : null;
+  const portalHost = typeof document !== 'undefined' ? localWrapRef.current?.closest('.page') || document.querySelector('.chatPageRoot .page') || document.body : null;
   const dropdown = isOpen && dropdownStyle ? (
     <div
       className="agentModelDropdown agentModelDropdownPortal"

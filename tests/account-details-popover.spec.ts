@@ -7,7 +7,7 @@
  *
  * Requires: dev server running on localhost:3010 with admin credentials
  * (ADMIN_USERNAME / ADMIN_PASSWORD), matching the rest of the UI suite.
- * Run:  npx playwright test test/account-details-popover.spec.ts
+ * Run:  npx playwright test tests/account-details-popover.spec.ts
  */
 
 import { test, expect, Page } from '@playwright/test';

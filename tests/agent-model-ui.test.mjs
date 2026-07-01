@@ -116,8 +116,8 @@ assert.match(
 );
 assert.match(
   modelSelectSource,
-  /const portalHost = typeof document !== 'undefined' \? document\.querySelector\('\.chatPageRoot'\) \|\| document\.body : null;/,
-  'model dropdown portal should render under .chatPageRoot so scoped dropdown styles still apply',
+  /const portalHost = typeof document !== 'undefined' \? localWrapRef\.current\?\.closest\('\.page'\) \|\| document\.querySelector\('\.chatPageRoot \.page'\) \|\| document\.body : null;/,
+  'model dropdown portal should render inside the current themed .page so theme variables still apply',
 );
 assert.match(
   modelSelectSource,

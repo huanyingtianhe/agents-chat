@@ -2,8 +2,8 @@
  * Playwright UI tests for Agents Chat.
  *
  * Requires: dev server running on localhost:3010
- * Run:  PLAYWRIGHT_BROWSERS_PATH=$HOME/.playwright-mcp npx playwright test test/test-ui.spec.ts --headed
- *   or: npx playwright test test/test-ui.spec.ts
+ * Run:  PLAYWRIGHT_BROWSERS_PATH=$HOME/.playwright-mcp npx playwright test tests/test-ui.spec.ts --headed
+ *   or: npx playwright test tests/test-ui.spec.ts
  */
 
 import { test, expect, Locator, Page } from '@playwright/test';

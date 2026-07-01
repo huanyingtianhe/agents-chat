@@ -232,6 +232,12 @@
   flex-direction: column;
   gap: 2px;
 }
+.chatPageRoot .agentModelDropdownPortal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  bottom: auto;
+}
 .chatPageRoot .agentModelOption {
   display: flex;
   align-items: center;

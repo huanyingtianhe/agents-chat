@@ -108,6 +108,28 @@ assert.match(
   'model selector should expose a stable test id for E2E coverage',
 );
 
+// 10b. Model dropdown is portaled so mobile horizontal pill scrolling cannot clip it.
+assert.match(
+  modelSelectSource,
+  /import \{ createPortal \} from 'react-dom';/,
+  'model dropdown should use a portal instead of rendering inside the scrollable target pills row',
+);
+assert.match(
+  modelSelectSource,
+  /const portalHost = typeof document !== 'undefined' \? document\.querySelector\('\.chatPageRoot'\) \|\| document\.body : null;/,
+  'model dropdown portal should render under .chatPageRoot so scoped dropdown styles still apply',
+);
+assert.match(
+  modelSelectSource,
+  /createPortal\(dropdown, portalHost\)/,
+  'model dropdown portal should render the dropdown into the resolved portal host',
+);
+assert.match(
+  modelSelectSource,
+  /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/,
+  'portaled model dropdown should stop mousedown propagation so outside-click handling does not close it before option clicks',
+);
+
 // 11. Model selector CSS — base styles (border, background, cursor).
 assert.match(
   cssBlock('.agentModelSelect'),
@@ -148,6 +170,13 @@ assert.doesNotMatch(
   cssBlock('.agentModelSelect'),
   /%2345d7ff|color:\s*var\(--accent\)/,
   'model selector must not hard-code the Aurora accent or override the target pill color',
+);
+
+// 17. Portaled dropdown CSS — fixed positioning escapes mobile overflow clipping.
+assert.match(
+  cssBlock('.agentModelDropdownPortal'),
+  /position:\s*fixed;[\s\S]*?bottom:\s*auto;/,
+  'portaled model dropdown should use fixed positioning and avoid inherited absolute bottom placement',
 );
 
 console.log('agent model UI checks passed');

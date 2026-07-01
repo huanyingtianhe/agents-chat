@@ -11,9 +11,9 @@ npm run build        # production build
 ### Tests (Playwright E2E)
 
 ```bash
-npx playwright test --config test/playwright.config.ts              # all specs
-npx playwright test --config test/playwright.config.ts test/test-ui.spec.ts  # single file
-npx playwright test --config test/playwright.config.ts -g "test name"        # single test by title
+npx playwright test --config tests/playwright.config.ts              # all specs
+npx playwright test --config tests/playwright.config.ts tests/test-ui.spec.ts  # single file
+npx playwright test --config tests/playwright.config.ts -g "test name"        # single test by title
 ```
 
 Tests expect the app running on `localhost:3010`. No unit test framework is configured.

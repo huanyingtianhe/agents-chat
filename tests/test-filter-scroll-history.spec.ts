@@ -3,7 +3,7 @@
  * input history backfill, and scroll-to-bottom on chat switch.
  *
  * Requires: dev server running on localhost:3010
- * Run: npx playwright test --config test/playwright.config.ts test/test-filter-scroll-history.spec.ts
+ * Run: npx playwright test --config tests/playwright.config.ts tests/test-filter-scroll-history.spec.ts
  */
 
 import { test, expect, Page } from '@playwright/test';

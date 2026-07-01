@@ -15,8 +15,8 @@ const readmeSource = readFileSync(new URL('../README.md', import.meta.url), 'utf
 const agentsConfig = JSON.parse(agentsConfigSource);
 const publicSetupSources = [
   setupNodeScriptSource,
-  readFileSync(new URL('../test/test-node-owner.spec.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../test/test-setup-node.spec.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./test-node-owner.spec.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./test-setup-node.spec.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/superpowers/specs/2026-05-18-setup-key-vault-template-design.md', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/superpowers/plans/2026-05-18-setup-key-vault-template.md', import.meta.url), 'utf8'),
 ].join('\n');

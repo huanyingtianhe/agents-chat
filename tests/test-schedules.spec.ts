@@ -2,7 +2,7 @@
  * Playwright tests for agent schedules REST API and UI.
  *
  * Requires: dev server running on localhost:3010
- * Run: npx playwright test test/test-schedules.spec.ts
+ * Run: npx playwright test tests/test-schedules.spec.ts
  */
 
 import { test, expect, Page } from '@playwright/test';

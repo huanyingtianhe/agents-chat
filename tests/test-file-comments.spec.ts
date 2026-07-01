@@ -2,7 +2,7 @@
  * File Comments — API + E2E tests.
  *
  * Requires: dev server running on localhost:3010
- * Run:  npx playwright test --config test/playwright.config.ts test/test-file-comments.spec.ts
+ * Run:  npx playwright test --config tests/playwright.config.ts tests/test-file-comments.spec.ts
  */
 
 import { test, expect, Page } from '@playwright/test';

@@ -53,6 +53,16 @@ assert.match(
 	/\.stopButtonIcon\s*\{[\s\S]*?width:\s*10px;[\s\S]*?height:\s*10px;[\s\S]*?border-radius:\s*2px;/,
 	'stop generation icon should be a compact CSS square for stable mobile rendering',
 );
+assert.match(
+	composerCss,
+	/@media \(max-width: 560px\) \{[\s\S]*?\.targetPills\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?overflow-x:\s*auto;/,
+	'mobile target pills should stay on one horizontally scrollable row instead of wrapping',
+);
+assert.match(
+	composerCss,
+	/@media \(max-width: 560px\) \{[\s\S]*?\.targetPill\s*\{[\s\S]*?white-space:\s*nowrap;/,
+	'mobile target pills should keep their labels on one line',
+);
 assert.doesNotMatch(
 	composerCss,
 	/\.stopButton\s*\{[\s\S]*?linear-gradient\(135deg, var\(--danger\)/,

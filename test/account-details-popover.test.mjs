@@ -129,5 +129,20 @@ assert.match(
   /\.chatPageRoot \.accountMenuSignOut:hover\s*\{[\s\S]*?color:\s*var\(--accent\)/,
   '.accountMenuSignOut:hover should use the themed accent color',
 );
+assert.match(
+  cssSource,
+  /@media \(max-width: 560px\) \{[\s\S]*?\.chatPageRoot \.header\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?padding:\s*6px 10px;/,
+  'Mobile header should remain a compact single row',
+);
+assert.match(
+  cssSource,
+  /@media \(max-width: 560px\) \{[\s\S]*?\.chatPageRoot \.header h1\s*\{[\s\S]*?font-size:\s*16px;/,
+  'Mobile header title should use a smaller font size',
+);
+assert.match(
+  cssSource,
+  /@media \(max-width: 560px\) \{[\s\S]*?\.chatPageRoot \.userName\s*\{[\s\S]*?max-width:\s*76px;/,
+  'Mobile header should constrain the account name so controls fit on one row',
+);
 
 console.log('account-details-popover.test.mjs: all assertions passed');

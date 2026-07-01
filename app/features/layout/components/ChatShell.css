@@ -1110,22 +1110,52 @@
 
 @media (max-width: 560px) {
   .chatPageRoot .header {
-    gap: 12px;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 6px 10px;
+    min-height: 48px;
+  }
+  .chatPageRoot .headerLeft {
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .chatPageRoot .header h1 {
-    font-size: 18px;
+    font-size: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .chatPageRoot .headerRight {
-    gap: 8px;
+    flex: 0 0 auto;
+    gap: 6px;
+    min-width: 0;
+  }
+  .chatPageRoot .userChip {
+    gap: 5px;
+    padding: 3px 7px 3px 3px;
+  }
+  .chatPageRoot .userAvatar {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+  }
+  .chatPageRoot .userName {
+    max-width: 76px;
   }
   .chatPageRoot .mobileOnlyButton {
-    min-height: 42px;
+    min-height: 36px;
   }
   .chatPageRoot .ghostButton,
   .chatPageRoot .themeMenuButton {
     min-height: unset;
-    padding: 6px 10px;
+    padding: 5px 9px;
     font-size: 14px;
+  }
+  .chatPageRoot .headerOverflowBtn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0;
   }
   .chatPageRoot .agentListItem {
     padding: 10px;

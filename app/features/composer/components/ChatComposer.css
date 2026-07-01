@@ -379,6 +379,7 @@
 .targetPill {
   display: inline-flex;
   align-items: center;
+  min-height: 28px;
   padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
@@ -577,13 +578,46 @@
 
   .composerShell {
     width: 100%;
-    padding: 10px 12px;
+    padding: 9px 10px;
     border-radius: 12px;
   }
 
   .composerToolbar {
     gap: 8px;
     align-items: flex-end;
+  }
+
+  .composerToolbarLeft {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    gap: 6px;
+  }
+
+  .targetPills {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 6px;
+    padding-bottom: 1px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .targetPills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .targetPill {
+    flex: 0 0 auto;
+    max-width: min(58vw, 220px);
+    padding: 5px 9px;
+    white-space: nowrap;
+  }
+
+  .modelTargetPill {
+    min-width: 0;
   }
 
   .composerTextarea {

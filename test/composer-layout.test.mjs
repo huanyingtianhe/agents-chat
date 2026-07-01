@@ -29,6 +29,16 @@ assert.ok(attachButtonIndex < attachIconIndex, 'file attachment button should in
 assert.doesNotMatch(shellSource.slice(attachButtonIndex, targetPillsIndex), /attachButtonLabel|>Files</, 'file attachment button should be icon-only');
 assert.ok(toolbarIndex < targetPillsIndex, 'agent/model target controls should live in the bottom toolbar');
 assert.ok(toolbarIndex < sendActionsIndex, 'send controls should live in the bottom toolbar');
+assert.match(
+	composerSource,
+	/aria-label="Stop generation">\s*<span className="stopButtonIcon" aria-hidden="true" \/>\s*<\/button>/,
+	'stop generation button should use a styled icon instead of a raw emoji glyph',
+);
+assert.doesNotMatch(
+	composerSource,
+	/>⏹<\/button>/,
+	'stop generation button should not render the heavy stop emoji glyph',
+);
 
 const textRowSource = shellSource.slice(textRowIndex, toolbarIndex);
 assert.doesNotMatch(textRowSource, /attachButton|targetControls|composerActions/, 'text row should contain only the textarea controls, not toolbar controls');
@@ -38,5 +48,15 @@ assert.match(composerCss, /\.composerTextRow\s*\{[\s\S]*?display:\s*flex;/, 'tex
 assert.match(composerCss, /\.attachmentTray\s*\{[\s\S]*?padding:\s*0 0 2px;/, 'attachment tray should sit as the compact top strip');
 assert.match(composerCss, /\.attachButton\s*\{[\s\S]*?width:\s*32px;[\s\S]*?border-radius:\s*999px;/, 'file attachment button should use a compact rounded icon-button shape');
 assert.doesNotMatch(composerCss, /\.attachButtonLabel\s*\{/, 'file attachment button should not include visible label styles');
+assert.match(
+	composerCss,
+	/\.stopButtonIcon\s*\{[\s\S]*?width:\s*10px;[\s\S]*?height:\s*10px;[\s\S]*?border-radius:\s*2px;/,
+	'stop generation icon should be a compact CSS square for stable mobile rendering',
+);
+assert.doesNotMatch(
+	composerCss,
+	/\.stopButton\s*\{[\s\S]*?linear-gradient\(135deg, var\(--danger\)/,
+	'stop generation button should not use the oversized danger gradient treatment',
+);
 
 console.log('composer layout checks passed');

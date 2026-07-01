@@ -46,7 +46,14 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
-.chatPageRoot .wfPickerItemName { font-size: 13px; font-weight: 500; }
+.chatPageRoot .wfPickerItemName {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 500;
+}
+.chatPageRoot .wfPickerItemIcon {
+  color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; font-weight: 800; line-height: 1;
+}
 .chatPageRoot .wfPickerItemMeta { font-size: 11px; color: var(--muted); }
 .chatPageRoot .wfPickerSection textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

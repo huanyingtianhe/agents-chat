@@ -239,6 +239,9 @@
 
 /* ── Orchestration pills / selects ── */
 .orchPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   cursor: pointer;
   border-color: var(--border);
   background: transparent;
@@ -261,6 +264,13 @@
 
 .orchPill.orchPillActive:hover {
   filter: brightness(1.08);
+}
+
+.workflowPillIcon {
+  color: inherit;
+  font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1;
 }
 
 .orchRoundsSelect {
@@ -506,13 +516,24 @@
 }
 
 .stopButton {
-  background: linear-gradient(135deg, var(--danger), color-mix(in srgb, var(--danger) 76%, black 24%)) !important;
-  border-color: color-mix(in srgb, var(--danger) 58%, transparent) !important;
-  color: #fff !important;
+  background: color-mix(in srgb, var(--panel-strong) 88%, var(--danger) 12%) !important;
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--border)) !important;
+  color: var(--danger) !important;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .stopButton:hover {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--panel-strong) 78%, var(--danger) 22%) !important;
+  filter: none;
+}
+
+.stopButtonIcon {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  display: block;
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
 }
 
 /* ── Mobile overrides ── */
@@ -536,6 +557,10 @@
     min-width: 40px;
     height: 40px;
     min-height: 40px;
+  }
+
+  .stopButton {
+    box-shadow: none;
   }
 
   .mentionDropdown {

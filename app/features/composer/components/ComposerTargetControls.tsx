@@ -51,7 +51,8 @@ export function ComposerTargetControls({
       onClick={onOpenWorkflowPicker}
       title="Workflow: pick a saved workflow or paste a JSON DAG to run"
     >
-      📋 {pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}
+      <span className="workflowPillIcon" aria-hidden="true">#</span>
+      <span>{pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}</span>
     </button>
   ) : null;
 

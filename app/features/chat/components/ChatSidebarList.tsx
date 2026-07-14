@@ -32,6 +32,9 @@ type ChatSidebarListProps = {
   chatMenuButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   actionMenuWidth: number;
   actionMenuHeight: number;
+  chatSearchQuery: string;
+  chatSearchResults: { id: string; name: string; ts: number; agentId?: string }[] | null;
+  chatSearchLoading: boolean;
   getChatSidebarStatus: (chatId: string) => ChatSidebarStatus | null;
   onCreateChat: () => void;
   onLoadChat: (chatId: string) => void;
@@ -42,6 +45,7 @@ type ChatSidebarListProps = {
   onRenameChat: (chatId: string, value: string) => void;
   onShareChat: (chatId: string) => void;
   onDeleteChat: (chatId: string) => void;
+  onChatSearchQueryChange: (value: string) => void;
 };
 
 export function ChatSidebarList({
@@ -59,6 +63,9 @@ export function ChatSidebarList({
   chatMenuButtonRefs,
   actionMenuWidth,
   actionMenuHeight,
+  chatSearchQuery,
+  chatSearchResults,
+  chatSearchLoading,
   getChatSidebarStatus,
   onCreateChat,
   onLoadChat,
@@ -69,15 +76,24 @@ export function ChatSidebarList({
   onRenameChat,
   onShareChat,
   onDeleteChat,
+  onChatSearchQueryChange,
 }: ChatSidebarListProps) {
   const allChats = (currentChatId && !chatHistory.some((chat) => chat.id === currentChatId))
     ? [{ id: currentChatId, name: chatName, ts: chatHistory[0]?.ts ? chatHistory[0].ts + 1 : Date.now() }, ...chatHistory]
     : chatHistory;
   const uniqueChats = normalizeChatHistory(allChats);
-  const filteredChats = (chatAgentFilter
+  const agentFilteredChats = (chatAgentFilter
     ? uniqueChats.filter((chat) => chat.agentId === chatAgentFilter || (!chat.agentId && chat.id === currentChatId))
     : uniqueChats
   ).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const searchTrimmed = chatSearchQuery.trim().toLowerCase();
+  // When search results are available (from server), use them; otherwise fall back to local name filter
+  const filteredChats = searchTrimmed
+    ? (chatSearchResults !== null ? chatSearchResults : agentFilteredChats.filter((chat) => {
+        const name = (chat.id === currentChatId ? chatName : chat.name) || '';
+        return name.toLowerCase().includes(searchTrimmed);
+      }))
+    : agentFilteredChats;
   const selectedAgentName = chatAgentFilter
     ? chatFilterAgents.find((agent) => agent.id === chatAgentFilter)?.name || chatAgentFilter
     : '';
@@ -88,6 +104,26 @@ export function ChatSidebarList({
         <button className="newChatButton" onClick={onCreateChat}>
           + New Chat{chatAgentFilter ? ` (${selectedAgentName})` : ''}
         </button>
+      </div>
+      <div className="chatSearchRow">
+        <input
+          className="chatSearchInput"
+          type="text"
+          placeholder="Search Chats"
+          value={chatSearchQuery}
+          onChange={(e) => onChatSearchQueryChange(e.target.value)}
+          aria-label="Search chat history"
+        />
+        {chatSearchQuery && (
+          <button
+            className="chatSearchClear"
+            onClick={() => onChatSearchQueryChange('')}
+            aria-label="Clear search"
+            title="Clear search"
+          >
+            ✕
+          </button>
+        )}
       </div>
       {filteredChats.map((chat) => {
         const isCurrent = chat.id === currentChatId;
@@ -209,6 +245,12 @@ export function ChatSidebarList({
           </div>
         );
       })}
+      {searchTrimmed && chatSearchLoading && (
+        <div className="chatSearchEmpty">Searching…</div>
+      )}
+      {searchTrimmed && !chatSearchLoading && filteredChats.length === 0 && (
+        <div className="chatSearchEmpty">No chats found</div>
+      )}
     </>
   );
 }

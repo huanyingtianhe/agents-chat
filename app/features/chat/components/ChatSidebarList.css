@@ -2,6 +2,58 @@
   display: flex;
   gap: 6px;
 }
+.chatSearchRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 4px 0 2px;
+}
+.chatSearchInput {
+  width: 100%;
+  padding: 7px 30px 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.chatSearchInput::placeholder {
+  color: var(--muted);
+}
+.chatSearchInput:focus {
+  border-color: var(--accent);
+}
+.chatSearchClear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.12s;
+}
+.chatSearchClear:hover {
+  color: var(--text);
+}
+.chatSearchEmpty {
+  padding: 16px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
 .participantsList {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

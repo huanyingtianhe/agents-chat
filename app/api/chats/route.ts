@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat } from '@/lib/chatStore';
+import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +26,12 @@ export async function GET(req: NextRequest) {
     const chat = await getChat(userId, chatId);
     if (!chat) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
     return NextResponse.json({ ok: true, chat });
+  }
+
+  const searchQuery = req.nextUrl.searchParams.get('search');
+  if (searchQuery && searchQuery.trim()) {
+    const chats = await searchChats(userId, searchQuery.trim());
+    return NextResponse.json({ ok: true, chats });
   }
 
   const chats = await listChats(userId);

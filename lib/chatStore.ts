@@ -235,7 +235,24 @@ export async function getChat(userId: string, chatId: string): Promise<StoredCha
   return getChatWithDb(db, userId, chatId);
 }
 
-/** Save (create or update) a chat. */
+/** Search chats by name or message content for a user. Returns metadata only. */
+export async function searchChats(
+  userId: string,
+  query: string,
+): Promise<{ id: string; name: string; ts: number; agentId?: string }[]> {
+  const db = getDb();
+  const pattern = `%${query}%`;
+  const rows = db.prepare(`
+    SELECT chat_id, name, ts, agent_id FROM chats
+    WHERE user_id = ?
+      AND (name LIKE ? OR messages LIKE ?)
+    ORDER BY ts DESC, chat_id DESC
+    LIMIT 100
+  `).all(userId, pattern, pattern) as any[];
+  return rows.map(r => ({ id: r.chat_id, name: r.name, ts: r.ts, agentId: r.agent_id || undefined }));
+}
+
+
 export async function saveChat(userId: string, chat: StoredChat): Promise<void> {
   const db = getDb();
   saveChatWithDb(db, userId, chat);

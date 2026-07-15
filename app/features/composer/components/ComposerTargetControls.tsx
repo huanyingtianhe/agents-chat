@@ -49,10 +49,10 @@ export function ComposerTargetControls({
       type="button"
       className={`targetPill orchPill ${orchestrationMode === 'workflow' ? 'orchPillActive' : ''}`}
       onClick={onOpenWorkflowPicker}
-      title="Workflow: pick a saved workflow or paste a JSON DAG to run"
+      title="workflow: pick a saved workflow or paste a JSON DAG to run"
     >
       <span className="workflowPillIcon" aria-hidden="true">#</span>
-      <span>{pendingWorkflowName ? `Workflow: ${pendingWorkflowName}` : 'Workflow'}</span>
+      <span>{pendingWorkflowName ? `workflow: ${pendingWorkflowName}` : 'workflow'}</span>
     </button>
   ) : null;
 

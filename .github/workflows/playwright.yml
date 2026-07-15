@@ -14,9 +14,7 @@ permissions:
 jobs:
   playwright:
     name: Run Playwright tests
-    # GitHub-hosted runners are disabled for this repository.
-    # Register a Windows x64 self-hosted runner with the mwc-wulei label.
-    runs-on: [self-hosted, Windows, X64, mwc-wulei]
+    runs-on: windows-latest
     timeout-minutes: 30
 
     env:

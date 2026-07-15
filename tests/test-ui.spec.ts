@@ -1584,7 +1584,13 @@ test.describe('Chat UI', () => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea.composerTextarea');
     const userText = '@alpha @beta coordinate follow-up failure';
-    const schedulerDecision = '{ "done": false, "nextAgent": "beta", "instruction": "Beta follow-up instruction" }';
+    const schedulerDecision = JSON.stringify({
+      version: 1,
+      nodes: [
+        { id: 'beta-step', agent: 'beta', instruction: 'Beta follow-up instruction', dependsOn: [] },
+        { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha follows beta', dependsOn: ['beta-step'] },
+      ],
+    });
     const sendRequests: any[] = [];
 
     await page.route('**/api/acp', async (route) => {
@@ -1652,7 +1658,7 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
   });
 
-  test('should remove partial discussion agent messages when one initial send fails', async ({ page }) => {
+  test('should remove partial workflow agent messages when one initial send fails', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea.composerTextarea');
     const userText = '@alpha @beta discuss partial initial failure';
@@ -1666,6 +1672,7 @@ test.describe('Chat UI', () => {
           body: JSON.stringify({
             ok: true,
             agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
               { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
               { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
             ],
@@ -1689,6 +1696,32 @@ test.describe('Chat UI', () => {
         return;
       }
       if (body?.action === 'poll') {
+        if (body.agentId === 'scheduler') {
+          const schedulerPlan = JSON.stringify({
+            version: 1,
+            nodes: [
+              { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha handles the task', dependsOn: [] },
+              { id: 'beta-step', agent: 'beta', instruction: 'Beta handles the task', dependsOn: [] },
+            ],
+          });
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: true,
+              phase: 'idle',
+              ready: true,
+              activeTurn: {
+                id: 'turn-scheduler-discussion-partial',
+                fullText: schedulerPlan,
+                done: true,
+                phase: 'done',
+                statusText: '',
+                events: [{ type: 'text_chunk', ts: Date.now(), text: schedulerPlan }],
+              },
+            }),
+          });
+          return;
+        }
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
@@ -1713,13 +1746,12 @@ test.describe('Chat UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     await textarea.fill(userText);
-    await page.getByRole('button', { name: /Discussion/ }).click();
     await page.click('button[aria-label="Send message"]');
     await expect.poll(() => sendRequests.some((request) => request.agentId === 'beta'), { timeout: 10000 }).toBe(true);
 
     const failedUserMessage = chatArea.locator('.message.user', { hasText: userText });
     await expectCompactFailedSendStatus(failedUserMessage);
-    await expect(chatArea.locator('.message.agent')).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent', { has: page.locator('.agentName', { hasText: /Alpha Agent|Beta Agent/ }) })).toHaveCount(0);
   });
 
   test('should keep resend disabled for mentioned legacy failures until agents load', async ({ page }) => {
@@ -1839,6 +1871,57 @@ test.describe('Chat UI', () => {
 
   test('should switch between chats and remember context', async ({ page }) => {
     test.setTimeout(360000); // 6 min — two agent round-trips + session reload
+    let turn = 0;
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        turn += 1;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: `turn-${turn}` } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        const reply = turn === 1 ? 'a is 2' : '2';
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: `turn-${turn}`,
+              fullText: reply,
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: reply }],
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session' || body?.action === 'ensure-agent-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await ensureActiveChat(page);
     const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
@@ -1938,6 +2021,35 @@ test.describe('Chat UI', () => {
 
   test('should persist messages to SQLite after send and reload', async ({ page }) => {
     test.setTimeout(240000);
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-persistence', phase: 'thinking', turn: { id: 'turn-persistence' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-persistence',
+              fullText: '5',
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: '5' }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
     await ensureActiveChat(page);
     const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
@@ -2632,7 +2744,13 @@ test.describe('Chat UI', () => {
       }
       if (body?.action === 'poll') {
         if (body.agentId === 'scheduler') {
-          const schedulerDecision = JSON.stringify({ done: false, nextAgent: 'beta', instruction: selectedInstruction });
+          const schedulerDecision = JSON.stringify({
+            version: 1,
+            nodes: [
+              { id: 'beta-step', agent: 'beta', instruction: selectedInstruction, dependsOn: [] },
+              { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha follows beta', dependsOn: ['beta-step'] },
+            ],
+          });
           await route.fulfill({
             contentType: 'application/json',
             body: JSON.stringify({
@@ -4625,7 +4743,7 @@ test.describe('Agent Filter Tabs', () => {
     });
 
     await page.evaluate(() => window.localStorage.setItem('acp_agent_filter_v1', 'scheduler'));
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
     const slot = page.locator('.chatAgentFilterPickerSlot');

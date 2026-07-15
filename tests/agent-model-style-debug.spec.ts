@@ -13,8 +13,8 @@ async function login(page: Page) {
 async function ensureActiveChat(page: Page) {
   const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 3000 }).catch(() => false);
   if (isEmpty) {
-    await page.locator('button.newChatButton, button.emptyHomepageNewChat').first().click();
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    await page.locator('button.emptyHomepageNewChat').click();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
   }
 }
 
@@ -40,6 +40,24 @@ test('debug model select computed styles', async ({ page }) => {
   });
 
   await login(page);
+  const chats = await page.evaluate(async () => {
+    const response = await fetch('/api/chats');
+    return response.json();
+  });
+  for (const chat of chats.chats || []) {
+    await page.evaluate(async (chatId) => {
+      await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+    }, chat.id);
+  }
+  await page.evaluate(async () => {
+    await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId: '' }),
+    });
+  });
+  await page.reload();
+  await page.waitForSelector('.emptyHomepage', { timeout: 30000 });
   await ensureActiveChat(page);
   await page.locator('textarea.composerTextarea').fill('@alpha compare models');
   await expect(page.locator('[data-testid="agent-model-select"]')).toHaveCount(1);

@@ -41,7 +41,7 @@ test('debug model select computed styles', async ({ page }) => {
 
   await login(page);
   await ensureActiveChat(page);
-  await page.locator('textarea[placeholder="Message Agents Chat"]').fill('@alpha compare models');
+  await page.locator('textarea.composerTextarea').fill('@alpha compare models');
   await expect(page.locator('[data-testid="agent-model-select"]')).toHaveCount(1);
   const styles = await page.locator('.modelTargetPill').evaluate((pill) => {
     const select = pill.querySelector('[data-testid="agent-model-select"]') as HTMLSelectElement;

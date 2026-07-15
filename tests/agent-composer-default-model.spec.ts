@@ -107,7 +107,7 @@ test('composer model picker saves the selected model as a user preference', asyn
   await ensureActiveChat(page);
   await page.waitForTimeout(500);
 
-  const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.fill('@alpha use composer default model');
 
   await expectModelPickerSelection(page, 'alpha', 'Claude Sonnet 4.6');

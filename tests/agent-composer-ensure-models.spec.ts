@@ -73,7 +73,7 @@ test('composer creates a chat-bound session to populate empty agent models', asy
   await login(page);
   await ensureActiveChat(page);
 
-  const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.fill('@alpha discover models before sending');
 
   await expect.poll(() => ensureRequests.map((request) => `${request.agentId}:${request.chatId}`)).toEqual([`alpha:${seenChatId}`]);

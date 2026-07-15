@@ -1235,7 +1235,7 @@ test.describe('File Comments UI', () => {
       await commentCard.click();
       await commentCard.getByRole('button', { name: 'View chat' }).click();
 
-      await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
+      await expect(page.locator('textarea.composerTextarea')).toBeVisible();
       await expect(page.locator('.message.agent', { hasText: 'Resolved review chat content' })).toBeVisible();
     } finally {
       await page.evaluate(async (reviewChatId: string) => {
@@ -1934,7 +1934,7 @@ test.describe('File Comments UI', () => {
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await page.click('button.leftSidebarTab:has-text("Chats")');
       await page.click('button.chatHistoryItem:has-text("Review: ui-legacy-review.md")');
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'finish legacy review run');
+      await page.fill('textarea.composerTextarea', 'finish legacy review run');
       await page.click('button[aria-label="Send message"]');
 
       await expect.poll(() => resolvedCommentIds).toContain(commentId);
@@ -2467,7 +2467,7 @@ test.describe('File Comments UI', () => {
     await page.click('button[type="submit"]');
 
     await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
-    await expect(filesAgentTrigger(page)).toHaveValue('restore-agent');
+    await expect(filesAgentTrigger(page)).toHaveAttribute('data-value', 'restore-agent');
     await expect(page.locator('.mdEditorFilePath')).toContainText('restore.md');
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
     await expect(page.locator('.mdModeBtn.active')).toHaveText('Live Edit');
@@ -2694,7 +2694,7 @@ test.describe('File Comments UI', () => {
     await page.click('button.leftSidebarTab:has-text("Chats")');
     await page.click('button.chatHistoryItem:has-text("Switch Back Chat")');
 
-    await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
+    await expect(page.locator('textarea.composerTextarea')).toBeVisible();
     await expect(page.locator('.message.user', { hasText: 'chat content should be visible after switching back' })).toBeVisible();
     await expect(page.locator('.mdEditorFilePath')).toHaveCount(0);
   });
@@ -2751,7 +2751,7 @@ test.describe('File Comments UI', () => {
     await expect(page.locator('.mdDirtyBadge')).toBeVisible();
 
     await page.click('button.leftSidebarTab:has-text("Chats")');
-    await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
+    await expect(page.locator('textarea.composerTextarea')).toBeVisible();
     await page.click('button.leftSidebarTab:has-text("Files")');
 
     await expect(page.locator('.mdLiveEditable')).toContainText('Changed live text survives switching.');

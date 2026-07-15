@@ -52,6 +52,7 @@ export function SelectPicker<V extends string = string>({
       <button
         type="button"
         className={`themedPickerTrigger ${open ? 'themedPickerOpen' : ''}`}
+        data-value={value}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
@@ -73,6 +74,7 @@ export function SelectPicker<V extends string = string>({
                   key={o.value}
                   type="button"
                   role="option"
+                  data-value={o.value}
                   aria-selected={isSelected}
                   className={`themedPickerOption ${isSelected ? 'themedPickerOptionActive' : ''}`}
                   onClick={() => { onChange(o.value); setOpen(false); }}

@@ -22,12 +22,16 @@ jobs:
         shard:
           - index: 1
             total: 4
+            parts: 1 5 9 13
           - index: 2
             total: 4
+            parts: 2 6 10 14
           - index: 3
             total: 4
+            parts: 3 7 11 15
           - index: 4
             total: 4
+            parts: 4 8 12 16
 
     env:
       ADMIN_PASSWORD: admin123
@@ -78,7 +82,10 @@ jobs:
           exit 1
 
       - name: Run Playwright tests
-        run: npx playwright test --config tests/playwright.config.ts --shard=${{ matrix.shard.index }}/${{ matrix.shard.total }}
+        run: |
+          for shard in ${{ matrix.shard.parts }}; do
+            npx playwright test --config tests/playwright.config.ts --shard="$shard/16"
+          done
 
       - name: Upload Playwright artifacts
         if: failure()

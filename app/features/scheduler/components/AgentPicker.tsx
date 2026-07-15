@@ -39,6 +39,7 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
         className={`themedPickerTrigger ${open ? 'themedPickerOpen' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
+        data-value={value}
         disabled={disabled}
         onClick={() => setOpen((p) => !p)}
       >
@@ -59,6 +60,7 @@ export function AgentPicker({ agents, value, disabled, onChange }: AgentPickerPr
                   role="option"
                   aria-selected={isSelected}
                   className={`themedPickerOption ${isSelected ? 'themedPickerOptionActive' : ''}`}
+                  data-value={a.id}
                   onClick={() => { onChange(a.id); setOpen(false); }}
                   title={`@${a.id}`}
                 >

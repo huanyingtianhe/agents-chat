@@ -55,7 +55,7 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
       setPrompt('');
       setEnabled(true);
       setSpecKind('every_minutes');
-      setEveryMinutesInterval(60);
+      setEveryMinutesInterval(30);
       setTimeoutMinutes(DEFAULT_TIMEOUT_MINUTES);
       setError(null);
     } else {

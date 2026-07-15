@@ -712,6 +712,8 @@
 }
 .chatPageRoot .modal {
   width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: 20px;

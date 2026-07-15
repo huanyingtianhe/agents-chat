@@ -13,9 +13,21 @@ permissions:
 
 jobs:
   playwright:
-    name: Run Playwright tests
+    name: Run Playwright tests (${{ matrix.shard.index }}/${{ matrix.shard.total }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - index: 1
+            total: 4
+          - index: 2
+            total: 4
+          - index: 3
+            total: 4
+          - index: 4
+            total: 4
 
     env:
       ADMIN_PASSWORD: admin123
@@ -66,13 +78,13 @@ jobs:
           exit 1
 
       - name: Run Playwright tests
-        run: npx playwright test --config tests/playwright.config.ts
+        run: npx playwright test --config tests/playwright.config.ts --shard=${{ matrix.shard.index }}/${{ matrix.shard.total }}
 
       - name: Upload Playwright artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.shard.index }}
           path: |
             playwright-report/
             test-results/

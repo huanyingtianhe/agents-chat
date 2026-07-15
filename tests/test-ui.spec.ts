@@ -3787,8 +3787,10 @@ test.describe('Chat UI', () => {
     finishTurn = true;
     await expect(chatArea.locator(`.message.agent:has-text("${finalText}")`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
-    await page.waitForTimeout(500);
-    expect(chatPosts.filter((body) => body?.chat).length).toBe(chatSaveCountAfterUserMessage);
+    await expect.poll(() => chatPosts.filter((body) => body?.chat).length, { timeout: 10000 })
+      .toBe(chatSaveCountAfterUserMessage + 1);
+    const finalSave = chatPosts.filter((body) => body?.chat).at(-1);
+    expect(finalSave.chat.messages.some((message: any) => message.type === 'agent' && message.content === finalText)).toBe(true);
 
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });
@@ -4724,6 +4726,10 @@ test.describe('Agent Filter Tabs', () => {
   });
 
   test('should hide scheduler from agent filter dropdown', async ({ page }) => {
+    let resolveAgentsLoaded: () => void = () => {};
+    const agentsLoaded = new Promise<void>((resolve) => {
+      resolveAgentsLoaded = resolve;
+    });
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
       if (body?.action === 'list-agents') {
@@ -4737,6 +4743,7 @@ test.describe('Agent Filter Tabs', () => {
             ],
           }),
         });
+        resolveAgentsLoaded();
         return;
       }
       await route.continue();
@@ -4744,6 +4751,7 @@ test.describe('Agent Filter Tabs', () => {
 
     await page.evaluate(() => window.localStorage.setItem('acp_agent_filter_v1', 'scheduler'));
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await agentsLoaded;
     await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
     const slot = page.locator('.chatAgentFilterPickerSlot');

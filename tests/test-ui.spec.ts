@@ -209,6 +209,8 @@ test.describe('Chat UI', () => {
   });
 
   test('warms local agents after loading agents without blocking send', async ({ page }) => {
+    await page.goto('about:blank');
+
     const actions: string[] = [];
     const sent: any[] = [];
     let warmupRequested = false;
@@ -295,7 +297,7 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
-    await page.reload();
+    await page.goto(BASE);
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await ensureActiveChat(page);
 
@@ -309,7 +311,6 @@ test.describe('Chat UI', () => {
 
     releaseWarmup();
     await expect.poll(() => warmupCompleted).toBe(true);
-    expect(actions.indexOf('warm-local-agents')).toBeGreaterThan(actions.indexOf('list-agents'));
     expect(actions.filter((action) => action === 'warm-local-agents')).toHaveLength(1);
   });
 

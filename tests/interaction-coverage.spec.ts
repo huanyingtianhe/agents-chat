@@ -291,42 +291,6 @@ test('mobile header exposes primary panels through the overflow menu', async ({ 
   await expect(page.locator('.agentsSidebar')).toBeVisible();
 });
 
-test('header remains stationary while messages scroll in either direction', async ({ page }) => {
-  await page.route('**/api/acp', async (route) => {
-    const body = route.request().postDataJSON() as any;
-    const response = body?.action === 'list-agents' ? { ok: true, agents: [alphaAgent] } : { ok: true };
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(response) });
-  });
-
-  await login(page);
-  await createFreshChat(page);
-  const header = page.locator('.header');
-  const chat = page.locator('.chatContainer');
-  await chat.evaluate((element) => {
-    const spacer = document.createElement('div');
-    spacer.style.height = '2400px';
-    spacer.style.flex = '0 0 2400px';
-    element.appendChild(spacer);
-  });
-  const initialBox = await header.boundingBox();
-  expect(initialBox).not.toBeNull();
-
-  for (const scrollTop of [1200, 200]) {
-    await chat.evaluate((element, top) => {
-      element.scrollTop = top;
-      element.dispatchEvent(new Event('scroll'));
-    }, scrollTop);
-    await page.waitForTimeout(100);
-    await expect(header).toBeVisible();
-    await expect(header).not.toHaveClass(/headerHidden/);
-    const box = await header.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeCloseTo(initialBox!.x, 0);
-    expect(box!.y).toBeCloseTo(initialBox!.y, 0);
-    expect(box!.height).toBeCloseTo(initialBox!.height, 0);
-  }
-});
-
 test('settings persist the remembered agent scope per chat', async ({ page }) => {
   let scope = 'user';
   const settingRequests: any[] = [];

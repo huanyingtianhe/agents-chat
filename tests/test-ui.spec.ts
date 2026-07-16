@@ -183,26 +183,37 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
-  test('hides the header without leaving mobile space behind when scrolling down', async ({ page }) => {
+  test('keeps the header stationary while messages scroll in either direction', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 800 });
     await ensureActiveChat(page);
 
-    await page.evaluate(() => {
-      const container = document.querySelector('.chatContainer') as HTMLElement | null;
-      if (!container) return;
+    const header = page.locator('.header');
+    const chat = page.locator('.chatContainer');
+    await chat.evaluate((container) => {
       const filler = document.createElement('div');
       filler.setAttribute('data-testid', 'header-scroll-filler');
       filler.style.height = '2400px';
-      filler.style.flex = 'none';
+      filler.style.flex = '0 0 2400px';
       container.appendChild(filler);
-      container.scrollTop = 600;
-      container.dispatchEvent(new Event('scroll', { bubbles: true }));
     });
+    await page.waitForTimeout(300);
+    const initialBox = await header.boundingBox();
+    expect(initialBox).not.toBeNull();
 
-    await expect(page.locator('.header')).toHaveClass(/headerHidden/);
-    await expect.poll(async () => {
-      return page.locator('.header').evaluate((element) => Math.round((element as HTMLElement).getBoundingClientRect().height));
-    }, { timeout: 5000 }).toBeLessThanOrEqual(1);
+    for (const scrollTop of [1200, 200]) {
+      await chat.evaluate((container, top) => {
+        container.scrollTop = top;
+        container.dispatchEvent(new Event('scroll', { bubbles: true }));
+      }, scrollTop);
+      await page.waitForTimeout(100);
+      await expect(header).toBeVisible();
+      await expect(header).not.toHaveClass(/headerHidden/);
+      const box = await header.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeCloseTo(initialBox!.x, 0);
+      expect(box!.y).toBeCloseTo(initialBox!.y, 0);
+      expect(box!.height).toBeCloseTo(initialBox!.height, 0);
+    }
   });
 
   test('Claude theme keeps the send button warm and readable', async ({ page }) => {

@@ -389,7 +389,7 @@
   backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
   max-height: 80px;
-  overflow: hidden;
+  overflow: visible;
   transition: max-height 180ms ease, padding 180ms ease, opacity 160ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 .chatPageRoot .header.headerHidden {
@@ -401,6 +401,7 @@
   opacity: 0;
   transform: translateY(-8px);
   pointer-events: none;
+  overflow: hidden;
 }
 .chatPageRoot .headerLeft {
   display: flex;

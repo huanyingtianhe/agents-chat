@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties, MouseEvent, ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 
 export type ChatShellProps = {
   sidebar: ReactNode;
@@ -41,8 +41,35 @@ export function ChatShell({
   agentsSidebarOpen,
   onSidebarResizeStart,
 }: ChatShellProps) {
+  const pageRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+
+    const visualViewport = window.visualViewport;
+    const syncViewport = () => {
+      const height = visualViewport?.height ?? window.innerHeight;
+      const offsetTop = visualViewport?.offsetTop ?? 0;
+      page.style.setProperty('--app-viewport-height', `${Math.round(height)}px`);
+      page.style.setProperty('--app-viewport-offset-top', `${Math.round(offsetTop)}px`);
+    };
+
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', syncViewport);
+    visualViewport?.addEventListener('resize', syncViewport);
+    visualViewport?.addEventListener('scroll', syncViewport);
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', syncViewport);
+      visualViewport?.removeEventListener('resize', syncViewport);
+      visualViewport?.removeEventListener('scroll', syncViewport);
+    };
+  }, []);
+
   return (
-    <main className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
+    <main ref={pageRef} className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
       {header}
       {mobilePanel !== null && (
         <div className="mobilePanelBackdrop" onClick={() => onMobilePanelChange(null)} />

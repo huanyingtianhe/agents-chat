@@ -31,25 +31,55 @@ export function AgentModelSelect({
   useLayoutEffect(() => {
     if (!isOpen) return;
 
+    let animationFrame = 0;
     function updatePosition() {
-      const wrap = localWrapRef.current;
-      if (!wrap) return;
-      const rect = wrap.getBoundingClientRect();
-      const minWidth = Math.max(180, rect.width);
-      const left = Math.min(Math.max(8, rect.left), window.innerWidth - minWidth - 8);
-      setDropdownStyle({
-        left,
-        bottom: Math.max(8, window.innerHeight - rect.top + 6),
-        minWidth,
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(() => {
+        const wrap = localWrapRef.current;
+        if (!wrap) return;
+        const rect = wrap.getBoundingClientRect();
+        const visualViewport = window.visualViewport;
+        const viewportLeft = visualViewport?.offsetLeft ?? 0;
+        const viewportTop = visualViewport?.offsetTop ?? 0;
+        const viewportWidth = visualViewport?.width ?? window.innerWidth;
+        const viewportHeight = visualViewport?.height ?? window.innerHeight;
+        const portalHost = wrap.closest('.page');
+        const hostRect = portalHost?.getBoundingClientRect() ?? {
+          top: 0,
+          right: window.innerWidth,
+          bottom: window.innerHeight,
+          left: 0,
+        };
+        const availableWidth = Math.max(0, viewportWidth - 16);
+        const minWidth = Math.min(Math.max(180, rect.width), availableWidth);
+        const viewportLeftPosition = Math.min(
+          Math.max(viewportLeft + 8, rect.left),
+          viewportLeft + viewportWidth - minWidth - 8,
+        );
+        const spaceAbove = Math.max(0, rect.top - viewportTop - 14);
+        const spaceBelow = Math.max(0, viewportTop + viewportHeight - rect.bottom - 14);
+        const openAbove = spaceAbove >= 96 || spaceAbove >= spaceBelow;
+        setDropdownStyle({
+          left: viewportLeftPosition - hostRect.left,
+          top: openAbove ? 'auto' : rect.bottom - hostRect.top + 6,
+          bottom: openAbove ? hostRect.bottom - rect.top + 6 : 'auto',
+          minWidth,
+          maxHeight: openAbove ? spaceAbove : spaceBelow,
+        });
       });
     }
 
     updatePosition();
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
+    window.visualViewport?.addEventListener('resize', updatePosition);
+    window.visualViewport?.addEventListener('scroll', updatePosition);
     return () => {
+      cancelAnimationFrame(animationFrame);
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
+      window.visualViewport?.removeEventListener('resize', updatePosition);
+      window.visualViewport?.removeEventListener('scroll', updatePosition);
     };
   }, [isOpen]);
 

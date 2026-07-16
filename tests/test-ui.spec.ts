@@ -29,21 +29,23 @@ async function login(page: Page) {
 
 /** Delete all existing chats via the API so each test starts clean */
 async function deleteAllChats(page: Page) {
-  const res = await page.evaluate(async () => {
-    const r = await fetch('/api/chats');
-    return r.json();
-  });
-  if (res?.ok && Array.isArray(res.chats)) {
-    for (const chat of res.chats) {
-      await page.evaluate(async (id: string) => {
-        await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      }, chat.id);
-    }
+  // Unmount the chat runtime first so an in-flight persistence effect cannot
+  // recreate a chat while the test fixture is deleting it.
+  await page.goto('about:blank');
+  const request = page.context().request;
+  const listResponse = await request.get(`${BASE}/api/chats`);
+  expect(listResponse.ok()).toBeTruthy();
+  const res = await listResponse.json();
+
+  for (const chat of res.chats ?? []) {
+    const deleteResponse = await request.delete(`${BASE}/api/chats?id=${encodeURIComponent(chat.id)}`);
+    expect(deleteResponse.ok()).toBeTruthy();
   }
-  // Clear lastChatId on the server so page reload shows empty homepage
-  await page.evaluate(async () => {
-    await fetch('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set-last-chat', chatId: '' }) });
+  const clearResponse = await request.post(`${BASE}/api/chats`, {
+    data: { action: 'set-last-chat', chatId: '' },
   });
+  expect(clearResponse.ok()).toBeTruthy();
+  await page.goto(BASE);
 }
 
 /** Ensure an active chat exists — clicks "+ New Chat" if on empty homepage */
@@ -1922,8 +1924,7 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
     await page.reload();
-    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
-    await ensureActiveChat(page);
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
     const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
 
@@ -1946,7 +1947,8 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.system:has-text("created")')).toBeVisible({ timeout: 30000 });
 
     // Step 3: Switch back to the old chat
-    const oldChat = page.locator('.chatHistoryItem:not(.active)').first();
+    const oldChat = page.locator('.chatHistoryItem', { hasText: 'Let a = 1 + 1' });
+    await expect(oldChat).toBeVisible({ timeout: 15000 });
     await oldChat.click();
 
     // Verify: old messages are visible IN THE CHAT AREA after switching

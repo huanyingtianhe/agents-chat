@@ -393,8 +393,11 @@ test.describe('agent and node management', () => {
 
     ownedRow = nodesPanel.locator('.agentListItem', { hasText: 'owned-node' });
     await ownedRow.hover();
-    await ownedRow.locator('[title="Add agent on this node"]').click();
     const relayModal = page.locator('.agentSettingsModal', { hasText: 'Add Agent on owned-node' });
+    await expect(async () => {
+      await ownedRow.locator('[title="Add agent on this node"]').click();
+      await expect(relayModal).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 5_000 });
     await relayModal.getByPlaceholder('unique-agent-id').fill('relay-from-node');
     await relayModal.getByPlaceholder('My Remote Agent').fill('Relay From Node');
     await relayModal.getByPlaceholder(/home\/user\/project/).fill('/srv/node-agent');

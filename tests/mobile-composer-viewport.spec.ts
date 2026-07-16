@@ -154,18 +154,19 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await modelButton.click();
   const modelMenu = page.getByRole('listbox', { name: 'Model for alpha' });
   await expect(modelMenu).toBeVisible();
-  const [menuRect, appRect] = await Promise.all([
-    modelMenu.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom };
-    }),
-    app.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom };
-    }),
-  ]);
-  expect(menuRect.top).toBeGreaterThanOrEqual(appRect.top);
-  expect(menuRect.bottom).toBeLessThanOrEqual(appRect.bottom);
+  await expect.poll(async () => {
+    const [menuRect, appRect] = await Promise.all([
+      modelMenu.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { top: rect.top, bottom: rect.bottom };
+      }),
+      app.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { top: rect.top, bottom: rect.bottom };
+      }),
+    ]);
+    return menuRect.top >= appRect.top && menuRect.bottom <= appRect.bottom;
+  }).toBe(true);
 
   await modelButton.click();
   await page.getByRole('button', { name: 'More actions' }).click();

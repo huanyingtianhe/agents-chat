@@ -15,9 +15,15 @@ const ADMIN_PASS = 'admin123';
 
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
-  await page.fill('input[placeholder="Admin username"]', ADMIN_USER);
-  await page.fill('input[placeholder="Password"]', ADMIN_PASS);
-  await page.click('button[type="submit"]');
+  const usernameInput = page.locator('input[placeholder="Admin username"]');
+  const passwordInput = page.locator('input[placeholder="Password"]');
+  const submitButton = page.locator('button[type="submit"]');
+  await expect(async () => {
+    await usernameInput.fill(ADMIN_USER);
+    await passwordInput.fill(ADMIN_PASS);
+    await expect(submitButton).toBeEnabled({ timeout: 1000 });
+  }).toPass({ timeout: 10000 });
+  await submitButton.click();
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 2000 }).catch(() => false);
   if (isEmpty) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, saveChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats } from '@/lib/chatStore';
+import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats } from '@/lib/chatStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
   // Ensure agentSessions is present
   if (!chat.agentSessions) chat.agentSessions = {};
 
-  await saveChat(userId, chat);
+  await mergeChat(userId, chat);
   return NextResponse.json({ ok: true });
 }
 

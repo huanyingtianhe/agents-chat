@@ -1924,8 +1924,7 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
     await page.reload();
-    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
-    await ensureActiveChat(page);
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
     const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
 
@@ -1948,7 +1947,8 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.system:has-text("created")')).toBeVisible({ timeout: 30000 });
 
     // Step 3: Switch back to the old chat
-    const oldChat = page.locator('.chatHistoryItem:not(.active)').first();
+    const oldChat = page.locator('.chatHistoryItem', { hasText: 'Let a = 1 + 1' });
+    await expect(oldChat).toBeVisible({ timeout: 15000 });
     await oldChat.click();
 
     // Verify: old messages are visible IN THE CHAT AREA after switching

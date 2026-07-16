@@ -29,21 +29,23 @@ async function login(page: Page) {
 
 /** Delete all existing chats via the API so each test starts clean */
 async function deleteAllChats(page: Page) {
-  const res = await page.evaluate(async () => {
-    const r = await fetch('/api/chats');
-    return r.json();
-  });
-  if (res?.ok && Array.isArray(res.chats)) {
-    for (const chat of res.chats) {
-      await page.evaluate(async (id: string) => {
-        await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      }, chat.id);
-    }
+  // Unmount the chat runtime first so an in-flight persistence effect cannot
+  // recreate a chat while the test fixture is deleting it.
+  await page.goto('about:blank');
+  const request = page.context().request;
+  const listResponse = await request.get(`${BASE}/api/chats`);
+  expect(listResponse.ok()).toBeTruthy();
+  const res = await listResponse.json();
+
+  for (const chat of res.chats ?? []) {
+    const deleteResponse = await request.delete(`${BASE}/api/chats?id=${encodeURIComponent(chat.id)}`);
+    expect(deleteResponse.ok()).toBeTruthy();
   }
-  // Clear lastChatId on the server so page reload shows empty homepage
-  await page.evaluate(async () => {
-    await fetch('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set-last-chat', chatId: '' }) });
+  const clearResponse = await request.post(`${BASE}/api/chats`, {
+    data: { action: 'set-last-chat', chatId: '' },
   });
+  expect(clearResponse.ok()).toBeTruthy();
+  await page.goto(BASE);
 }
 
 /** Ensure an active chat exists — clicks "+ New Chat" if on empty homepage */

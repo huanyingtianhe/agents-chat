@@ -280,6 +280,27 @@ test.describe('agent and node management', () => {
     await agentsPanel.locator('.agentListItem', { hasText: 'Managed Local' }).click();
     const settings = page.locator('.agentSettingsModal', { hasText: 'Managed Local' });
     await expect(settings).toBeVisible();
+    const typography = await settings.evaluate((modal) => {
+      const fieldLabel = modal.querySelector('label > span');
+      const fieldValue = modal.querySelector('label > input');
+      const environmentValue = modal.querySelector('textarea');
+      const accessValue = modal.querySelector('input[placeholder="user@email.com"]');
+      const title = modal.querySelector('h2');
+      return {
+        label: fieldLabel ? getComputedStyle(fieldLabel).fontSize : '',
+        value: fieldValue ? getComputedStyle(fieldValue).fontSize : '',
+        environmentValue: environmentValue ? getComputedStyle(environmentValue).fontSize : '',
+        accessValue: accessValue ? getComputedStyle(accessValue).fontSize : '',
+        title: title ? getComputedStyle(title).fontSize : '',
+      };
+    });
+    expect(typography).toEqual({
+      label: '13.5px',
+      value: '13.5px',
+      environmentValue: '13.5px',
+      accessValue: '13.5px',
+      title: '18px',
+    });
     await expect(settingsField(settings, 'Agent ID')).toBeDisabled();
     await settingsField(settings, 'Name').fill('Managed Local Updated');
     await settingsField(settings, 'Command').fill('mock-copilot-v2');

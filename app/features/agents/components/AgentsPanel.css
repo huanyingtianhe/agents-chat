@@ -154,7 +154,18 @@
 .chatPageRoot .checkboxLabel span { margin-bottom: 0 !important; }
 
 /* ── Agent settings modal width ── */
-.chatPageRoot .agentSettingsModal { width: min(580px, 100%); }
+.chatPageRoot .agentSettingsModal {
+  width: min(580px, 100%);
+}
+.chatPageRoot .agentConfigurationModal {
+  font-size: 13.5px;
+}
+.chatPageRoot .agentConfigurationModal h2 {
+  font-size: 18px;
+}
+.chatPageRoot .agentConfigurationModal .remoteAgentSelect {
+  font-size: inherit;
+}
 
 /* ── Agent sidebar model row ── */
 .chatPageRoot .agentSidebarModelRow {

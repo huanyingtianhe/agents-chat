@@ -183,6 +183,28 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
+  test('hides the header without leaving mobile space behind when scrolling down', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 800 });
+    await ensureActiveChat(page);
+
+    await page.evaluate(() => {
+      const container = document.querySelector('.chatContainer') as HTMLElement | null;
+      if (!container) return;
+      const filler = document.createElement('div');
+      filler.setAttribute('data-testid', 'header-scroll-filler');
+      filler.style.height = '2400px';
+      filler.style.flex = 'none';
+      container.appendChild(filler);
+      container.scrollTop = 600;
+      container.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    await expect(page.locator('.header')).toHaveClass(/headerHidden/);
+    await expect.poll(async () => {
+      return page.locator('.header').evaluate((element) => Math.round((element as HTMLElement).getBoundingClientRect().height));
+    }, { timeout: 5000 }).toBeLessThanOrEqual(1);
+  });
+
   test('Claude theme keeps the send button warm and readable', async ({ page }) => {
     const sent: any[] = [];
     await mockTwoAgentsAcp(page, sent);

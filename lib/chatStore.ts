@@ -258,6 +258,27 @@ export async function saveChat(userId: string, chat: StoredChat): Promise<void> 
   saveChatWithDb(db, userId, chat);
 }
 
+export function mergeStoredMessages(existing: StoredMessage[], incoming: StoredMessage[]): StoredMessage[] {
+  const merged = new Map(
+    existing
+      .filter(message => message.type === 'user')
+      .map(message => [message.id, message]),
+  );
+  for (const message of incoming) merged.set(message.id, message);
+  return [...merged.values()].sort((a, b) => a.ts - b.ts);
+}
+
+export async function mergeChat(userId: string, chat: StoredChat): Promise<void> {
+  const db = getDb();
+  const merge = db.transaction(() => {
+    const existing = getChatWithDb(db, userId, chat.id);
+    saveChatWithDb(db, userId, existing
+      ? { ...chat, messages: mergeStoredMessages(existing.messages, chat.messages) }
+      : chat);
+  });
+  merge();
+}
+
 function mapStoredChatRow(row: any): StoredChat {
   return {
     id: row.chat_id,

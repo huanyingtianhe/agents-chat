@@ -2172,6 +2172,51 @@ test.describe('Chat UI', () => {
     console.log('PASS: Messages persisted in SQLite and survived page reload');
   });
 
+  test('should preserve messages when a stale browser saves the same chat', async ({ page }) => {
+    const chatId = `multi-client-save-${Date.now()}`;
+    const userMessage = {
+      id: `${chatId}-user`,
+      type: 'user',
+      content: 'message from the active browser',
+      ts: Date.now(),
+    };
+    const agentMessage = {
+      id: `${chatId}-agent`,
+      type: 'agent',
+      content: 'reply completed in another browser',
+      agentId: 'alpha',
+      ts: userMessage.ts + 1,
+    };
+
+    try {
+      const result = await page.evaluate(async ({ id, user, agent }) => {
+        const save = (messages: unknown[]) => fetch('/api/chats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat: { id, name: 'Multi-client persistence', ts: Date.now(), messages, agentSessions: {} },
+          }),
+        });
+
+        await save([user]);
+        await save([agent]);
+        const staleSaveResponse = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+        const afterStaleSave = await staleSaveResponse.json();
+        await save([user]);
+        const removalResponse = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+        return { afterStaleSave, afterRemoval: await removalResponse.json() };
+      }, { id: chatId, user: userMessage, agent: agentMessage });
+
+      expect(result.afterStaleSave.ok).toBe(true);
+      expect(result.afterStaleSave.chat.messages).toEqual(expect.arrayContaining([userMessage, agentMessage]));
+      expect(result.afterRemoval.chat.messages).toEqual([userMessage]);
+    } finally {
+      await page.evaluate(async (id) => {
+        await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      }, chatId);
+    }
+  });
+
   test('should show share button', async ({ page }) => {
     // The share button should exist for chat history items
     const shareBtn = page.locator('.chatShareBtn').first();

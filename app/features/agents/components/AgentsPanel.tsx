@@ -206,7 +206,7 @@ export function AgentsPanel({
       {/* ── Agent settings modal (admin or owner) ── */}
       {showAgentSettings && settingsAgentConfig && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal">
+          <div className="modal agentSettingsModal agentConfigurationModal">
             <h2>⚙️ {settingsAgentConfig.name}</h2>
             <label>
               <span>Agent ID</span>
@@ -268,7 +268,7 @@ export function AgentsPanel({
                       onChange={(e) => setSettingsEnvText(e.target.value)}
                       placeholder={"ANTHROPIC_API_KEY=sk-ant-...\nOTHER_VAR=value"}
                       rows={3}
-                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                      style={{ fontFamily: 'monospace' }}
                     />
                     <span className="fieldHint">One per line: KEY=VALUE. Used for API keys and agent config.</span>
                   </label>
@@ -289,7 +289,7 @@ export function AgentsPanel({
                       value={newAccessEmail}
                       onChange={(e) => setNewAccessEmail(e.target.value)}
                       placeholder="user@email.com"
-                      style={{ flex: 1, fontSize: '12px' }}
+                      style={{ flex: 1 }}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
                     />
                     <button className="primary inlinePrimary" onClick={() => void addAccess()} disabled={!newAccessEmail.trim()}>Grant</button>

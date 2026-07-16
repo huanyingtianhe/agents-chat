@@ -7,7 +7,7 @@ import './features/layout/components/ChatShell.css';
 import './features/agents/components/AgentsPanel.css';
 import './features/nodes/components/NodesPanel.css';
 import './features/files/components/FileWorkspacePanel.css';
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import Providers from './providers';
 
@@ -45,6 +45,12 @@ export const metadata: Metadata = {
       alt: 'Agents Chat preview',
     }],
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  interactiveWidget: 'resizes-content',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

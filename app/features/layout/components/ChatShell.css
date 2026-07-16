@@ -1,6 +1,6 @@
 .chatPageRoot .page {
-  height: 100vh;
-  min-height: 100vh;
+  height: var(--app-viewport-height, 100dvh);
+  min-height: var(--app-viewport-height, 100dvh);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1077,13 +1077,24 @@
 }
 
 @media (max-width: 900px) {
+  .chatPageRoot .page {
+    position: fixed;
+    top: var(--app-viewport-offset-top, 0px);
+    right: 0;
+    left: 0;
+    width: 100%;
+  }
   .chatPageRoot .mobileOnlyButton {
     display: inline-flex;
   }
   .chatPageRoot .mobilePanelBackdrop {
     display: block;
     position: fixed;
-    inset: 0;
+    top: var(--app-viewport-offset-top, 0px);
+    right: 0;
+    bottom: auto;
+    left: 0;
+    height: var(--app-viewport-height, 100dvh);
     background: rgba(0, 0, 0, 0.42);
     backdrop-filter: blur(3px);
     z-index: 11;
@@ -1101,8 +1112,9 @@
   .chatPageRoot .agentsSidebar {
     display: block;
     position: fixed;
-    top: 0;
-    bottom: 0;
+    top: var(--app-viewport-offset-top, 0px);
+    bottom: auto;
+    height: var(--app-viewport-height, 100dvh);
     width: min(84vw, 320px);
     z-index: 12;
     box-shadow: var(--shadow);

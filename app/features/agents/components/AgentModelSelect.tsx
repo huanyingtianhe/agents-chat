@@ -43,9 +43,16 @@ export function AgentModelSelect({
         const viewportTop = visualViewport?.offsetTop ?? 0;
         const viewportWidth = visualViewport?.width ?? window.innerWidth;
         const viewportHeight = visualViewport?.height ?? window.innerHeight;
+        const portalHost = wrap.closest('.page');
+        const hostRect = portalHost?.getBoundingClientRect() ?? {
+          top: 0,
+          right: window.innerWidth,
+          bottom: window.innerHeight,
+          left: 0,
+        };
         const availableWidth = Math.max(0, viewportWidth - 16);
         const minWidth = Math.min(Math.max(180, rect.width), availableWidth);
-        const left = Math.min(
+        const viewportLeftPosition = Math.min(
           Math.max(viewportLeft + 8, rect.left),
           viewportLeft + viewportWidth - minWidth - 8,
         );
@@ -53,9 +60,9 @@ export function AgentModelSelect({
         const spaceBelow = Math.max(0, viewportTop + viewportHeight - rect.bottom - 14);
         const openAbove = spaceAbove >= 96 || spaceAbove >= spaceBelow;
         setDropdownStyle({
-          left,
-          top: openAbove ? 'auto' : rect.bottom + 6,
-          bottom: openAbove ? Math.max(8, window.innerHeight - rect.top + 6) : 'auto',
+          left: viewportLeftPosition - hostRect.left,
+          top: openAbove ? 'auto' : rect.bottom - hostRect.top + 6,
+          bottom: openAbove ? hostRect.bottom - rect.top + 6 : 'auto',
           minWidth,
           maxHeight: openAbove ? spaceAbove : spaceBelow,
         });

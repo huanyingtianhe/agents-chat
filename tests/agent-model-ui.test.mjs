@@ -172,11 +172,16 @@ assert.doesNotMatch(
   'model selector must not hard-code the Aurora accent or override the target pill color',
 );
 
-// 17. Portaled dropdown CSS — fixed positioning escapes mobile overflow clipping.
+// 17. Portaled dropdown uses the themed page as its positioned containing block.
 assert.match(
   cssBlock('.agentModelDropdownPortal'),
-  /position:\s*fixed;[\s\S]*?bottom:\s*auto;/,
-  'portaled model dropdown should use fixed positioning and avoid inherited absolute bottom placement',
+  /position:\s*absolute;[\s\S]*?bottom:\s*auto;/,
+  'portaled model dropdown should use absolute positioning within the themed page',
+);
+assert.match(
+  modelSelectSource,
+  /const portalHost = wrap\.closest\('\.page'\);[\s\S]*?left:\s*viewportLeftPosition - hostRect\.left,[\s\S]*?top:\s*openAbove \? 'auto' : rect\.bottom - hostRect\.top \+ 6,[\s\S]*?bottom:\s*openAbove \? hostRect\.bottom - rect\.top \+ 6 : 'auto',/,
+  'model dropdown should convert visual viewport positions into portal-host coordinates',
 );
 
 console.log('agent model UI checks passed');

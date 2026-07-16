@@ -233,7 +233,7 @@
   gap: 2px;
 }
 .chatPageRoot .agentModelDropdownPortal {
-  position: fixed;
+  position: absolute;
   top: auto;
   right: auto;
   bottom: auto;

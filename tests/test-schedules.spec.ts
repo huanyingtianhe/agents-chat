@@ -25,21 +25,47 @@ async function login(page: Page) {
   await page.waitForTimeout(500);
 }
 
-/** Fetch the first agent ID from /api/agents */
+const TEST_AGENT_ID = 'playwright-schedule-agent';
+
+/** Fetch the first agent ID from ACP. */
 async function getFirstAgentId(page: Page): Promise<string | null> {
-  const r = await page.request.get(`${BASE}/api/agents`);
+  const r = await page.request.post(`${BASE}/api/acp`, {
+    data: { action: 'list-agents' },
+  });
   if (!r.ok()) return null;
   const data = await r.json();
-  // API may return { agents: [...] } or [...] directly
-  const list = (data.agents ?? data) as Array<{ id: string }> | undefined;
+  const list = data.agents as Array<{ id: string }> | undefined;
   return Array.isArray(list) && list[0]?.id ? list[0].id : null;
+}
+
+async function ensureTestAgent(page: Page): Promise<boolean> {
+  if (await getFirstAgentId(page)) return false;
+  const response = await page.request.post(`${BASE}/api/acp`, {
+    data: {
+      action: 'create-agent',
+      agent: {
+        id: TEST_AGENT_ID,
+        name: 'Playwright Schedule Agent',
+        relay: true,
+        relayConnectionName: TEST_AGENT_ID,
+      },
+    },
+  });
+  expect(response.ok()).toBe(true);
+  return true;
 }
 
 test.describe('Schedules', () => {
   let createdIds: string[] = [];
+  let createdTestAgent = false;
 
   test.beforeEach(async ({ page }) => {
     await login(page);
+    createdTestAgent = await ensureTestAgent(page);
+    if (createdTestAgent) {
+      await page.reload();
+      await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    }
   });
 
   test.afterEach(async ({ page }) => {
@@ -52,6 +78,12 @@ test.describe('Schedules', () => {
       }
     }
     createdIds = [];
+    if (createdTestAgent) {
+      await page.request.post(`${BASE}/api/acp`, {
+        data: { action: 'delete-agent', agentId: TEST_AGENT_ID },
+      });
+      createdTestAgent = false;
+    }
   });
 
   // ============ API Tests (Task 12) ============
@@ -141,7 +173,7 @@ test.describe('Schedules', () => {
     // Fetch the updated schedule
     const getRes = await page.request.get(`${BASE}/api/schedules/${scheduleId}`);
     expect(getRes.status()).toBe(200);
-    const job = await getRes.json();
+    const { job } = await getRes.json();
     expect(job.enabled).toBe(true);
     expect(job.name).toBe('pw-test-patched');
   });
@@ -234,8 +266,10 @@ test.describe('Schedules', () => {
     await nameInput.fill('pw-ui-create');
 
     // Select an agent
-    const agentSelect = modal.locator('label:has(span:text-is("Agent")) select');
-    await agentSelect.selectOption(agentId!);
+    const agentTrigger = modal.locator('.modalField:has(.modalFieldLabel:text-is("Agent")) button.themedPickerTrigger');
+    await agentTrigger.click();
+    await modal.locator(`button.themedPickerOption[data-value="${agentId}"]`).click();
+    await expect(agentTrigger).toHaveAttribute('data-value', agentId!);
 
     // Fill in the prompt
     const promptInput = modal.locator('label:has(span:text-is("Prompt")) textarea');

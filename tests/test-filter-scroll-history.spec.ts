@@ -92,8 +92,20 @@ async function ensureActiveChat(page: Page) {
   }
 }
 
+function chatAgentFilterTrigger(page: Page) {
+  return page.getByRole('button', { name: 'Filter chats by primary agent' });
+}
+
+async function selectChatAgentFilter(page: Page, agentId: string) {
+  await chatAgentFilterTrigger(page).click();
+  const listbox = page.getByRole('listbox', { name: 'Filter chats by primary agent' });
+  await expect(listbox).toBeVisible();
+  await listbox.locator(`[role="option"][data-value="${agentId}"]`).click();
+  await expect(listbox).toHaveCount(0);
+}
+
 async function sendMessage(page: Page, text: string) {
-  const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.fill(text);
   await page.click('button[aria-label="Send message"]');
   // Wait for generation to complete
@@ -111,8 +123,8 @@ test.describe('Agent Filter Persistence', () => {
   });
 
   test('should preserve agent filter when creating new chat', async ({ page }) => {
-    const select = page.locator('select.chatAgentFilterSelect');
-    await select.selectOption('alpha');
+    const select = chatAgentFilterTrigger(page);
+    await selectChatAgentFilter(page, 'alpha');
     await page.waitForTimeout(500);
 
     // Should show empty homepage for alpha (no chats yet)
@@ -122,7 +134,7 @@ test.describe('Agent Filter Persistence', () => {
     await page.click('button.emptyHomepageNewChat');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
-    await expect(select).toHaveValue('alpha');
+    await expect(select).toHaveAttribute('data-value', 'alpha');
   });
 
   test('should preserve agent filter when selecting an existing chat', async ({ page }) => {
@@ -136,8 +148,8 @@ test.describe('Agent Filter Persistence', () => {
     await page.waitForTimeout(1000);
 
     // Now switch to alpha filter
-    const select = page.locator('select.chatAgentFilterSelect');
-    await select.selectOption('alpha');
+    const select = chatAgentFilterTrigger(page);
+    await selectChatAgentFilter(page, 'alpha');
     await page.waitForTimeout(500);
 
     // There should be at least one chat under alpha (the first one we created)
@@ -149,13 +161,13 @@ test.describe('Agent Filter Persistence', () => {
       await page.waitForTimeout(500);
 
       // Filter should still be on alpha
-      await expect(select).toHaveValue('alpha');
+      await expect(select).toHaveAttribute('data-value', 'alpha');
     }
   });
 
   test('should preserve agent filter when deleting a chat', async ({ page }) => {
-    const select = page.locator('select.chatAgentFilterSelect');
-    await select.selectOption('alpha');
+    const select = chatAgentFilterTrigger(page);
+    await selectChatAgentFilter(page, 'alpha');
     await page.waitForTimeout(500);
 
     // Create a chat
@@ -176,7 +188,7 @@ test.describe('Agent Filter Persistence', () => {
         await page.waitForTimeout(500);
 
         // Filter should still be on alpha
-        await expect(select).toHaveValue('alpha');
+        await expect(select).toHaveAttribute('data-value', 'alpha');
       }
     }
   });
@@ -283,7 +295,7 @@ test.describe('Input History Backfill', () => {
     await sendMessage(page, '@alpha second command');
 
     // Press ArrowUp — should recall "second command"
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     await textarea.click();
     await textarea.press('Home');
     await textarea.press('ArrowUp');
@@ -318,7 +330,7 @@ test.describe('Input History Backfill', () => {
     await page.waitForTimeout(1000);
 
     // Press ArrowUp — should have backfilled "backfill test message"
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     await textarea.click();
     await textarea.press('ArrowUp');
     await page.waitForTimeout(200);

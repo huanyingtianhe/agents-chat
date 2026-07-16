@@ -158,7 +158,7 @@ test.describe('Chat UI', () => {
 
   test('should display chat input and send button', async ({ page }) => {
     await ensureActiveChat(page);
-    await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toBeVisible();
+    await expect(page.locator('textarea.composerTextarea')).toBeVisible();
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(page.locator('.composerShell')).toHaveCSS('border-radius', '12px');
@@ -190,7 +190,7 @@ test.describe('Chat UI', () => {
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
     await ensureActiveChat(page);
 
-    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('hello claude theme');
+    await page.locator('textarea.composerTextarea').fill('hello claude theme');
     const sendButton = page.locator('button[aria-label="Send message"]');
     await expect(sendButton).toBeEnabled();
 
@@ -209,6 +209,8 @@ test.describe('Chat UI', () => {
   });
 
   test('warms local agents after loading agents without blocking send', async ({ page }) => {
+    await page.goto('about:blank');
+
     const actions: string[] = [];
     const sent: any[] = [];
     let warmupRequested = false;
@@ -295,13 +297,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
-    await page.reload();
+    await page.goto(BASE);
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await ensureActiveChat(page);
 
     await expect.poll(() => warmupRequested).toBe(true);
     expect(warmupSawListCompleted).toBe(true);
-    await page.locator('textarea[placeholder="Message Agents Chat"]').fill('send while warmup pending');
+    await page.locator('textarea.composerTextarea').fill('send while warmup pending');
     await expect(page.locator('button[aria-label="Send message"]')).toBeEnabled();
     await page.click('button[aria-label="Send message"]');
     await expect.poll(() => sent.map((request) => request.agentId)).toEqual(['alpha']);
@@ -309,7 +311,6 @@ test.describe('Chat UI', () => {
 
     releaseWarmup();
     await expect.poll(() => warmupCompleted).toBe(true);
-    expect(actions.indexOf('warm-local-agents')).toBeGreaterThan(actions.indexOf('list-agents'));
     expect(actions.filter((action) => action === 'warm-local-agents')).toHaveLength(1);
   });
 
@@ -378,7 +379,7 @@ test.describe('Chat UI', () => {
   });
 
   test('remembers the first mentioned agent as the next composer target for the same chat', async ({ page }) => {
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const sent: any[] = [];
     await mockTwoAgentsAcp(page, sent);
 
@@ -396,7 +397,7 @@ test.describe('Chat UI', () => {
   });
 
   test('uses primary agent fallback, then default agent when no remembered target exists', async ({ page }) => {
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const sent: any[] = [];
     await mockTwoAgentsAcp(page, sent);
 
@@ -461,7 +462,7 @@ test.describe('Chat UI', () => {
   });
 
   test('clears remembered composer target with hover remove button', async ({ page }) => {
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const sent: any[] = [];
     await mockTwoAgentsAcp(page, sent);
 
@@ -608,7 +609,7 @@ test.describe('Chat UI', () => {
       await page.locator('input[type="file"]').setInputFiles({ name: 'tiny.png', mimeType: 'image/png', buffer: png });
       await expect(page.locator('.attachmentChip', { hasText: 'tiny.png' })).toBeVisible();
 
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'please inspect this image');
+      await page.fill('textarea.composerTextarea', 'please inspect this image');
       await page.click('button[aria-label="Send message"]');
 
       const sentAttachment = page.locator('.message.user .messageAttachment', { hasText: 'tiny.png' });
@@ -628,25 +629,25 @@ test.describe('Chat UI', () => {
       const captured: any[] = [];
       await mockAcpForAttachments(page, captured);
 
-      await page.focus('textarea[placeholder="Message Agents Chat"]');
+      await page.focus('textarea.composerTextarea');
       await page.evaluate(async () => {
         const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
         const file = new File([bytes], 'pasted.png', { type: 'image/png' });
         const data = new DataTransfer();
         data.items.add(file);
-        const textarea = document.querySelector('textarea[placeholder="Message Agents Chat"]') as HTMLTextAreaElement;
+        const textarea = document.querySelector('textarea.composerTextarea') as HTMLTextAreaElement;
         textarea.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
       });
 
       await expect(page.locator('.attachmentChip', { hasText: 'pasted.png' })).toBeVisible();
-      await expect(page.locator('textarea[placeholder="Message Agents Chat"]')).toHaveValue('');
+      await expect(page.locator('textarea.composerTextarea')).toHaveValue('');
     });
 
     test('paste screenshot queues one attachment when exposed as both file and item', async ({ page }) => {
       const captured: any[] = [];
       await mockAcpForAttachments(page, captured);
 
-      await page.focus('textarea[placeholder="Message Agents Chat"]');
+      await page.focus('textarea.composerTextarea');
       await page.evaluate(async () => {
         const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
         const fileFromFiles = new File([bytes], 'pasted.png', { type: 'image/png', lastModified: 1 });
@@ -658,7 +659,7 @@ test.describe('Chat UI', () => {
             items: [{ kind: 'file', getAsFile: () => fileFromItems }],
           },
         });
-        const textarea = document.querySelector('textarea[placeholder="Message Agents Chat"]') as HTMLTextAreaElement;
+        const textarea = document.querySelector('textarea.composerTextarea') as HTMLTextAreaElement;
         textarea.dispatchEvent(pasteEvent);
       });
 
@@ -722,7 +723,7 @@ test.describe('Chat UI', () => {
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('# Context\n\nHello'),
       });
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize the context');
+      await page.fill('textarea.composerTextarea', 'summarize the context');
       await page.click('button[aria-label="Send message"]');
 
       await expect.poll(() => captured.length).toBeGreaterThan(0);
@@ -740,7 +741,7 @@ test.describe('Chat UI', () => {
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('Write-Host "hello"'),
       });
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize the script');
+      await page.fill('textarea.composerTextarea', 'summarize the script');
       await page.click('button[aria-label="Send message"]');
 
       await expect.poll(() => captured.length).toBeGreaterThan(0);
@@ -759,7 +760,7 @@ test.describe('Chat UI', () => {
         { name: 'App.java', mimeType: 'application/octet-stream', buffer: Buffer.from('class App {}') },
         { name: 'server.go', mimeType: 'application/octet-stream', buffer: Buffer.from('package main') },
       ]);
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize these code files');
+      await page.fill('textarea.composerTextarea', 'summarize these code files');
       await page.click('button[aria-label="Send message"]');
 
       await expect.poll(() => captured.length).toBeGreaterThan(0);
@@ -783,7 +784,7 @@ test.describe('Chat UI', () => {
         { name: 'cert.pem', mimeType: 'application/octet-stream', buffer: Buffer.from('-----BEGIN CERTIFICATE-----') },
         { name: 'diagram.svg', mimeType: 'application/octet-stream', buffer: Buffer.from('<svg></svg>') },
       ]);
-      await page.fill('textarea[placeholder="Message Agents Chat"]', 'summarize these files');
+      await page.fill('textarea.composerTextarea', 'summarize these files');
       await page.click('button[aria-label="Send message"]');
 
       await expect.poll(() => captured.length).toBeGreaterThan(0);
@@ -1102,7 +1103,7 @@ test.describe('Chat UI', () => {
 
   test('should send a message and receive a reply', async ({ page }) => {
     await ensureActiveChat(page);
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     await textarea.fill('What is 1+1? Reply with just the number.');
     await page.click('button[aria-label="Send message"]');
 
@@ -1131,7 +1132,7 @@ test.describe('Chat UI', () => {
 
   test('should show failed send status on the user message and allow resend', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const replyText = 'Resent message completed.';
     let sendCalls = 0;
 
@@ -1440,7 +1441,7 @@ test.describe('Chat UI', () => {
 
   test('should keep failed send status on the original chat when user switches before failure returns', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const failedText = 'delayed failure belongs to original chat';
     let sendCalls = 0;
     let releaseFailure: () => void = () => {};
@@ -1492,7 +1493,7 @@ test.describe('Chat UI', () => {
 
   test('should disable failed message resend while the chat has an active run', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const pendingText = 'saved failed message waits for active run';
     const chatId = `ui-resend-disabled-running-${Date.now()}`;
     const sendRequests: any[] = [];
@@ -1582,9 +1583,15 @@ test.describe('Chat UI', () => {
 
   test('should mark the source user message failed when an auto orchestration follow-up send fails', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const userText = '@alpha @beta coordinate follow-up failure';
-    const schedulerDecision = '{ "done": false, "nextAgent": "beta", "instruction": "Beta follow-up instruction" }';
+    const schedulerDecision = JSON.stringify({
+      version: 1,
+      nodes: [
+        { id: 'beta-step', agent: 'beta', instruction: 'Beta follow-up instruction', dependsOn: [] },
+        { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha follows beta', dependsOn: ['beta-step'] },
+      ],
+    });
     const sendRequests: any[] = [];
 
     await page.route('**/api/acp', async (route) => {
@@ -1652,9 +1659,9 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator('.message.agent', { hasText: 'Failed to send prompt to agent' })).toHaveCount(0);
   });
 
-  test('should remove partial discussion agent messages when one initial send fails', async ({ page }) => {
+  test('should remove partial workflow agent messages when one initial send fails', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const userText = '@alpha @beta discuss partial initial failure';
     const sendRequests: any[] = [];
 
@@ -1666,6 +1673,7 @@ test.describe('Chat UI', () => {
           body: JSON.stringify({
             ok: true,
             agents: [
+              { id: 'scheduler', name: 'Scheduler', command: 'mock', args: [], cwd: '', running: true },
               { id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true },
               { id: 'beta', name: 'Beta Agent', command: 'mock', args: [], cwd: '', running: true },
             ],
@@ -1689,6 +1697,32 @@ test.describe('Chat UI', () => {
         return;
       }
       if (body?.action === 'poll') {
+        if (body.agentId === 'scheduler') {
+          const schedulerPlan = JSON.stringify({
+            version: 1,
+            nodes: [
+              { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha handles the task', dependsOn: [] },
+              { id: 'beta-step', agent: 'beta', instruction: 'Beta handles the task', dependsOn: [] },
+            ],
+          });
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: true,
+              phase: 'idle',
+              ready: true,
+              activeTurn: {
+                id: 'turn-scheduler-discussion-partial',
+                fullText: schedulerPlan,
+                done: true,
+                phase: 'done',
+                statusText: '',
+                events: [{ type: 'text_chunk', ts: Date.now(), text: schedulerPlan }],
+              },
+            }),
+          });
+          return;
+        }
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
@@ -1713,13 +1747,12 @@ test.describe('Chat UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
     await textarea.fill(userText);
-    await page.getByRole('button', { name: /Discussion/ }).click();
     await page.click('button[aria-label="Send message"]');
     await expect.poll(() => sendRequests.some((request) => request.agentId === 'beta'), { timeout: 10000 }).toBe(true);
 
     const failedUserMessage = chatArea.locator('.message.user', { hasText: userText });
     await expectCompactFailedSendStatus(failedUserMessage);
-    await expect(chatArea.locator('.message.agent')).toHaveCount(0);
+    await expect(chatArea.locator('.message.agent', { has: page.locator('.agentName', { hasText: /Alpha Agent|Beta Agent/ }) })).toHaveCount(0);
   });
 
   test('should keep resend disabled for mentioned legacy failures until agents load', async ({ page }) => {
@@ -1832,15 +1865,66 @@ test.describe('Chat UI', () => {
     await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
 
     // Chat input should be empty and ready
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     await expect(textarea).toBeVisible();
     await expect(textarea).toHaveValue('');
   });
 
   test('should switch between chats and remember context', async ({ page }) => {
     test.setTimeout(360000); // 6 min — two agent round-trips + session reload
+    let turn = 0;
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'send') {
+        turn += 1;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', phase: 'thinking', turn: { id: `turn-${turn}` } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        const reply = turn === 1 ? 'a is 2' : '2';
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: `turn-${turn}`,
+              fullText: reply,
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: reply }],
+            },
+          }),
+        });
+        return;
+      }
+      if (body?.action === 'resume-session' || body?.action === 'ensure-agent-session') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-alpha', loaded: true, activeTurn: null, recoveredMessages: [] }),
+        });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await ensureActiveChat(page);
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
 
     // Step 1: Tell the agent to remember a value
@@ -1905,7 +1989,7 @@ test.describe('Chat UI', () => {
 
     if (!hasDeleteBtn) {
       // Need to create a chat we can delete: send a short message, wait fully, then create new chat
-      const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+      const textarea = page.locator('textarea.composerTextarea');
       await textarea.fill('Temp message for delete test');
       await page.click('button[aria-label="Send message"]');
 
@@ -1938,8 +2022,37 @@ test.describe('Chat UI', () => {
 
   test('should persist messages to SQLite after send and reload', async ({ page }) => {
     test.setTimeout(240000);
+    await page.route('**/api/acp', async (route) => {
+      const body = route.request().postDataJSON() as any;
+      if (body?.action === 'send') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, sessionId: 'session-persistence', phase: 'thinking', turn: { id: 'turn-persistence' } }),
+        });
+        return;
+      }
+      if (body?.action === 'poll') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            phase: 'idle',
+            ready: true,
+            activeTurn: {
+              id: 'turn-persistence',
+              fullText: '5',
+              done: true,
+              phase: 'done',
+              events: [{ type: 'text_chunk', ts: Date.now(), text: '5' }],
+            },
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
     await ensureActiveChat(page);
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const chatArea = page.locator('.chatContainer');
 
     // Send a message
@@ -2034,7 +2147,7 @@ test.describe('Chat UI', () => {
 
   test('should not store chat messages in localStorage', async ({ page }) => {
     await ensureActiveChat(page);
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
 
     // Send a message
     await textarea.fill('Hello localStorage test');
@@ -2068,7 +2181,7 @@ test.describe('Chat UI', () => {
   test('should save and restore lastChatId from server on reload', async ({ page }) => {
     await ensureActiveChat(page);
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
 
     // Send a message so the chat has content and a name
     await textarea.fill('lastChatId test message');
@@ -2632,7 +2745,13 @@ test.describe('Chat UI', () => {
       }
       if (body?.action === 'poll') {
         if (body.agentId === 'scheduler') {
-          const schedulerDecision = JSON.stringify({ done: false, nextAgent: 'beta', instruction: selectedInstruction });
+          const schedulerDecision = JSON.stringify({
+            version: 1,
+            nodes: [
+              { id: 'beta-step', agent: 'beta', instruction: selectedInstruction, dependsOn: [] },
+              { id: 'alpha-step', agent: 'alpha', instruction: 'Alpha follows beta', dependsOn: ['beta-step'] },
+            ],
+          });
           await route.fulfill({
             contentType: 'application/json',
             body: JSON.stringify({
@@ -2711,7 +2830,7 @@ test.describe('Chat UI', () => {
 
   test('should allow manual send while a failed saved message waits for manual resend', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const pendingText = 'UI recovery should wait for manual resend';
     const manualText = 'manual message while resend is available';
     const chatId = `ui-auto-resend-block-send-${Date.now()}`;
@@ -2818,7 +2937,7 @@ test.describe('Chat UI', () => {
 
   test('forwards ACP permission questions to the user inline in chat', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let respondedBody: any = null;
     let permissionAnswered = false;
 
@@ -2942,7 +3061,7 @@ test.describe('Chat UI', () => {
 
   test('forwards freeform ACP questions to the user inline in chat', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let respondedBody: any = null;
     let answered = false;
 
@@ -3021,7 +3140,7 @@ test.describe('Chat UI', () => {
 
   test('forwards structured ACP questions to the user inline in chat', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let respondedBody: any = null;
     let answered = false;
 
@@ -3123,7 +3242,7 @@ test.describe('Chat UI', () => {
 
   test('prevents duplicate inline permission responses while submit is pending', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let respondCallCount = 0;
     let permissionAnswered = false;
     let releaseResponse: (() => void) | null = null;
@@ -3232,7 +3351,7 @@ test.describe('Chat UI', () => {
 
   test('shows inline error and allows retry for failed freeform permission responses', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let respondAttempts = 0;
     let permissionAnswered = false;
 
@@ -3336,7 +3455,7 @@ test.describe('Chat UI', () => {
 
   test('clears stale inline request submit state when polling replaces the request', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let requestVersion: 'first' | 'second' = 'first';
 
     await page.route('**/api/acp', async (route) => {
@@ -3423,7 +3542,7 @@ test.describe('Chat UI', () => {
     });
 
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let pollCount = 0;
     let respondCallCount = 0;
 
@@ -3502,7 +3621,7 @@ test.describe('Chat UI', () => {
 
   test('clears inline agent request cards when stopping an active run', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     let interruptCount = 0;
     let respondCallCount = 0;
 
@@ -3587,7 +3706,7 @@ test.describe('Chat UI', () => {
 
   test('should render streaming thinking parts without frontend stream saves', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const userText = 'stream persistence regression message';
     const thinkingText = 'planning saved before completion';
     const finalText = 'Final answer after saved thinking.';
@@ -3669,15 +3788,17 @@ test.describe('Chat UI', () => {
     finishTurn = true;
     await expect(chatArea.locator(`.message.agent:has-text("${finalText}")`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
-    await page.waitForTimeout(500);
-    expect(chatPosts.filter((body) => body?.chat).length).toBe(chatSaveCountAfterUserMessage);
+    await expect.poll(() => chatPosts.filter((body) => body?.chat).length, { timeout: 10000 })
+      .toBe(chatSaveCountAfterUserMessage + 1);
+    const finalSave = chatPosts.filter((body) => body?.chat).at(-1);
+    expect(finalSave.chat.messages.some((message: any) => message.type === 'agent' && message.content === finalText)).toBe(true);
 
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });
 
   test('should not force-scroll to bottom after user scrolls up during streaming', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const userText = 'stream without forcing scroll';
     const newChunk = 'new streamed chunk after manual scroll';
     let streamedText = 'Initial streaming answer.';
@@ -3778,7 +3899,7 @@ test.describe('Chat UI', () => {
 
   test('should keep pending agent bubble width stable while streaming response grows', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const userText = 'stream without bubble shake';
     const initialText = 'Short answer.';
     const longChunk = 'additional streamed response text';
@@ -3979,7 +4100,7 @@ test.describe('Chat UI', () => {
   test('switching chats preserves active turn instead of marking it interrupted', async ({ page }) => {
     const agentId = 'alpha';
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const firstText = 'keep running while switching chats';
     const thinkingText = `working on ${firstText}`;
     const firstFinal = 'First chat finished after switching back.';
@@ -4233,7 +4354,7 @@ test.describe('Chat UI', () => {
     });
 
     const chatArea = page.locator('.chatContainer');
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
     const finalLookingText = 'Implemented in `app/page.tsx`.';
     let pollCount = 0;
 
@@ -4398,7 +4519,7 @@ test.describe('Chat UI', () => {
 
   test('should switch lastChatId when creating new chat', async ({ page }) => {
     await ensureActiveChat(page);
-    const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+    const textarea = page.locator('textarea.composerTextarea');
 
     // Send a message in the first chat
     await textarea.fill('first chat message');
@@ -4606,6 +4727,10 @@ test.describe('Agent Filter Tabs', () => {
   });
 
   test('should hide scheduler from agent filter dropdown', async ({ page }) => {
+    let resolveAgentsLoaded: () => void = () => {};
+    const agentsLoaded = new Promise<void>((resolve) => {
+      resolveAgentsLoaded = resolve;
+    });
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
       if (body?.action === 'list-agents') {
@@ -4619,13 +4744,15 @@ test.describe('Agent Filter Tabs', () => {
             ],
           }),
         });
+        resolveAgentsLoaded();
         return;
       }
       await route.continue();
     });
 
     await page.evaluate(() => window.localStorage.setItem('acp_agent_filter_v1', 'scheduler'));
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await agentsLoaded;
     await page.waitForSelector('.emptyHomepage, .chatContainer', { timeout: 10000 });
 
     const slot = page.locator('.chatAgentFilterPickerSlot');

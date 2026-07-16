@@ -29,6 +29,7 @@ export type AcpServiceContext = {
   removeMessage: (id: string, chatId?: string) => void;
   notifyRunStateChanged: () => void;
   maybeAdvanceOrchestration: (orchestrationId: string) => Promise<void>;
+  onRunFinalized?: (chatId: string) => void;
   fileCommentCallbacksRef: MutableRefObject<FileCommentCallbacks | null>;
 };
 
@@ -57,6 +58,7 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
     }
     delete ctx.sessionRunsRef.current[runKey];
     ctx.notifyRunStateChanged();
+    ctx.onRunFinalized?.(run.chatId);
     if (orchestration && run.kind === 'worker') {
       void ctx.maybeAdvanceOrchestration(run.orchestrationId);
     }

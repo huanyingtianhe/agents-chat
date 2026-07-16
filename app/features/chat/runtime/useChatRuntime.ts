@@ -153,12 +153,14 @@ export function useChatRuntime({
   }
 
   /* ── ACP service ── */
+  const saveChatToHistoryRef = useRef<(chatId: string) => Promise<number>>(async () => Date.now());
   const acpHandlers = createAcpHandlers({
     acp, sessionRunsRef, orchestrationsRef, currentChatIdRef, currentAgentSessionsRef,
     needsContextRestoreRef, chatMessagesRef, messagesRef, agentsRef,
     getSelectedModelIdForAgent,
     updateMessage, addMessage, removeMessage, notifyRunStateChanged,
     maybeAdvanceOrchestration: (id) => maybeAdvanceOrchestrationRef.current(id),
+    onRunFinalized: (chatId) => { void saveChatToHistoryRef.current(chatId); },
     fileCommentCallbacksRef,
   });
 
@@ -170,6 +172,7 @@ export function useChatRuntime({
       dispatchToAgentRef.current(agentId, content, orchestrationId, kind, options),
     markUserMessageSendFailed,
     addMessage, removeMessage, notifyRunStateChanged,
+    persistChat: (chatId) => { void saveChatToHistoryRef.current(chatId); },
   });
 
   /* ── Wire cross-service refs ── */
@@ -195,6 +198,7 @@ export function useChatRuntime({
     prepareResume: (chatId) => hydrateOrchestrationsForChatRef.current(chatId),
     finalizeResume: (chatId) => reconcileRunningWorkflowNodesRef.current(chatId),
   });
+  saveChatToHistoryRef.current = persistHandlers.saveChatToHistory;
 
   /* ── Orchestration hydration ── */
   // Load persisted orchestrations into memory AS-IS. We deliberately keep

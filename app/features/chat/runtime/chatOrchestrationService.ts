@@ -22,6 +22,7 @@ export type OrchestrationContext = {
   addMessage: (msg: any, chatId?: string) => string;
   removeMessage: (id: string, chatId?: string) => void;
   notifyRunStateChanged: () => void;
+  persistChat?: (chatId: string) => void;
 };
 
 export function createOrchestrationHandlers(ctx: OrchestrationContext) {
@@ -49,7 +50,15 @@ export function createOrchestrationHandlers(ctx: OrchestrationContext) {
       await ctx.dispatchToAgent(agentId, prompt, orchestrationId, kind, options);
       return true;
     } catch (err) {
-      if (markOrchestrationPromptSendFailed(orchestrationId, err)) return false;
+      const chatId = ctx.orchestrationsRef.current[orchestrationId]?.sourceChatId;
+      const runKeys = Object.entries(ctx.sessionRunsRef.current)
+        .filter(([, run]) => run.orchestrationId === orchestrationId)
+        .map(([runKey]) => runKey);
+      if (markOrchestrationPromptSendFailed(orchestrationId, err)) {
+        await cleanupDispatchedRuns(runKeys);
+        if (chatId) ctx.persistChat?.(chatId);
+        return false;
+      }
       throw err;
     }
   }

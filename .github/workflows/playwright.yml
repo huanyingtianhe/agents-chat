@@ -13,11 +13,25 @@ permissions:
 
 jobs:
   playwright:
-    name: Run Playwright tests
-    # GitHub-hosted runners are disabled for this repository.
-    # Register a Windows x64 self-hosted runner with the mwc-wulei label.
-    runs-on: [self-hosted, Windows, X64, mwc-wulei]
-    timeout-minutes: 30
+    name: Run Playwright tests (${{ matrix.shard.index }}/${{ matrix.shard.total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - index: 1
+            total: 4
+            parts: 1 5 9 13
+          - index: 2
+            total: 4
+            parts: 2 6 10 14
+          - index: 3
+            total: 4
+            parts: 3 7 11 15
+          - index: 4
+            total: 4
+            parts: 4 8 12 16
 
     env:
       ADMIN_PASSWORD: admin123
@@ -40,46 +54,44 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Start Next.js dev server
-        shell: pwsh
+        shell: bash
         run: |
-          $process = Start-Process npm -ArgumentList 'run', 'dev' -RedirectStandardOutput playwright-server.log -RedirectStandardError playwright-server.err.log -PassThru
-          $process.Id | Out-File -FilePath playwright-server.pid -Encoding ascii
+          nohup npm run dev >playwright-server.log 2>playwright-server.err.log &
+          echo "$!" > playwright-server.pid
 
       - name: Wait for app
-        shell: pwsh
+        shell: bash
         run: |
-          $pidPath = 'playwright-server.pid'
-          for ($attempt = 1; $attempt -le 60; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri "$env:PLAYWRIGHT_BASE_URL/login" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 5 | Out-Null
+          server_pid="$(cat playwright-server.pid)"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --insecure "$PLAYWRIGHT_BASE_URL/login" >/dev/null; then
               exit 0
-            } catch {
-              $serverPid = [int](Get-Content $pidPath -Raw)
-              if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
-                Write-Error 'Next.js dev server exited before becoming ready.'
-                Get-Content playwright-server.log -ErrorAction SilentlyContinue
-                Get-Content playwright-server.err.log -ErrorAction SilentlyContinue
-                exit 1
-              }
-              Start-Sleep -Seconds 2
-            }
-          }
-          Write-Error "Timed out waiting for $env:PLAYWRIGHT_BASE_URL/login"
-          Get-Content playwright-server.log -ErrorAction SilentlyContinue
-          Get-Content playwright-server.err.log -ErrorAction SilentlyContinue
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo 'Next.js dev server exited before becoming ready.' >&2
+              cat playwright-server.log playwright-server.err.log 2>/dev/null || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Timed out waiting for $PLAYWRIGHT_BASE_URL/login" >&2
+          cat playwright-server.log playwright-server.err.log 2>/dev/null || true
           exit 1
 
       - name: Run Playwright tests
-        run: npx playwright test --config tests/playwright.config.ts
+        run: |
+          for shard in ${{ matrix.shard.parts }}; do
+            npx playwright test --config tests/playwright.config.ts --shard="$shard/16"
+          done
 
       - name: Upload Playwright artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.shard.index }}
           path: |
             playwright-report/
             test-results/

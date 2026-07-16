@@ -121,7 +121,7 @@ test('records selecting per-agent ACP models and sending selected modelId', asyn
   await ensureActiveChat(page);
   await page.waitForTimeout(700);
 
-  const textarea = page.locator('textarea[placeholder="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.fill('@alpha compare models for this task');
   await expect(page.locator('[data-testid="agent-model-select"]')).toHaveCount(1);
 

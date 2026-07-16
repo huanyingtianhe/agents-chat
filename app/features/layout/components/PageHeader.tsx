@@ -50,51 +50,11 @@ export function PageHeader({
   const [showHeaderOverflow, setShowHeaderOverflow] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [headerHidden, setHeaderHidden] = useState(false);
   const headerOverflowRef = useRef<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const accountRef = useRef<HTMLDivElement | null>(null);
-  const lastScrollTopRef = useRef(0);
-  const scrollTickRef = useRef<number | null>(null);
   const currentThemeId = normalizeThemeId(normalizedThemeId || activeThemeId);
   const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen();
-
-  useEffect(() => {
-    function handleScroll(event: Event) {
-      const target = event.target as HTMLElement | null;
-      if (!target || !target.classList.contains('chatContainer')) return;
-      const nextTop = target.scrollTop;
-      if (scrollTickRef.current !== null) {
-        cancelAnimationFrame(scrollTickRef.current);
-      }
-      scrollTickRef.current = requestAnimationFrame(() => {
-        const prevTop = lastScrollTopRef.current;
-        const delta = nextTop - prevTop;
-        if (nextTop <= 16) {
-          setHeaderHidden(false);
-        } else if (delta > 8) {
-          setHeaderHidden(true);
-        } else if (delta < -8) {
-          setHeaderHidden(false);
-        }
-        lastScrollTopRef.current = nextTop;
-      });
-    }
-
-    document.addEventListener('scroll', handleScroll, true);
-    return () => {
-      document.removeEventListener('scroll', handleScroll, true);
-      if (scrollTickRef.current !== null) {
-        cancelAnimationFrame(scrollTickRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (showHeaderOverflow || showSettings || showAccount) {
-      setHeaderHidden(false);
-    }
-  }, [showHeaderOverflow, showSettings, showAccount]);
 
   useEffect(() => {
     if (!showHeaderOverflow) return;
@@ -137,7 +97,7 @@ export function PageHeader({
   }, [showAccount]);
 
   return (
-    <header className={`header${headerHidden ? ' headerHidden' : ''}`}>
+    <header className="header">
       <div className="headerLeft">
         <h1>🤖 Agents Chat</h1>
       </div>

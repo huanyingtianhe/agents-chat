@@ -4,8 +4,8 @@ const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
-  await page.locator('input[placeholder="Admin username"]').fill('admin');
-  await page.locator('input[placeholder="Password"]').fill('admin123');
+  await page.locator('input[placeholder="Admin username"]').fill(process.env.ADMIN_USERNAME || 'admin');
+  await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
   await page.locator('button[type="submit"]').click();
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   await page.waitForTimeout(500);
@@ -119,6 +119,10 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   });
 
   await login(page);
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    'content',
+    /width=device-width.*initial-scale=1.*interactive-widget=resizes-content/,
+  );
   await page.locator('button.emptyHomepageNewChat').click();
   const textarea = page.locator('textarea.composerTextarea');
   await expect(textarea).toBeVisible({ timeout: 10000 });
@@ -150,9 +154,41 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await modelButton.click();
   const modelMenu = page.getByRole('listbox', { name: 'Model for alpha' });
   await expect(modelMenu).toBeVisible();
-  const [menuTop, appTop] = await Promise.all([
-    modelMenu.evaluate((element) => element.getBoundingClientRect().top),
-    app.evaluate((element) => element.getBoundingClientRect().top),
+  const [menuRect, appRect] = await Promise.all([
+    modelMenu.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    }),
+    app.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    }),
   ]);
-  expect(menuTop).toBeGreaterThanOrEqual(appTop);
+  expect(menuRect.top).toBeGreaterThanOrEqual(appRect.top);
+  expect(menuRect.bottom).toBeLessThanOrEqual(appRect.bottom);
+
+  await modelButton.click();
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Chats' }).click();
+  const mobileSidebar = page.locator('.participantsSidebar');
+  const backdrop = page.locator('.mobilePanelBackdrop');
+  await expect(mobileSidebar).toBeVisible();
+  await expect(backdrop).toBeVisible();
+  for (const locator of [mobileSidebar, backdrop]) {
+    await expect.poll(() => locator.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: Math.round(rect.top), height: Math.round(rect.height) };
+    })).toEqual({ top: 24, height: 430 });
+  }
+  await backdrop.click({ position: { x: 420, y: 200 } });
+
+  await page.evaluate(() => {
+    (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
+      .setTestVisualViewport(926, 0);
+  });
+  await expect.poll(() => app.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: Math.round(rect.top), height: Math.round(rect.height) };
+  })).toEqual({ top: 0, height: 926 });
+  await expect(sendButton).toBeVisible();
 });

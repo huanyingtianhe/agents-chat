@@ -243,6 +243,36 @@ test.describe('Chat UI', () => {
     expect(styles.color).toBe('rgb(255, 250, 242)');
   });
 
+  test('ChatGPT theme matches the inactive workflow pill color treatment', async ({ page }) => {
+    const sent: any[] = [];
+    await mockTwoAgentsAcp(page, sent);
+
+    await page.evaluate(() => window.localStorage.setItem('acp_chat_theme_v1', 'chatgpt'));
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
+    await ensureActiveChat(page);
+
+    await page.locator('textarea.composerTextarea').fill('hello ChatGPT theme');
+    const sendButton = page.locator('button[aria-label="Send message"]');
+    const workflowPill = page.locator('button[title^="workflow"]');
+    await expect(sendButton).toBeEnabled();
+    await expect(workflowPill).toBeVisible();
+
+    const [sendStyles, workflowStyles] = await Promise.all(
+      [sendButton, workflowPill].map(async (element) => element.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return {
+          backgroundColor: style.backgroundColor,
+          borderColor: style.borderColor,
+          color: style.color,
+          boxShadow: style.boxShadow,
+        };
+      })),
+    );
+
+    expect(sendStyles).toEqual(workflowStyles);
+  });
+
   test('warms local agents after loading agents without blocking send', async ({ page }) => {
     await page.goto('about:blank');
 

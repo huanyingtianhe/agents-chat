@@ -160,6 +160,10 @@ export const THEMES = {
       '--comment-user-color': '#2f6f9f',
       '--avatar-bg': 'linear-gradient(135deg, #ff8a4a, #ff5e1a)',
       '--avatar-text': '#fff',
+      '--send-button-bg': 'rgba(255, 94, 26, 0.10)',
+      '--send-button-border': 'rgba(13, 13, 13, 0.16)',
+      '--send-button-color': '#ff5e1a',
+      '--send-button-shadow': 'none',
     },
   },
 } as const;

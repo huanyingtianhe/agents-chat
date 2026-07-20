@@ -16,3 +16,4 @@ server.log
 server-error.log
 
 .worktrees/
+.superpowers/

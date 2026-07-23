@@ -28,13 +28,49 @@ export function MessageList({
   onAnswerAgentUserRequest: (requestId: string, response: AgentUserRequestResponse) => Promise<void>;
   onDismissAgentUserRequest: (requestId: string) => void;
 }) {
+  const [toasts, setToasts] = useState<Array<{ id: string; text: string }>>([]);
   const [mounted, setMounted] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedFormattedMessageId, setCopiedFormattedMessageId] = useState<string | null>(null);
+  const seenSystemMessageIdsRef = useRef<Set<string>>(new Set());
+  const toastTimeoutsRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of Object.values(toastTimeoutsRef.current)) {
+        window.clearTimeout(timeoutId);
+      }
+      toastTimeoutsRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const now = Date.now();
+    for (const message of messages) {
+      if (message.type !== 'system') continue;
+      if (message.id === 'welcome') continue;
+      if (seenSystemMessageIdsRef.current.has(message.id)) continue;
+      seenSystemMessageIdsRef.current.add(message.id);
+      if (typeof message.ts === 'number' && now - message.ts > 15000) continue;
+
+      const toastText = (message.content || '').replace(/^✅\s*/, '').trim();
+      if (!toastText) continue;
+
+      const toastId = `toast-${message.id}`;
+      setToasts((prev) => [...prev, { id: toastId, text: toastText }]);
+      const timeoutId = window.setTimeout(() => {
+        setToasts((prev) => prev.filter((toast) => toast.id !== toastId));
+        delete toastTimeoutsRef.current[toastId];
+      }, 3600);
+      toastTimeoutsRef.current[toastId] = timeoutId;
+    }
+  }, [messages]);
+
+  const chatMessages = useMemo(() => messages.filter((message) => message.type !== 'system'), [messages]);
 
   const messagesById = useMemo(() => {
     const map = new Map<string, ChatMessage>();
@@ -96,7 +132,14 @@ export function MessageList({
 
   return (
     <>
-      {messages.map((message) => (
+      {toasts.length > 0 ? (
+        <div className="chatToastStack" aria-live="polite" aria-atomic="false">
+          {toasts.map((toast) => (
+            <div key={toast.id} className="chatToast" role="status">{toast.text}</div>
+          ))}
+        </div>
+      ) : null}
+      {chatMessages.map((message) => (
         <MessageBubble
           key={message.id}
           message={message}

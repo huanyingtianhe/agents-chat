@@ -1,4 +1,43 @@
 /* ── Message bubble ── */
+.chatToastStack {
+  position: fixed;
+  top: 72px;
+  right: 16px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(460px, calc(100vw - 24px));
+  pointer-events: none;
+}
+.chatToast {
+  align-self: flex-end;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--panel-strong) 82%, var(--accent-soft));
+  color: var(--text);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  font-size: 12.5px;
+  line-height: 1.4;
+  animation: chatToastInOut 3.6s ease forwards;
+}
+@keyframes chatToastInOut {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  12%, 76% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
 .message {
   max-width: 80%;
   padding: 14px 16px;

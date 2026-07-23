@@ -1545,7 +1545,7 @@ test.describe('Chat UI', () => {
     await expect.poll(() => sendCalls, { timeout: 10000 }).toBe(1);
 
     await page.click('button.newChatButton');
-    await expect(chatArea.locator('.message.system', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.chatToast', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
     releaseFailure();
     await expect(chatArea.locator('.message.user', { hasText: failedText })).toHaveCount(0);
 
@@ -1926,8 +1926,8 @@ test.describe('Chat UI', () => {
     await page.click('button.newChatButton');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
 
-    // Should show welcome message in the new empty chat
-    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+    // Should show transient creation notification
+    await expect(page.locator('.chatToast', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
 
     // Chat input should be empty and ready
     const textarea = page.locator('textarea.composerTextarea');
@@ -2005,9 +2005,8 @@ test.describe('Chat UI', () => {
 
     // Step 2: Switch to a new chat and wait for it to fully initialize
     await page.click('button.newChatButton');
-    await expect(chatArea.locator('text=Welcome to Agents Chat')).toBeVisible();
     // Wait for createNewChat() to finish creating agent sessions
-    await expect(chatArea.locator('.message.system:has-text("created")')).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('.chatToast', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 30000 });
 
     // Step 3: Switch back to the old chat
     const oldChat = page.locator('.chatHistoryItem', { hasText: 'Let a = 1 + 1' });
@@ -4683,7 +4682,7 @@ test.describe('Empty Homepage', () => {
   test('should create chat from empty homepage button', async ({ page }) => {
     await page.click('button.emptyHomepageNewChat');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
-    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+    await expect(page.locator('.chatToast', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
     // Empty homepage should be gone
     await expect(page.locator('.emptyHomepage')).not.toBeVisible();
   });
@@ -4691,7 +4690,7 @@ test.describe('Empty Homepage', () => {
   test('should create chat from sidebar New Chat button on empty homepage', async ({ page }) => {
     await page.click('button.newChatButton');
     await page.waitForSelector('.chatContainer', { timeout: 10000 });
-    await expect(page.locator('text=Welcome to Agents Chat')).toBeVisible();
+    await expect(page.locator('.chatToast', { hasText: 'New chat "New Chat" created.' })).toBeVisible({ timeout: 10000 });
   });
 });
 

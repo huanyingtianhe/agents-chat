@@ -30,6 +30,34 @@ Open [https://localhost:3010](https://localhost:3010).
 
 For persistent deployment, use one of the platform-specific scripts below. Both handle build + restart + health check in one command.
 
+### Binary release bundles
+
+GitHub Releases can also publish prebuilt runtime bundles for Windows and Linux. Each release asset contains the Next.js standalone server output, static assets, `public/`, `.env.example`, and startup scripts:
+
+- Linux: `agents-chat-linux-x64.tar.gz`
+- Windows: `agents-chat-windows-x64.zip`
+
+Create a release by pushing a tag such as `v0.1.0`:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow in `.github/workflows/release.yml` will build both bundles and upload them to the matching GitHub Release draft. After downloading a bundle:
+
+```bash
+cp .env.example .env.local
+PORT=3010 ./scripts/start-release.sh
+```
+
+On Windows:
+
+```powershell
+Copy-Item .env.example .env.local
+powershell -ExecutionPolicy Bypass -File .\scripts\start-release.ps1
+```
+
 ### Deployment (Windows Scheduled Task)
 
 For persistent deployment on a Windows machine, use `scripts\deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot.

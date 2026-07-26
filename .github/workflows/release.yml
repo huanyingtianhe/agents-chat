@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+            release_target: linux-x64
+            asset_name: agents-chat-linux-x64.tar.gz
+            archive_kind: tar
+          - os: windows-latest
+            label: windows-x64
+            release_target: windows-x64
+            asset_name: agents-chat-windows-x64.zip
+            archive_kind: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Prepare release bundle
+        run: node ./scripts/package-release.mjs
+        env:
+          RELEASE_TARGET: ${{ matrix.release_target }}
+
+      - name: Archive release bundle (Linux)
+        if: matrix.archive_kind == 'tar'
+        run: |
+          tar -czf "${{ matrix.asset_name }}" -C dist/release "agents-chat-${{ matrix.release_target }}"
+
+      - name: Archive release bundle (Windows)
+        if: matrix.archive_kind == 'zip'
+        shell: powershell
+        run: |
+          Compress-Archive `
+            -Path "dist/release/agents-chat-${{ matrix.release_target }}" `
+            -DestinationPath "${{ matrix.asset_name }}" `
+            -Force
+
+      - name: Ensure GitHub release exists
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --draft --generate-notes
+          fi
+
+      - name: Upload asset
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" "${{ matrix.asset_name }}" --clobber

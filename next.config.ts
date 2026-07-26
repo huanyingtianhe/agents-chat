@@ -2,6 +2,7 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  output: 'standalone',
   serverExternalPackages: ['better-sqlite3', 'hyco-ws', 'pino', 'pino-roll', 'pino-pretty'],
   allowedDevOrigins: [
     'oldest-eating-spice-restoration.trycloudflare.com',

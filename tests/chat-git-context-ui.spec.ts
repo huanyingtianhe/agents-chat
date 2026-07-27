@@ -132,7 +132,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.locator('button[type="submit"]').click();
 
   await page.locator('button.emptyHomepageNewChat').click();
-  await expect(page.locator('.statusGitContextSlot .composerGitContextControls')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('button.newChatButton')).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Branch', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Worktree', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Worktree', { exact: true })).toBeEnabled({ timeout: 15000 });

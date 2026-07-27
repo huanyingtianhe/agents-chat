@@ -12,8 +12,10 @@ async function pickOption(page: Page, label: string, value: string) {
 
 test('shows branch/worktree controls in the status bar and keeps selection per chat', async ({ page }) => {
   const chats = new Map<string, any>();
+  const gitContextLoadedChatIds = new Set<string>();
   let lastChatId = '';
   let createdChatId = '';
+  let agentsListed = false;
   const gitContextUpdates: string[] = [];
 
   function buildGitContextOptions(chat: any) {
@@ -47,6 +49,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
           await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'not_found' }) });
           return;
         }
+        gitContextLoadedChatIds.add(id);
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({ ok: true, chat, gitContextOptions: buildGitContextOptions(chat) }),
@@ -99,6 +102,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON();
     if (body?.action === 'list-agents') {
+      agentsListed = true;
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
@@ -133,15 +137,18 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
   await page.locator('button[type="submit"]').click();
 
-  await Promise.all([
-    page.waitForResponse((response) => (
-      createdChatId !== ''
-      && response.request().method() === 'GET'
-      && response.url().includes(`/api/chats?id=${encodeURIComponent(createdChatId)}`)
-      && response.status() === 200
-    )),
-    page.locator('button.emptyHomepageNewChat').click(),
-  ]);
+  async function createChatAndWaitForGitContext(buttonSelector: string) {
+    const previousChatId = createdChatId;
+    await expect.poll(() => agentsListed, { timeout: 15000 }).toBe(true);
+    const button = page.locator(buttonSelector);
+    await expect(button).toBeVisible({ timeout: 15000 });
+    await expect(button).toBeEnabled({ timeout: 15000 });
+    await button.click();
+    await expect.poll(() => createdChatId, { timeout: 15000 }).not.toBe(previousChatId);
+    await expect.poll(() => gitContextLoadedChatIds.has(createdChatId), { timeout: 15000 }).toBe(true);
+  }
+
+  await createChatAndWaitForGitContext('button.emptyHomepageNewChat');
   await expect(page.locator('button.newChatButton')).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Branch', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Worktree', { exact: true })).toBeVisible({ timeout: 15000 });
@@ -151,7 +158,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-a');
   await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 
-  await page.locator('button.newChatButton').click();
+  await createChatAndWaitForGitContext('button.newChatButton');
   await pickOption(page, 'Worktree', 'C:/repo/.worktrees/feat-b');
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-b');
   await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-b');

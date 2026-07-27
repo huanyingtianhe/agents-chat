@@ -131,14 +131,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
   await page.locator('button[type="submit"]').click();
 
-  await Promise.all([
-    page.waitForResponse((response) => (
-      response.request().method() === 'GET'
-      && response.url().includes('/api/chats?id=')
-      && response.status() === 200
-    )),
-    page.locator('button.emptyHomepageNewChat').click(),
-  ]);
+  await page.locator('button.emptyHomepageNewChat').click();
   await expect(page.locator('button.newChatButton')).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Branch', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Worktree', { exact: true })).toBeVisible({ timeout: 15000 });
@@ -148,14 +141,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-a');
   await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 
-  await Promise.all([
-    page.waitForResponse((response) => (
-      response.request().method() === 'GET'
-      && response.url().includes('/api/chats?id=')
-      && response.status() === 200
-    )),
-    page.locator('button.newChatButton').click(),
-  ]);
+  await page.locator('button.newChatButton').click();
   await pickOption(page, 'Worktree', 'C:/repo/.worktrees/feat-b');
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-b');
   await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-b');

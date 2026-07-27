@@ -260,6 +260,13 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     await saveCurrentChatToHistory();
     const newName = 'New Chat';
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
+    try {
+      await fetch('/api/chats', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
+      });
+    } catch { /* ignore */ }
     ctx.currentChatIdRef.current = newId;
     clearChatMessages({ clearAgentFilter: false });
     ctx.setChatName(newName);
@@ -273,17 +280,10 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         body: JSON.stringify({ action: 'set-last-chat', chatId: newId }),
       });
     } catch { /* ignore */ }
-    const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
     ctx.setChatHistory(prev => {
       if (prev.some(c => c.id === newId)) return prev;
       return normalizeChatHistory([newEntry, ...prev]);
     });
-    try {
-      await fetch('/api/chats', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
-      });
-    } catch { /* ignore */ }
     ctx.addMessage({ type: 'system', content: `✅ New chat "${newName}" created.` });
     ctx.onCloseChatsPanel?.();
     ctx.onCloseAgentsPanel?.();

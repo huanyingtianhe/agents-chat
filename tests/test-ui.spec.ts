@@ -3047,8 +3047,10 @@ test.describe('Chat UI', () => {
   test('forwards ACP permission questions to the user inline in chat', async ({ page }) => {
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea.composerTextarea');
+    const sendButton = page.locator('button[aria-label="Send message"]');
     let respondedBody: any = null;
     let permissionAnswered = false;
+    let pollCount = 0;
 
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
@@ -3070,6 +3072,7 @@ test.describe('Chat UI', () => {
         return;
       }
       if (body?.action === 'poll') {
+        pollCount += 1;
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
@@ -3124,11 +3127,17 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha please inspect the repo');
-    await textarea.press('Enter');
+    await expect(sendButton).toBeVisible({ timeout: 10000 });
+    await expect(sendButton).toBeEnabled({ timeout: 10000 });
+    await sendButton.click();
 
+    await expect(chatArea.locator('.message.user', { hasText: 'please inspect the repo' })).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => pollCount).toBeGreaterThan(0);
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a shell command?' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
     await expect(requestCard.getByRole('button', { name: 'Always allow in current session' })).toBeVisible();
@@ -3232,10 +3241,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha deploy it');
-    await textarea.press('Enter');
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Which Azure region should I use?' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
@@ -3326,10 +3338,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha use the test-user-input skill');
-    await textarea.press('Enter');
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Please provide two numbers:' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
@@ -3623,10 +3638,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha please inspect the repo');
-    await textarea.press('Enter');
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Describe what the agent should check.' });
     const answerInput = requestCard.getByRole('textbox', { name: 'Response to Need more detail' });
@@ -3715,10 +3733,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha please inspect the repo');
-    await textarea.press('Enter');
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Describe what the agent should check before polling fails.' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
@@ -3797,10 +3818,13 @@ test.describe('Chat UI', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
     });
 
+    await deleteAllChats(page);
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
+    await ensureActiveChat(page);
     await textarea.fill('@alpha please inspect the repo');
-    await textarea.press('Enter');
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a command before stop?' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });

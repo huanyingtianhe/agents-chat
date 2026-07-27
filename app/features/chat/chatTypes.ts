@@ -82,6 +82,12 @@ export type ChatHistoryEntry = {
   ts: number;
   agentId?: string;
   agentSessions?: Record<string, string>;
+  gitContext?: {
+    repoRoot: string;
+    worktreePath: string;
+    branchName: string;
+    isFallback?: boolean;
+  };
 };
 
 export type ShareDialog = {

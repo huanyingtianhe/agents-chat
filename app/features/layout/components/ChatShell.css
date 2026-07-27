@@ -712,7 +712,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 24px;
+  padding: 6px 24px;
   overflow-x: auto;
   overflow-y: hidden;
   flex-wrap: nowrap;
@@ -764,12 +764,12 @@
 }
 .chatPageRoot .statusDot.connected { background: var(--success); }
 .chatPageRoot .statusBar .composerGitContextControls {
-  gap: 6px;
+  gap: 4px;
   flex-wrap: nowrap;
   width: max-content;
 }
 .chatPageRoot .statusBar .composerGitContextField {
-  gap: 5px;
+  gap: 4px;
   flex: 0 0 auto;
 }
 .chatPageRoot .statusBar .composerGitContextLabel {
@@ -784,15 +784,30 @@
   max-width: 200px;
 }
 .chatPageRoot .statusBar .themedPickerTrigger {
-  min-height: 26px;
-  padding: 3px 8px;
-  border-radius: 999px;
+  min-height: 18px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   font-size: 10px;
+  line-height: 1.2;
+}
+.chatPageRoot .statusBar .themedPickerTrigger:hover:not(:disabled),
+.chatPageRoot .statusBar .themedPickerOpen {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent);
 }
 .chatPageRoot .statusBar .themedPickerDropdown {
   min-width: 180px;
   width: max-content;
   max-width: min(420px, calc(100vw - 24px));
+}
+.chatPageRoot .statusBar .themedPickerCaret {
+  font-size: 9px;
+  opacity: 0.55;
 }
 .chatPageRoot .statusBar .themedPickerOption,
 .chatPageRoot .statusBar .themedPickerEmpty {
@@ -1209,7 +1224,7 @@
   }
   .chatPageRoot .statusBar {
     gap: 6px 12px;
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
   }
   .chatPageRoot .statusRight {
     gap: 10px;

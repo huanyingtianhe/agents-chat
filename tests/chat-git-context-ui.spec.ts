@@ -13,6 +13,7 @@ async function pickOption(page: Page, label: string, value: string) {
 test('shows branch/worktree controls in the status bar and keeps selection per chat', async ({ page }) => {
   const chats = new Map<string, any>();
   let lastChatId = '';
+  let createdChatId = '';
   const gitContextUpdates: string[] = [];
 
   function buildGitContextOptions(chat: any) {
@@ -66,6 +67,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
       if (body?.chat) {
+        createdChatId = body.chat.id;
         const existing = chats.get(body.chat.id);
         chats.set(body.chat.id, {
           ...existing,
@@ -131,7 +133,15 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
   await page.locator('button[type="submit"]').click();
 
-  await page.locator('button.emptyHomepageNewChat').click();
+  await Promise.all([
+    page.waitForResponse((response) => (
+      createdChatId !== ''
+      && response.request().method() === 'GET'
+      && response.url().includes(`/api/chats?id=${encodeURIComponent(createdChatId)}`)
+      && response.status() === 200
+    )),
+    page.locator('button.emptyHomepageNewChat').click(),
+  ]);
   await expect(page.locator('button.newChatButton')).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Branch', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page.getByLabel('Worktree', { exact: true })).toBeVisible({ timeout: 15000 });

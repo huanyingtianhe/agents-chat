@@ -30,12 +30,15 @@ export function SelectPicker<V extends string = string>({
 }: SelectPickerProps<V>) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const [dropdownStyle, setDropdownStyle] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     if (!open) return;
     function onDocDown(e: MouseEvent) {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (wrapRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
@@ -110,6 +113,7 @@ export function SelectPicker<V extends string = string>({
     : null;
   const dropdown = open && !disabled ? (
     <div
+      ref={dropdownRef}
       className={`themedPickerDropdown${portal ? ' themedPickerDropdownPortal' : ''}`}
       role="listbox"
       aria-label={ariaLabel}

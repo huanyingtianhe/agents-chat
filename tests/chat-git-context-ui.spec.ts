@@ -1,10 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
-test('shows branch/worktree controls under composer and keeps selection per chat', async ({ page }) => {
+async function pickOption(page: Page, label: string, value: string) {
+  const trigger = page.getByLabel(label);
+  await expect(trigger).toBeVisible({ timeout: 15000 });
+  await expect(trigger).toBeEnabled({ timeout: 15000 });
+  await trigger.click();
+  await page.locator(`[role="option"][data-value="${value}"]`).click();
+}
+
+test('shows branch/worktree controls in the status bar and keeps selection per chat', async ({ page }) => {
   const chats = new Map<string, any>();
   let lastChatId = '';
+  const gitContextUpdates: string[] = [];
 
   function buildGitContextOptions(chat: any) {
     const effective = chat?.gitContext || {
@@ -57,12 +66,18 @@ test('shows branch/worktree controls under composer and keeps selection per chat
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
       if (body?.chat) {
-        chats.set(body.chat.id, body.chat);
+        const existing = chats.get(body.chat.id);
+        chats.set(body.chat.id, {
+          ...existing,
+          ...body.chat,
+          gitContext: body.chat.gitContext ?? existing?.gitContext,
+        });
       }
       if (body?.action === 'set-last-chat') {
         lastChatId = body.chatId || '';
       }
       if (body?.action === 'update-git-context') {
+        gitContextUpdates.push(body.gitContext?.worktreePath || '');
         const existing = chats.get(body.chatId);
         if (existing) {
           existing.gitContext = body.gitContext;
@@ -117,17 +132,22 @@ test('shows branch/worktree controls under composer and keeps selection per chat
   await page.locator('button[type="submit"]').click();
 
   await page.locator('button.emptyHomepageNewChat').click();
-  await expect(page.getByLabel('Branch')).toBeVisible();
-  await expect(page.getByLabel('Worktree')).toBeVisible();
+  await expect(page.getByLabel('branch')).toBeVisible({ timeout: 15000 });
+  await expect(page.getByLabel('worktree')).toBeVisible({ timeout: 15000 });
+  await expect(page.getByLabel('worktree')).toBeEnabled({ timeout: 15000 });
 
-  await page.getByLabel('Worktree').selectOption('C:/repo/.worktrees/feat-a');
+  await pickOption(page, 'worktree', 'C:/repo/.worktrees/feat-a');
+  expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-a');
+  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 
-  await page.locator('button.emptyHomepageNewChat').click();
-  await page.getByLabel('Worktree').selectOption('C:/repo/.worktrees/feat-b');
+  await page.locator('button.newChatButton').click();
+  await pickOption(page, 'worktree', 'C:/repo/.worktrees/feat-b');
+  expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-b');
+  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-b');
 
   await page.getByRole('button', { name: /Chats/i }).first().click();
-  const firstChat = page.locator('.participantsSidebar .participantItem').first();
+  const firstChat = page.locator('.participantsSidebar .chatHistoryItem').nth(1);
   await firstChat.click();
 
-  await expect(page.getByLabel('Worktree')).toHaveValue('C:/repo/.worktrees/feat-a');
+  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 });

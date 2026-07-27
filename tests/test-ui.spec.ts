@@ -3049,6 +3049,7 @@ test.describe('Chat UI', () => {
     const textarea = page.locator('textarea.composerTextarea');
     let respondedBody: any = null;
     let permissionAnswered = false;
+    let pollCount = 0;
 
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
@@ -3070,6 +3071,7 @@ test.describe('Chat UI', () => {
         return;
       }
       if (body?.action === 'poll') {
+        pollCount += 1;
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
@@ -3129,6 +3131,7 @@ test.describe('Chat UI', () => {
     await textarea.fill('@alpha please inspect the repo');
     await textarea.press('Enter');
 
+    await expect.poll(() => pollCount).toBeGreaterThan(0);
     const requestCard = chatArea.locator('.agentUserRequestCard', { hasText: 'Allow Alpha Agent to run a shell command?' });
     await expect(requestCard).toBeVisible({ timeout: 10000 });
     await expect(requestCard.getByRole('button', { name: 'Always allow in current session' })).toBeVisible();

@@ -16,6 +16,7 @@ import { NodesPanel } from '../nodes/components/NodesPanel';
 import { SchedulesPanel } from '../scheduler/components/SchedulesPanel';
 import { ChatComposer } from '../composer/components/ChatComposer';
 import { ComposerTargetControls } from '../composer/components/ComposerTargetControls';
+import { ComposerGitContextControls } from '../composer/components/ComposerGitContextControls';
 import { useFileWorkspaceState } from '../files/hooks/useFileWorkspaceState';
 import { useFileComments, type UseFileCommentsResult } from '../files/hooks/useFileComments';
 import { FileWorkspacePanel } from '../files/components/FileWorkspacePanel';
@@ -33,6 +34,7 @@ import { ThemeMenu } from '../layout/components/ThemeMenu';
 import { ShareDialog as ShareDialogComponent } from '../layout/components/ShareDialog';
 import { ImageLightbox } from '../layout/components/ImageLightbox';
 import { SelectPicker } from '../ui/SelectPicker';
+import { useChatGitContext } from './runtime/useChatGitContext';
 
 const CHAT_ACTION_MENU_WIDTH = 132;
 const CHAT_ACTION_MENU_HEIGHT = 124;
@@ -217,7 +219,32 @@ export function ChatPageClient() {
     if (e.key === 'ArrowDown' && start === currentVal.length && end === currentVal.length) { e.preventDefault(); const hist = inputHistoryRef.current[currentChatIdRef.current] || []; if (inputHistoryIndexRef.current === -1) return; const idx = inputHistoryIndexRef.current + 1; inputHistoryIndexRef.current = idx >= hist.length ? -1 : idx; setInputProgrammatic(idx >= hist.length ? inputDraftRef.current : hist[idx]); }
   }
 
+  const chatGitContext = useChatGitContext({
+    currentChatId: currentChatId || null,
+    sessionLockSignature: Object.entries(currentAgentSessionsRef.current)
+      .filter(([, sessionId]) => Boolean(sessionId))
+      .sort(([leftId], [rightId]) => leftId.localeCompare(rightId))
+      .map(([agentId, sessionId]) => `${agentId}:${sessionId}`)
+      .join('|'),
+    onContextChanged: () => {
+      currentAgentSessionsRef.current = {};
+    },
+  });
+
   const targetControls = <ComposerTargetControls mentionedAgentIds={mentionedAgentIds} orchestrationEnabled={mentionedAgentIds.length > 1} orchestrationMode={orchestrationMode} pendingWorkflowName={pendingWorkflowPlan?.name || null} onOpenWorkflowPicker={() => setShowWorkflowPicker(true)} effectiveComposerAgentId={effectiveComposerAgentId} rememberedComposerAgentId={rememberedComposerAgentId} currentChatId={currentChatId} getAgentModels={(agentId) => agents.find((agent) => agent.id === agentId)?.models || []} getSelectedModelIdForAgent={getSelectedModelIdForAgent} openModelMenuAgentId={agentPanelState.openModelMenuAgentId} setOpenModelMenuAgentId={agentPanelState.setOpenModelMenuAgentId} modelMenuRefs={agentPanelState.modelMenuRefs} setSelectedModelForAgent={registry.setSelectedModelForAgent} clearLastUsedAgent={() => registry.clearLastUsedAgent(currentChatId || undefined)} setOrchestrationMode={setOrchestrationMode} />;
+  const gitContextControls = currentChatId
+      ? <ComposerGitContextControls
+        disabled={chatGitContext.view.disabled}
+        branches={chatGitContext.view.branches}
+        worktrees={chatGitContext.view.worktrees}
+        selectedBranch={chatGitContext.view.selectedBranch}
+        selectedWorktree={chatGitContext.view.selectedWorktree}
+        locked={chatGitContext.view.locked}
+        statusText={chatGitContext.view.statusText}
+        onSelectBranch={(branchName) => void chatGitContext.setBranch(branchName)}
+        onSelectWorktree={(worktreePath) => void chatGitContext.setWorktree(worktreePath)}
+      />
+    : null;
 
   return <div className="chatPageRoot"><ChatShell themeStyle={themeStyle} themeId={normalizedThemeId} sidebarWidth={sidebarWidth} sidebarCollapsed={sidebarCollapsed} agentsSidebarOpen={showAgentsPanel || showNodesPanel || showSchedulesPanel} onSidebarResizeStart={(e) => { e.preventDefault(); setOpenChatMenuId(null); sidebarDragRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }} mobilePanel={showChatsPanel ? 'chat' : showAgentsPanel ? 'agents' : showNodesPanel ? 'nodes' : showSchedulesPanel ? 'schedules' : null} onMobilePanelChange={(panel) => { if (panel === null) { setShowChatsPanel(false); setShowAgentsPanel(false); setShowNodesPanel(false); setShowSchedulesPanel(false); } }}
     header={<PageHeader authLabel={session?.user ? (session.user.name || '?') : ''} isAdmin={isAdmin} userEmail={session?.user?.email} userImage={session?.user?.image} onSignOut={() => void signOut()} themeMenu={<ThemeMenu activeThemeId={themeId} onSelectTheme={setThemeId} />} showChatsPanel={showChatsPanel} showAgentsPanel={showAgentsPanel} showNodesPanel={showNodesPanel} showSchedulesPanel={showSchedulesPanel} onToggleChats={() => { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); setShowNodesPanel(false); setShowSchedulesPanel(false); }} onToggleAgents={() => { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); setShowSchedulesPanel(false); }} onToggleNodes={() => { setShowNodesPanel((p) => { if (!p) void loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); setShowSchedulesPanel(false); }} onToggleSchedules={() => { setShowSchedulesPanel((p) => !p); setShowAgentsPanel(false); setShowNodesPanel(false); setShowChatsPanel(false); }} activeThemeId={themeId} normalizedThemeId={normalizedThemeId} onSelectTheme={setThemeId} lastUsedAgentScope={lastUsedAgentScope} onSelectLastUsedAgentScope={registry.setLastUsedAgentScope} />}
@@ -225,7 +252,7 @@ export function ChatPageClient() {
     messages={leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile ? <FileWorkspacePanel workspace={fileWorkspace} comments={fileCommentsController} selection={fileCommentsController.selection} /> : !currentChatId ? <div className="emptyHomepage"><div className="emptyHomepageContent"><div className="emptyHomepageLogo">💬</div><h2 className="emptyHomepageTitle">Agents Chat</h2><p className="emptyHomepageSubtitle">Start a new conversation with your agents</p><button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>+ New Chat{registry.selectedAgentFilter ? ` with ${chatFilterAgents.find((a) => a.id === registry.selectedAgentFilter)?.name || registry.selectedAgentFilter}` : ''}</button></div></div> : <div className="chatMessagesArea"><section className="chatContainer" ref={chatContainerRef} onScroll={(e) => updateChatStickiness(e.currentTarget)} onWheel={(e) => { if (e.deltaY < 0) shouldStickToBottomRef.current = false; }}><MessageList messages={visibleMessages} agents={agents} expandedMessages={expandedMessages} failedSendByMessageId={failedSendByMessageId} onToggleExpanded={toggleMessageExpanded} onRetryFailedSend={retryFailedSend} onOpenImage={setLightboxImage} onAnswerAgentUserRequest={answerAgentUserRequest} onDismissAgentUserRequest={dismissAgentUserRequest} />{showFollowUpHint && workflowFollowUp ? <WorkflowFollowUpCard agentIds={workflowFollowUp.awaitingAgentIds} agents={agents} onReply={(text) => sendWorkflowFollowUpReply(text, workflowFollowUp.awaitingAgentIds, workflowFollowUp.orchestrationId)} onDismiss={() => setDismissedFollowUpOrchId(workflowFollowUp.orchestrationId)} /> : null}</section>{showScrollToBottom ? <button type="button" className="jumpToLatestButton" onClick={scrollToLatest} aria-label="Jump to latest messages" title="Jump to latest messages">↓</button> : null}</div>}
     composer={currentChatId && !(leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile) ? <ChatComposer composerRef={composerRef} fileInputRef={fileInputRef} input={input} attachments={attachments} attachmentError={attachmentError} isDraggingAttachment={isDraggingAttachment} mentionAgents={filteredAgents} mentionSelectedIndex={mentionSelectedIndex} slashCommands={filteredSlashCommands} slashSelectedIndex={slashSelectedIndex} targetControls={targetControls} isSending={isCurrentChatSending} sendDisabled={agents.length === 0} onMentionSelect={selectMention} onSlashCommandSelect={insertSlashCommand} onFilesSelected={(files) => void addFilesToComposer(files)} onRemoveAttachment={removeAttachment} onPreviewAttachment={setLightboxImage} onPaste={handleAttachmentPaste} onKeyDown={handleComposerKeyDown} onInput={composerInputHandler} onDragOver={handleComposerDragOver} onDragLeave={handleComposerDragLeave} onDrop={handleComposerDrop} onSend={() => void handleSend()} onStop={() => void handleStop()} /> : null}
     rightPanel={<><AgentsPanel panelState={agentPanelState} agents={agentSidebarItems} agentsLoading={agentsLoading} isAdmin={isAdmin} nodesData={nodesData} selectedAgentFilter={registry.selectedAgentFilter} selectedAgentModels={registry.selectedAgentModels} ensuringAgentModels={registry.ensuringAgentModels} setSelectedModelForAgent={registry.setSelectedModelForAgent} reloadAgents={reloadAgents} /><NodesPanel panelState={nodePanelState} /><SchedulesPanel isOpen={showSchedulesPanel} onClose={() => setShowSchedulesPanel(false)} agents={agentSidebarItems.map(a => ({ id: a.id, name: a.name || a.id }))} /></>}
-    statusBar={<StatusBar statusText={`${agents.length} agent${agents.length !== 1 ? 's' : ''} configured`} targetText={`${messages.filter((m) => m.type === 'user').length} messages`} isRunning={agents.length > 0} planSlot={activeWorkflow ? <PlanProgressBar orchestration={activeWorkflow} variant="inline" /> : null} />}
+    statusBar={<StatusBar statusText={`${agents.length} agent${agents.length !== 1 ? 's' : ''} configured`} targetText={`${messages.filter((m) => m.type === 'user').length} messages`} isRunning={agents.length > 0} gitContextSlot={gitContextControls} planSlot={activeWorkflow ? <PlanProgressBar orchestration={activeWorkflow} variant="inline" /> : null} />}
     shareDialog={shareDialog ? <ShareDialogComponent dialog={shareDialog} onCopyLink={() => void copyShareDialogLink()} onClose={() => setShareDialog(null)} /> : null}
     imageLightbox={lightboxImage ? <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} /> : null}
     workflowPicker={<WorkflowPicker open={showWorkflowPicker} onClose={() => setShowWorkflowPicker(false)} agentIds={agents.map((a) => a.id)} onPicked={(plan) => { setPendingWorkflowPlan(plan); setOrchestrationMode('workflow'); }} />}

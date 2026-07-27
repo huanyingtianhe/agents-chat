@@ -709,22 +709,52 @@
 }
 .chatPageRoot .statusBar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   padding: 10px 24px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
   border-top: 1px solid var(--border);
   background: var(--header-bg);
   color: var(--text-soft);
   font-size: 12px;
   backdrop-filter: blur(18px);
 }
+.chatPageRoot .statusLeft {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+.chatPageRoot .statusRight {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: max-content;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 .chatPageRoot .statusGroup { display: flex; align-items: center; gap: 8px; }
+.chatPageRoot .statusGitContextSlot {
+  display: flex;
+  align-items: center;
+  min-width: fit-content;
+  overflow: visible;
+}
 .chatPageRoot .statusPlanSlot {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: fit-content;
   display: flex;
   justify-content: flex-start;
-  overflow: hidden;
+  overflow: visible;
+}
+.chatPageRoot .statusTargetText {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .chatPageRoot .statusDot {
   width: 8px; height: 8px;
@@ -733,6 +763,45 @@
   background: var(--danger);
 }
 .chatPageRoot .statusDot.connected { background: var(--success); }
+.chatPageRoot .statusBar .composerGitContextControls {
+  gap: 6px;
+  flex-wrap: nowrap;
+  width: max-content;
+}
+.chatPageRoot .statusBar .composerGitContextField {
+  gap: 5px;
+  flex: 0 0 auto;
+}
+.chatPageRoot .statusBar .composerGitContextLabel {
+  font-size: 10px;
+}
+.chatPageRoot .statusBar .composerGitContextPicker {
+  width: 124px;
+  max-width: 124px;
+}
+.chatPageRoot .statusBar .composerGitContextPicker-worktree {
+  width: 200px;
+  max-width: 200px;
+}
+.chatPageRoot .statusBar .themedPickerTrigger {
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+.chatPageRoot .statusBar .themedPickerDropdown {
+  min-width: 180px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
+}
+.chatPageRoot .statusBar .themedPickerOption,
+.chatPageRoot .statusBar .themedPickerEmpty {
+  font-size: 11px;
+}
+.chatPageRoot .statusBar .composerGitContextStatus {
+  font-size: 10px;
+  white-space: nowrap;
+}
 .chatPageRoot .muted { color: var(--muted); }
 .chatPageRoot .modalOverlay {
   position: fixed;
@@ -1139,9 +1208,14 @@
     padding: 12px;
   }
   .chatPageRoot .statusBar {
-    flex-wrap: wrap;
     gap: 6px 12px;
     padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  }
+  .chatPageRoot .statusRight {
+    gap: 10px;
+  }
+  .chatPageRoot .statusBar .composerGitContextControls {
+    flex-wrap: nowrap;
   }
   .chatPageRoot .modalOverlay {
     padding: 12px;

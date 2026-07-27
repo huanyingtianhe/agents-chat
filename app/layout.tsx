@@ -1,5 +1,6 @@
 import './globals.css';
 import './features/composer/components/ChatComposer.css';
+import './features/composer/components/ComposerGitContextControls.css';
 import './features/chat/components/FailedSendControls.css';
 import './features/chat/components/ChatSidebarList.css';
 import './features/messages/components/MessageList.css';

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats } from '@/lib/chatStore';
+import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
+import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
+import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +27,8 @@ export async function GET(req: NextRequest) {
   if (chatId) {
     const chat = await getChat(userId, chatId);
     if (!chat) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
-    return NextResponse.json({ ok: true, chat });
+    const gitContextOptions = getGitContextOptions(chat.gitContext || null);
+    return NextResponse.json({ ok: true, chat, gitContextOptions });
   }
 
   const searchQuery = req.nextUrl.searchParams.get('search');
@@ -69,6 +72,33 @@ export async function POST(req: NextRequest) {
     if (typeof newName !== 'string' || !newName.trim()) return NextResponse.json({ ok: false, error: 'missing_name' }, { status: 400 });
     await renameChat(userId, chatId, newName.trim());
     return NextResponse.json({ ok: true });
+  }
+
+  if (body?.action === 'update-git-context') {
+    const chatId = body?.chatId;
+    const gitContext = body?.gitContext;
+    if (typeof chatId !== 'string' || !chatId) {
+      return NextResponse.json({ ok: false, error: 'missing_chatId' }, { status: 400 });
+    }
+    if (!isValidStoredGitContext(gitContext)) {
+      return NextResponse.json({ ok: false, error: 'invalid_git_context' }, { status: 400 });
+    }
+    const chat = await getChat(userId, chatId);
+    if (!chat) {
+      return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
+    }
+    if (hasPersistedAgentSession(chat.agentSessions)) {
+      return NextResponse.json({ ok: false, error: 'git_context_locked' }, { status: 409 });
+    }
+
+    const options = getGitContextOptions(gitContext);
+    const validated = validateGitContext(gitContext, options);
+    if (!validated.ok) {
+      return NextResponse.json({ ok: false, error: validated.error }, { status: 400 });
+    }
+
+    await updateChatGitContext(userId, chatId, validated.gitContext);
+    return NextResponse.json({ ok: true, gitContext: validated.gitContext });
   }
 
   const chat = body?.chat as StoredChat | undefined;

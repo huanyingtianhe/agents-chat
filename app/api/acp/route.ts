@@ -567,14 +567,38 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
   return [];
 }
 
-async function buildSessionParams(proc: AgentProcess, isAdmin: boolean): Promise<{ cwd: string; mcpServers: Record<string, unknown>[] }> {
-  const params = { cwd: proc.cachedCwd, mcpServers: [] as Record<string, unknown>[] };
+async function buildSessionParams(
+  proc: AgentProcess,
+  isAdmin: boolean,
+  cwdOverride?: string,
+): Promise<{ cwd: string; mcpServers: Record<string, unknown>[] }> {
+  const params = { cwd: cwdOverride || proc.cachedCwd, mcpServers: [] as Record<string, unknown>[] };
   // noTools and relay/remote agents get no MCP servers. Remote nodes should not inherit
   // the Next.js server host's ~/.copilot/mcp-config.json.
   if (!proc.config.noTools && !proc.config.relay) {
     params.mcpServers = await loadMcpServers(isAdmin);
   }
   return params;
+}
+
+async function resolveChatCwd(userId: string, chatId?: string): Promise<string | undefined> {
+  if (!chatId) return undefined;
+  try {
+    const chat = await getChat(userId, chatId);
+    const chatCwd = chat?.gitContext?.worktreePath;
+    if (chatCwd && existsSync(chatCwd)) return chatCwd;
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+async function buildSessionParamsForChat(
+  proc: AgentProcess,
+  isAdmin: boolean,
+  userId: string,
+  chatId?: string,
+): Promise<{ cwd: string; mcpServers: Record<string, unknown>[] }> {
+  const cwdOverride = await resolveChatCwd(userId, chatId);
+  return buildSessionParams(proc, isAdmin, cwdOverride);
 }
 
 
@@ -620,7 +644,7 @@ async function createFreshSessionForSend(
   if (!proc.rpc) throw new Error('Agent process not ready');
   const previousSessionId = previousSessionIdOverride || sess.sessionId;
   if (previousSessionId) proc.knownSessions.delete(previousSessionId);
-  const sessionParams = await buildSessionParams(proc, isAdmin);
+  const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
   const session = await proc.rpc.send('session/new', sessionParams);
   syncAgentModelsFromSessionResult(agentId, session);
   sess.sessionId = session.sessionId;
@@ -695,7 +719,7 @@ async function loadSavedChatSessionForSend(
   const replayBuffers = getReplayBuffers();
   replayBuffers.set(savedSessionId, []);
   try {
-    const sessionParams = await buildSessionParams(proc, isAdmin);
+    const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
     await proc.rpc.send('session/load', { sessionId: savedSessionId, ...sessionParams });
     replayBuffers.delete(savedSessionId);
     sess.sessionId = savedSessionId;
@@ -723,10 +747,17 @@ async function loadSavedChatSessionForSend(
   }
 }
 
-async function ensureUserSession(proc: AgentProcess, sess: UserSession, agentId: string, userId: string, isAdmin: boolean): Promise<void> {
+async function ensureUserSession(
+  proc: AgentProcess,
+  sess: UserSession,
+  agentId: string,
+  userId: string,
+  isAdmin: boolean,
+  chatId?: string,
+): Promise<void> {
   if (sess.sessionId) return;
   if (!proc.rpc) throw new Error('Agent process not ready');
-  const sessionParams = await buildSessionParams(proc, isAdmin);
+  const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
   log(`[ACP:${agentId}] Creating session for user ${userId} (admin=${isAdmin}, mcps=${sessionParams.mcpServers.length}, noTools=${!!proc.config.noTools}, relay=${!!proc.config.relay}, cwd=${sessionParams.cwd})...`);
   try {
     const result = await proc.rpc.send('session/new', sessionParams);
@@ -919,7 +950,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
       const errMsg = err.message || '';
       log(`[ACP:${agentId}] prompt failed: ${errMsg}, attempting session recovery...`);
       try {
-        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
         const session = await proc.rpc!.send('session/new', sessionParams);
         syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;
@@ -2015,7 +2046,7 @@ export async function POST(req: NextRequest) {
       if (!proc.ready || !proc.rpc) {
         return NextResponse.json({ ok: false, error: proc.error || 'Agent not ready' }, { status: 503 });
       }
-      const sessionParams = await buildSessionParams(proc, isAdmin);
+      const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
       const session = await proc.rpc.send('session/new', sessionParams);
       const synced = syncAgentModelsFromSessionResult(agentId, session);
       if (session?.sessionId) {
@@ -2114,25 +2145,26 @@ export async function POST(req: NextRequest) {
       // Switch to the correct session for this chat (if known)
       if (chatId) {
         const chatSessionId = getChatSession(sess, chatId);
-        if (chatSessionId) {
+        const savedSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
+
+        if (!savedSessionId) {
+          // Persisted mapping was cleared (for example after git-context change).
+          // Drop in-memory affinity too, so next send creates a fresh session.
+          sess.chatSessions.delete(chatId);
+          if (chatSessionId && sess.sessionId === chatSessionId) sess.sessionId = null;
+        } else if (chatSessionId && chatSessionId === savedSessionId) {
           if (chatSessionId !== sess.sessionId) {
             sess.sessionId = chatSessionId;
             // Don't null activeTurns — other chats may have active turns
           }
         } else {
-          const savedSessionId = await getStoredChatAgentSessionId(userId, chatId, agentId);
-          if (savedSessionId) {
-            const loadedSavedSession = await loadSavedChatSessionForSend(proc, sess, agentId, userId, chatId, savedSessionId, isAdmin);
-            if (!loadedSavedSession) sess.sessionId = null;
-          } else {
-            // New chat with no prior session — clear so ensureUserSession creates a fresh one
-            sess.sessionId = null;
-          }
+          const loadedSavedSession = await loadSavedChatSessionForSend(proc, sess, agentId, userId, chatId, savedSessionId, isAdmin);
+          if (!loadedSavedSession) sess.sessionId = null;
         }
       }
 
       // Ensure this user has a session on the agent
-      await ensureUserSession(proc, sess, agentId, userId, isAdmin);
+      await ensureUserSession(proc, sess, agentId, userId, isAdmin, chatId);
 
       // Store in chatSessions list and persist to SQLite
       if (chatId && sess.sessionId) {
@@ -2303,7 +2335,7 @@ export async function POST(req: NextRequest) {
       }
       try {
         // Note: ACP has no session/close — old session persists on the agent for future session/load
-        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
         const session = await proc.rpc.send('session/new', sessionParams);
         syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;
@@ -2374,7 +2406,7 @@ export async function POST(req: NextRequest) {
         const replayBuffers = getReplayBuffers();
         replayBuffers.set(savedSessionId, []);
         try {
-          const sessionParams = await buildSessionParams(proc, isAdmin);
+          const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
           await proc.rpc!.send('session/load', { sessionId: savedSessionId, ...sessionParams });
           sess.sessionId = savedSessionId;
           if (chatId) pushChatSession(sess, chatId, savedSessionId);
@@ -2413,7 +2445,7 @@ export async function POST(req: NextRequest) {
       }
       // Fall back to creating a new session — the frontend will inject chat history on first turn
       try {
-        const sessionParams = await buildSessionParams(proc, isAdmin);
+        const sessionParams = await buildSessionParamsForChat(proc, isAdmin, userId, chatId);
         const session = await proc.rpc!.send('session/new', sessionParams);
         syncAgentModelsFromSessionResult(agentId, session);
         sess.sessionId = session.sessionId;

@@ -336,6 +336,11 @@
   flex-wrap: wrap;
 }
 
+.composerGitContextRow {
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  padding-top: 8px;
+}
+
 .composerTextarea {
   flex: 1;
   width: 100%;

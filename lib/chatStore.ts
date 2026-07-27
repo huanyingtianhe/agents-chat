@@ -46,6 +46,14 @@ export type StoredChat = {
   messages: StoredMessage[];
   /** Map of agentId → ACP sessionId so sessions can be resumed */
   agentSessions: Record<string, string>;
+  gitContext?: StoredGitContext;
+};
+
+export type StoredGitContext = {
+  repoRoot: string;
+  worktreePath: string;
+  branchName: string;
+  isFallback?: boolean;
 };
 
 export type SharedChat = {
@@ -124,6 +132,7 @@ export function getDb(): Database.Database {
       ts        INTEGER NOT NULL,
       messages  TEXT NOT NULL DEFAULT '[]',
       agent_sessions TEXT NOT NULL DEFAULT '{}',
+      git_context TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (user_id, chat_id)
     );
 
@@ -217,6 +226,11 @@ export function getDb(): Database.Database {
     _db.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''`);
   } catch { /* column already exists */ }
 
+  // Migration: add git_context column to chats
+  try {
+    _db.exec(`ALTER TABLE chats ADD COLUMN git_context TEXT NOT NULL DEFAULT '{}'`);
+  } catch { /* column already exists */ }
+
   return _db;
 }
 
@@ -280,6 +294,19 @@ export async function mergeChat(userId: string, chat: StoredChat): Promise<void>
 }
 
 function mapStoredChatRow(row: any): StoredChat {
+  let gitContext: StoredGitContext | undefined;
+  try {
+    const parsed = JSON.parse(row.git_context || '{}');
+    if (parsed && typeof parsed === 'object' && typeof parsed.repoRoot === 'string' && typeof parsed.worktreePath === 'string' && typeof parsed.branchName === 'string') {
+      gitContext = {
+        repoRoot: parsed.repoRoot,
+        worktreePath: parsed.worktreePath,
+        branchName: parsed.branchName,
+        isFallback: parsed.isFallback === true,
+      };
+    }
+  } catch { /* ignore malformed git context */ }
+
   return {
     id: row.chat_id,
     name: row.name,
@@ -287,6 +314,7 @@ function mapStoredChatRow(row: any): StoredChat {
     agentId: row.agent_id || undefined,
     messages: JSON.parse(row.messages || '[]'),
     agentSessions: JSON.parse(row.agent_sessions || '{}'),
+    gitContext,
   };
 }
 
@@ -299,12 +327,13 @@ function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat)
   // ACP session updates are written by updateChatAgentSession; chat saves may
   // carry stale client session maps, so conflict updates preserve DB sessions.
   db.prepare(`
-    INSERT INTO chats (user_id, chat_id, name, ts, messages, agent_sessions, agent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO chats (user_id, chat_id, name, ts, messages, agent_sessions, agent_id, git_context)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id, chat_id) DO UPDATE SET
       name = excluded.name,
       ts = excluded.ts,
       messages = excluded.messages,
+      git_context = CASE WHEN excluded.git_context != '{}' THEN excluded.git_context ELSE chats.git_context END,
       agent_id = CASE WHEN excluded.agent_id != '' THEN excluded.agent_id ELSE chats.agent_id END
   `).run(
     userId,
@@ -314,6 +343,7 @@ function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat)
     JSON.stringify(chat.messages),
     JSON.stringify(chat.agentSessions || {}),
     chat.agentId || '',
+    JSON.stringify(chat.gitContext || {}),
   );
 }
 
@@ -369,6 +399,13 @@ export async function updateChatAgentSession(userId: string, chatId: string, age
   if (list[list.length - 1] !== sessionId) list.push(sessionId);
   sessions[agentId] = list;
   db.prepare('UPDATE chats SET agent_sessions = ? WHERE user_id = ? AND chat_id = ?').run(JSON.stringify(sessions), userId, chatId);
+}
+
+export async function updateChatGitContext(userId: string, chatId: string, gitContext: StoredGitContext): Promise<void> {
+  const db = getDb();
+  // Changing git context invalidates previous ACP session affinity for this chat.
+  db.prepare('UPDATE chats SET git_context = ?, agent_sessions = ? WHERE user_id = ? AND chat_id = ?')
+    .run(JSON.stringify(gitContext), JSON.stringify({}), userId, chatId);
 }
 
 /** Rename a chat. */

@@ -132,22 +132,23 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
   await page.locator('button[type="submit"]').click();
 
   await page.locator('button.emptyHomepageNewChat').click();
-  await expect(page.getByLabel('branch')).toBeVisible({ timeout: 15000 });
-  await expect(page.getByLabel('worktree')).toBeVisible({ timeout: 15000 });
-  await expect(page.getByLabel('worktree')).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator('.statusGitContextSlot .composerGitContextControls')).toBeVisible({ timeout: 15000 });
+  await expect(page.getByLabel('Branch', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByLabel('Worktree', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByLabel('Worktree', { exact: true })).toBeEnabled({ timeout: 15000 });
 
-  await pickOption(page, 'worktree', 'C:/repo/.worktrees/feat-a');
+  await pickOption(page, 'Worktree', 'C:/repo/.worktrees/feat-a');
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-a');
-  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
+  await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 
   await page.locator('button.newChatButton').click();
-  await pickOption(page, 'worktree', 'C:/repo/.worktrees/feat-b');
+  await pickOption(page, 'Worktree', 'C:/repo/.worktrees/feat-b');
   expect(gitContextUpdates).toContain('C:/repo/.worktrees/feat-b');
-  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-b');
+  await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-b');
 
   await page.getByRole('button', { name: /Chats/i }).first().click();
   const firstChat = page.locator('.participantsSidebar .chatHistoryItem').nth(1);
   await firstChat.click();
 
-  await expect(page.getByLabel('worktree')).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
+  await expect(page.getByLabel('Worktree', { exact: true })).toHaveAttribute('data-value', 'C:/repo/.worktrees/feat-a');
 });

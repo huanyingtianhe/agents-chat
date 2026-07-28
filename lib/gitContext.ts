@@ -1,5 +1,6 @@
 import { execFileSync } from 'child_process';
 import * as path from 'path';
+import { existsSync } from 'fs';
 import type { StoredGitContext } from './chatStore';
 
 export type GitWorktree = {
@@ -21,8 +22,15 @@ export type GitContextValidationResult =
   | { ok: true; gitContext: StoredGitContext }
   | { ok: false; error: string };
 
+function resolveGitBin(): string {
+  const configured = process.env.GIT_BIN?.trim();
+  if (configured) return configured;
+  if (process.platform !== 'win32' && existsSync('/usr/bin/git')) return '/usr/bin/git';
+  return 'git';
+}
+
 function runGit(repoRoot: string, args: string[]): string {
-  return execFileSync('git', args, {
+  return execFileSync(resolveGitBin(), args, {
     cwd: repoRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

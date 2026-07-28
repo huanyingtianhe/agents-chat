@@ -3,6 +3,7 @@ import { getToken } from 'next-auth/jwt';
 import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
 import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
 import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
+import { getAgentById, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,34 @@ function isAdminToken(token: any): boolean { // eslint-disable-line @typescript-
   return adminEmails.includes((token.email || '').toLowerCase());
 }
 
+const LAST_USED_AGENT_SCOPE_KEY = 'last_used_agent_scope';
+
+function resolveChatGitContextOptions(userId: string, chat: StoredChat) {
+  const candidateRoots = new Set<string>();
+  if (chat.gitContext?.repoRoot) candidateRoots.add(chat.gitContext.repoRoot);
+
+  const settings = getUserSettings(userId);
+  const lastUsedAgentScope = settings[LAST_USED_AGENT_SCOPE_KEY] === 'user' ? 'user' : 'chat';
+  const rememberedAgentId = lastUsedAgentScope === 'chat'
+    ? getUserChatLastUsedAgent(userId, chat.id)
+    : getUserLastUsedAgent(userId);
+  if (rememberedAgentId) {
+    const rememberedAgent = getAgentById(rememberedAgentId);
+    if (rememberedAgent?.cwd) candidateRoots.add(rememberedAgent.cwd);
+  }
+
+  if (chat.agentId) {
+    const primaryAgent = getAgentById(chat.agentId);
+    if (primaryAgent?.cwd) candidateRoots.add(primaryAgent.cwd);
+  }
+
+  for (const candidateRoot of candidateRoots) {
+    const options = getGitContextOptions(chat.gitContext || null, candidateRoot);
+    if (options.available) return options;
+  }
+  return getGitContextOptions(chat.gitContext || null);
+}
+
 export async function GET(req: NextRequest) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
   if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
@@ -27,7 +56,11 @@ export async function GET(req: NextRequest) {
   if (chatId) {
     const chat = await getChat(userId, chatId);
     if (!chat) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
-    const gitContextOptions = getGitContextOptions(chat.gitContext || null);
+    const gitContextOptions = resolveChatGitContextOptions(userId, chat);
+    if (!chat.gitContext && gitContextOptions.effective) {
+      chat.gitContext = gitContextOptions.effective;
+      await updateChatGitContext(userId, chatId, gitContextOptions.effective);
+    }
     return NextResponse.json({ ok: true, chat, gitContextOptions });
   }
 

@@ -34,8 +34,9 @@ function resolveGitBin(): string {
 
 function runGit(repoRoot: string, args: string[]): string {
   const gitBin = resolveGitBin();
+  const normalizedRepoRoot = normalizePath(repoRoot);
   try {
-    return execFileSync(gitBin, args, {
+    return execFileSync(gitBin, ['-c', `safe.directory=${normalizedRepoRoot}`, ...args], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -43,6 +44,7 @@ function runGit(repoRoot: string, args: string[]): string {
   } catch (error) {
     logger.warn({
       repoRoot,
+      normalizedRepoRoot,
       gitBin,
       args,
       error: error instanceof Error ? {

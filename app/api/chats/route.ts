@@ -3,9 +3,11 @@ import { getToken } from 'next-auth/jwt';
 import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
 import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
 import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
-import { getAgentById, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
+import { getAgentById, getAllAgents, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
+import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
+const logger = createLogger('api.chats');
 
 function getUserId(token: any): string { // eslint-disable-line @typescript-eslint/no-explicit-any
   return token?.email || token?.name || token?.sub || 'anonymous';
@@ -19,6 +21,13 @@ function isAdminToken(token: any): boolean { // eslint-disable-line @typescript-
 }
 
 const LAST_USED_AGENT_SCOPE_KEY = 'last_used_agent_scope';
+const SCHEDULER_AGENT_ID = 'scheduler';
+
+function getDefaultAgentCwd(): string | null {
+  const agents = getAllAgents();
+  const defaultAgent = agents.find((agent) => agent.id !== SCHEDULER_AGENT_ID && agent.cwd) || agents.find((agent) => agent.cwd);
+  return defaultAgent?.cwd || null;
+}
 
 function resolveChatGitContextOptions(userId: string, chat: StoredChat) {
   const candidateRoots = new Set<string>();
@@ -38,12 +47,44 @@ function resolveChatGitContextOptions(userId: string, chat: StoredChat) {
     const primaryAgent = getAgentById(chat.agentId);
     if (primaryAgent?.cwd) candidateRoots.add(primaryAgent.cwd);
   }
+  const defaultAgentCwd = getDefaultAgentCwd();
+  if (defaultAgentCwd) candidateRoots.add(defaultAgentCwd);
+
+  logger.info({
+    chatId: chat.id,
+    hasSavedGitContext: !!chat.gitContext,
+    savedRepoRoot: chat.gitContext?.repoRoot || null,
+    primaryAgentId: chat.agentId || null,
+    lastUsedAgentScope,
+    rememberedAgentId: rememberedAgentId || null,
+    candidateRoots: Array.from(candidateRoots),
+    processCwd: process.cwd(),
+  }, 'Resolving chat git context');
 
   for (const candidateRoot of candidateRoots) {
     const options = getGitContextOptions(chat.gitContext || null, candidateRoot);
+    logger.info({
+      chatId: chat.id,
+      candidateRoot,
+      available: options.available,
+      repoRoot: options.repoRoot || null,
+      effectiveWorktree: options.effective?.worktreePath || null,
+      effectiveBranch: options.effective?.branchName || null,
+      statusText: options.statusText || null,
+    }, 'Tried git context candidate root');
     if (options.available) return options;
   }
-  return getGitContextOptions(chat.gitContext || null);
+  const fallbackOptions = getGitContextOptions(chat.gitContext || null);
+  logger.warn({
+    chatId: chat.id,
+    available: fallbackOptions.available,
+    repoRoot: fallbackOptions.repoRoot || null,
+    effectiveWorktree: fallbackOptions.effective?.worktreePath || null,
+    effectiveBranch: fallbackOptions.effective?.branchName || null,
+    statusText: fallbackOptions.statusText || null,
+    processCwd: process.cwd(),
+  }, 'Fell back to process.cwd() for chat git context');
+  return fallbackOptions;
 }
 
 export async function GET(req: NextRequest) {
@@ -58,6 +99,12 @@ export async function GET(req: NextRequest) {
     if (!chat) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
     const gitContextOptions = resolveChatGitContextOptions(userId, chat);
     if (!chat.gitContext && gitContextOptions.effective) {
+      logger.info({
+        chatId,
+        repoRoot: gitContextOptions.effective.repoRoot,
+        worktreePath: gitContextOptions.effective.worktreePath,
+        branchName: gitContextOptions.effective.branchName,
+      }, 'Backfilling missing chat git context');
       chat.gitContext = gitContextOptions.effective;
       await updateChatGitContext(userId, chatId, gitContextOptions.effective);
     }

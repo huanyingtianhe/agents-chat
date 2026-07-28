@@ -2,6 +2,9 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import type { StoredGitContext } from './chatStore';
+import { createLogger } from './logger';
+
+const logger = createLogger('gitContext');
 
 export type GitWorktree = {
   worktreePath: string;
@@ -30,11 +33,34 @@ function resolveGitBin(): string {
 }
 
 function runGit(repoRoot: string, args: string[]): string {
-  return execFileSync(resolveGitBin(), args, {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  const gitBin = resolveGitBin();
+  try {
+    return execFileSync(gitBin, args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    logger.warn({
+      repoRoot,
+      gitBin,
+      args,
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        ...(error && typeof error === 'object' ? {
+          status: 'status' in error ? error.status : undefined,
+          signal: 'signal' in error ? error.signal : undefined,
+          code: 'code' in error ? error.code : undefined,
+          stdout: 'stdout' in error ? String(error.stdout ?? '') : undefined,
+          stderr: 'stderr' in error ? String(error.stderr ?? '') : undefined,
+          spawnargs: 'spawnargs' in error ? error.spawnargs : undefined,
+        } : {}),
+      } : String(error),
+    }, 'Git command failed');
+    throw error;
+  }
 }
 
 function normalizePath(input: string): string {
@@ -115,7 +141,19 @@ export function getGitContextOptions(savedContext?: StoredGitContext | null, rep
     }
 
     return { available: true, repoRoot, branches, worktrees, effective };
-  } catch {
+  } catch (error) {
+    logger.warn({
+      repoRootHint: repoRootHint || null,
+      savedRepoRoot: savedContext?.repoRoot || null,
+      savedWorktreePath: savedContext?.worktreePath || null,
+      processCwd: process.cwd(),
+      gitBin: resolveGitBin(),
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      } : String(error),
+    }, 'Failed to resolve git context');
     return {
       available: false,
       repoRoot: '',

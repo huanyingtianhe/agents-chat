@@ -75,6 +75,7 @@ export function AgentsPanel({
     closeAgentSettings,
     saveAgentSettings,
     deleteAgent,
+    restartAgent,
     addAccess,
     removeAccess,
     openAgentSettings,
@@ -312,7 +313,8 @@ export function AgentsPanel({
             <div className="modalActions">
               <button className="primary" onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={closeAgentSettings}>Cancel</button>
-              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Delete</button>
+              <button className="secondary" style={{ marginLeft: 'auto' }} title="Kill and respawn the agent process to reload its configuration (including MCP servers). Chat history is preserved." onClick={() => settingsAgentId && void restartAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Restart</button>
+              <button className="danger" onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Delete</button>
             </div>
           </div>
         </div>

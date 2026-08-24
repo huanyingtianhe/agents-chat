@@ -260,6 +260,25 @@ export function useAgentPanelState({
     }
   }
 
+  async function restartAgent(agentId: string, agentName: string) {
+    if (!confirm(`Restart agent "${agentName}"? This reloads its configuration (including MCP servers) and interrupts any in-progress reply. Chat history is preserved.`)) return;
+    setAgentSettingsLoading(true);
+    try {
+      const data = await acp({ action: 'restart-agent', agentId });
+      if (data.ok) {
+        setShowAgentSettings(false);
+        await loadAgents();
+        addMessage({ type: 'system', content: `↻ Agent "${agentName}" restarted` });
+      } else {
+        addMessage({ type: 'system', content: `⚠️ Failed to restart "${agentName}": ${data.error || 'unknown error'}` });
+      }
+    } catch (err) {
+      console.error('Failed to restart agent', err);
+    } finally {
+      setAgentSettingsLoading(false);
+    }
+  }
+
   function openModelSettings(agentId: string) { setOpenModelMenuAgentId(agentId); }
   function closeModelSettings() { setOpenModelMenuAgentId(null); }
 
@@ -350,6 +369,7 @@ export function useAgentPanelState({
     closeAgentSettings: () => setShowAgentSettings(false),
     saveAgentSettings,
     deleteAgent,
+    restartAgent,
     addAccess,
     removeAccess,
 

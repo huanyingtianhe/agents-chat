@@ -1862,6 +1862,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, agent: updated, restarted });
     }
 
+    if (action === 'restart-agent') {
+      if (!agentId) return NextResponse.json({ ok: false, error: 'missing_agentId' }, { status: 400 });
+      const token = await getAuthToken(req);
+      const agent = configStore.getAgentById(agentId);
+      if (!agent) return NextResponse.json({ ok: false, error: 'agent_not_found' }, { status: 404 });
+      if (!canModify(token, agent.owner)) {
+        return NextResponse.json({ ok: false, error: 'permission_denied' }, { status: 403 });
+      }
+
+      // Tear down the running process (kills copilot.exe so a fresh spawn re-reads
+      // startup-only config such as mcp-config.json) and clear its sessions. Chat
+      // history is untouched; existing chats resume via session/load on next send.
+      const procs = getAgentProcesses();
+      const existing = procs.get(agentId);
+      const wasRunning = !!(existing && (existing.ready || existing.booting));
+      if (existing?.rpc) existing.rpc.destroy();
+      procs.delete(agentId);
+      for (const [key, staleSess] of [...getUserSessions().entries()]) {
+        if (key.startsWith(`${agentId}:`)) {
+          clearPendingUserRequestsForSession(agentId, staleSess, 'agent restarted');
+          getUserSessions().delete(key);
+        }
+      }
+
+      try {
+        await bootAgent(agentId);
+        log(`[ACP:${agentId}] Manual restart by ${getUserEmail(token) || 'unknown'} (wasRunning=${wasRunning})`);
+        return NextResponse.json({ ok: true, restarted: true, wasRunning });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ ok: false, error: msg }, { status: 503 });
+      }
+    }
+
     if (action === 'create-agent') {
       const token = await getAuthToken(req);
       const ownerEmail = getUserEmail(token);

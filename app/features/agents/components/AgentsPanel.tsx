@@ -1,5 +1,6 @@
 'use client';
 
+import { createPortal } from 'react-dom';
 import type { Agent } from '../agentTypes';
 import type { NodeData } from '../../nodes/nodeTypes';
 import type { AccessEntry } from '../hooks/useAgentPanelState';
@@ -7,6 +8,10 @@ import { useAgentPanelState } from '../hooks/useAgentPanelState';
 import { AgentModelSelect } from './AgentModelSelect';
 import { AgentAuthControl } from './AgentAuthControl';
 import './AgentAuthControl.css';
+
+const AGENT_ACTION_MENU_WIDTH = 150;
+const AGENT_ACTION_MENU_HEIGHT = 132;
+
 
 function getAgentLocationLabel(agent: Agent): string {
   if (!agent.relay) return `@${agent.id}`;
@@ -63,7 +68,6 @@ export function AgentsPanel({
     openAddRemoteAgent,
     createRemoteAgent,
     showAgentSettings,
-    settingsAgentId,
     settingsAgentConfig,
     setSettingsAgentConfig,
     settingsEnvText,
@@ -82,6 +86,9 @@ export function AgentsPanel({
     openModelMenuAgentId,
     setOpenModelMenuAgentId,
     modelMenuRefs,
+    openAgentActionMenuId,
+    setOpenAgentActionMenuId,
+    agentActionMenuBtnRefs,
   } = panelState;
 
   return (
@@ -115,21 +122,96 @@ export function AgentsPanel({
           </div>
           <div className="agentsSidebarSection">
             {agents.map((agent) => (
-              <button
-                key={agent.id}
-                className="agentListItem"
-                style={agent.canModify ? undefined : { cursor: 'default' }}
-                onClick={() => agent.canModify && openAgentSettings(agent.id)}
-                title={agent.canModify ? `${agent.name} — Click for settings` : agent.name}
-              >
-                <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
-                <span className="agentListInfo">
-                  <span className="agentListName">{agent.name || agent.id}{agent.canTalk === false ? ' 🔒' : ''}</span>
-                  <span className="agentListId" title={getAgentLocationTitle(agent)}>{getAgentLocationLabel(agent)}</span>
-                </span>
-                <AgentAuthControl agent={agent} onAuthenticated={() => void reloadAgents()} />
-                <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
-              </button>
+              <div key={agent.id} className="agentListRow">
+                <button
+                  className="agentListItem"
+                  style={agent.canModify ? undefined : { cursor: 'default' }}
+                  onClick={() => agent.canModify && openAgentSettings(agent.id)}
+                  title={agent.canModify ? `${agent.name} — Click to edit` : agent.name}
+                >
+                  <span className="agentListAvatar">{(agent.name || agent.id).slice(0, 1).toUpperCase()}</span>
+                  <span className="agentListInfo">
+                    <span className="agentListName">{agent.name || agent.id}{agent.canTalk === false ? ' 🔒' : ''}</span>
+                    <span className="agentListId" title={getAgentLocationTitle(agent)}>{getAgentLocationLabel(agent)}</span>
+                  </span>
+                  <AgentAuthControl agent={agent} onAuthenticated={() => void reloadAgents()} />
+                  <span className={`agentListStatus ${agent.running ? 'running' : ''}`}>{agent.running ? '●' : '○'}</span>
+                </button>
+                {agent.canModify && (
+                  <div className="agentActionsWrap">
+                    <button
+                      type="button"
+                      ref={(node) => {
+                        if (node) agentActionMenuBtnRefs.current.set(agent.id, node);
+                        else agentActionMenuBtnRefs.current.delete(agent.id);
+                      }}
+                      className={`agentMoreBtn ${openAgentActionMenuId === agent.id ? 'active' : ''}`}
+                      title="Agent actions"
+                      aria-haspopup="menu"
+                      aria-expanded={openAgentActionMenuId === agent.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenAgentActionMenuId(openAgentActionMenuId === agent.id ? null : agent.id);
+                      }}
+                    >
+                      ...
+                    </button>
+                    {openAgentActionMenuId === agent.id
+                      ? (() => {
+                          const rect = agentActionMenuBtnRefs.current.get(agent.id)?.getBoundingClientRect();
+                          if (!rect) return null;
+                          const left = Math.max(8, Math.min(rect.right - AGENT_ACTION_MENU_WIDTH, window.innerWidth - AGENT_ACTION_MENU_WIDTH - 8));
+                          const top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - AGENT_ACTION_MENU_HEIGHT - 8));
+                          return createPortal(
+                            <div
+                              className="chatActionsMenu agentActionsMenu"
+                              role="menu"
+                              style={{ position: 'fixed', top, left, right: 'auto', width: AGENT_ACTION_MENU_WIDTH, zIndex: 9999 }}
+                            >
+                              <button
+                                type="button"
+                                className="chatActionItem"
+                                role="menuitem"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenAgentActionMenuId(null);
+                                  openAgentSettings(agent.id);
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="chatActionItem"
+                                role="menuitem"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenAgentActionMenuId(null);
+                                  void restartAgent(agent.id, agent.name || agent.id);
+                                }}
+                              >
+                                Restart
+                              </button>
+                              <button
+                                type="button"
+                                className="chatActionItem danger"
+                                role="menuitem"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenAgentActionMenuId(null);
+                                  void deleteAgent(agent.id, agent.name || agent.id);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>,
+                            document.body,
+                          );
+                        })()
+                      : null}
+                  </div>
+                )}
+              </div>
             ))}
             {agents.length === 0 && (
               <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
@@ -313,8 +395,6 @@ export function AgentsPanel({
             <div className="modalActions">
               <button className="primary" onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={closeAgentSettings}>Cancel</button>
-              <button className="secondary" style={{ marginLeft: 'auto' }} title="Kill and respawn the agent process to reload its configuration (including MCP servers). Chat history is preserved." onClick={() => settingsAgentId && void restartAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Restart</button>
-              <button className="danger" onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Delete</button>
             </div>
           </div>
         </div>

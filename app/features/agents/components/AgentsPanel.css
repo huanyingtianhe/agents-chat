@@ -46,6 +46,19 @@
 }
 
 /* ── Agent list items ── */
+.chatPageRoot .agentListRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  margin-bottom: 4px;
+  border-radius: 12px;
+}
+.chatPageRoot .agentListRow .agentListItem {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
 .chatPageRoot .agentListItem {
   display: flex;
   align-items: center;
@@ -65,6 +78,40 @@
   background: var(--panel-soft);
   border-color: var(--border);
   color: var(--text);
+}
+.chatPageRoot .agentActionsWrap {
+  flex: 0 0 auto;
+  position: relative;
+  margin-right: 2px;
+}
+.chatPageRoot .agentMoreBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+.chatPageRoot .agentListRow:hover .agentMoreBtn,
+.chatPageRoot .agentListRow:focus-within .agentMoreBtn,
+.chatPageRoot .agentMoreBtn.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chatPageRoot .agentMoreBtn:hover,
+.chatPageRoot .agentMoreBtn.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--text) 8%);
 }
 .chatPageRoot .agentListAvatar {
   width: 34px;

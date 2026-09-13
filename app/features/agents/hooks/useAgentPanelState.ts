@@ -46,6 +46,10 @@ export function useAgentPanelState({
   const [openModelMenuAgentId, setOpenModelMenuAgentId] = useState<string | null>(null);
   const modelMenuRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map());
 
+  // UI-only agent action menu state (the "..." Edit / Restart / Delete dropdown)
+  const [openAgentActionMenuId, setOpenAgentActionMenuId] = useState<string | null>(null);
+  const agentActionMenuBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
   // Add agent menu
   const [showAgentAddMenu, setShowAgentAddMenu] = useState(false);
 
@@ -260,8 +264,48 @@ export function useAgentPanelState({
     }
   }
 
+  async function restartAgent(agentId: string, agentName: string) {
+    if (!confirm(`Restart agent "${agentName}"? This reloads its configuration (including MCP servers) and interrupts any in-progress reply. Chat history is preserved.`)) return;
+    setAgentSettingsLoading(true);
+    try {
+      const data = await acp({ action: 'restart-agent', agentId });
+      if (data.ok) {
+        setShowAgentSettings(false);
+        await loadAgents();
+        addMessage({ type: 'system', content: `↻ Agent "${agentName}" restarted` });
+      } else {
+        addMessage({ type: 'system', content: `⚠️ Failed to restart "${agentName}": ${data.error || 'unknown error'}` });
+      }
+    } catch (err) {
+      console.error('Failed to restart agent', err);
+    } finally {
+      setAgentSettingsLoading(false);
+    }
+  }
+
   function openModelSettings(agentId: string) { setOpenModelMenuAgentId(agentId); }
   function closeModelSettings() { setOpenModelMenuAgentId(null); }
+
+  // Close the agent action ("...") menu on outside click or Escape.
+  useEffect(() => {
+    if (!openAgentActionMenuId) return;
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Element | null;
+      if (target?.closest('.agentActionsMenu')) return;
+      const btn = agentActionMenuBtnRefs.current.get(openAgentActionMenuId!);
+      if (btn && btn.contains(target as Node)) return;
+      setOpenAgentActionMenuId(null);
+    }
+    function handleKey(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') setOpenAgentActionMenuId(null);
+    }
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [openAgentActionMenuId]);
 
   useEffect(() => {
     const anyOpen = openModelMenuAgentId || showAgentSettings || showAddAgent || showAddRemoteAgent || showAgentAddMenu;
@@ -350,6 +394,7 @@ export function useAgentPanelState({
     closeAgentSettings: () => setShowAgentSettings(false),
     saveAgentSettings,
     deleteAgent,
+    restartAgent,
     addAccess,
     removeAccess,
 
@@ -357,6 +402,11 @@ export function useAgentPanelState({
     openModelMenuAgentId,
     setOpenModelMenuAgentId,
     modelMenuRefs,
+
+    // UI-only agent action ("...") menu state
+    openAgentActionMenuId,
+    setOpenAgentActionMenuId,
+    agentActionMenuBtnRefs,
 
     // Model settings actions
     openModelSettings,

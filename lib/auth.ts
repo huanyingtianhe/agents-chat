@@ -5,6 +5,26 @@ import { NextRequest } from 'next/server';
  * Shared authentication and permission helpers.
  */
 
+export function parseEmailList(value: string | undefined): string[] {
+  return (value || '')
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function getGitHubAllowedEmails(
+  githubAllowedEmails: string | undefined,
+  adminEmails: string | undefined,
+): string[] {
+  const explicit = parseEmailList(githubAllowedEmails);
+  return explicit.length > 0 ? explicit : parseEmailList(adminEmails);
+}
+
+export function isGitHubEmailAllowed(email: string | undefined, allowedEmails: string[]): boolean {
+  const normalizedEmail = email?.trim().toLowerCase();
+  return Boolean(normalizedEmail && allowedEmails.includes(normalizedEmail));
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function isAdminToken(token: any): boolean {
   if (!token) return false;

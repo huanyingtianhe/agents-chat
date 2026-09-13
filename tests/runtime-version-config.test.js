@@ -11,6 +11,7 @@ function readProjectFile(relativePath) {
 
 test('the project standardizes on Node.js 24', () => {
   const pkg = JSON.parse(readProjectFile('package.json'));
+  const lock = JSON.parse(readProjectFile('package-lock.json'));
   const nodeVersion = readProjectFile('.node-version');
   const npmrc = readProjectFile('.npmrc');
   const playwrightWorkflow = readProjectFile('.github/workflows/playwright.yml');
@@ -23,4 +24,13 @@ test('the project standardizes on Node.js 24', () => {
   assert.doesNotMatch(playwrightWorkflow, /node-version:\s*(20|22)\b/);
   assert.doesNotMatch(releaseWorkflow, /node-version:\s*(20|22)\b/);
   assert.match(readme, /\*\*Node\.js\*\* 24\.x/);
+
+  const esbuild = lock.packages['node_modules/esbuild'];
+  for (const [name, version] of Object.entries(esbuild.optionalDependencies)) {
+    assert.equal(
+      lock.packages[`node_modules/${name}`]?.version,
+      version,
+      `package-lock.json must include esbuild optional dependency ${name}@${version}`,
+    );
+  }
 });

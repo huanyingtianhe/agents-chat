@@ -85,6 +85,16 @@ function validation(projectRoot) {
   };
 }
 
+export function checkRuntimeAndStorage({
+  mode,
+  projectRoot = process.cwd(),
+} = {}) {
+  if (mode !== 'check-only') {
+    throw new TypeError('mode must be check-only');
+  }
+  return validation(path.resolve(projectRoot));
+}
+
 function ownerPid(options) {
   if (options['owner-pid'] === undefined) {
     return process.ppid;
@@ -137,7 +147,11 @@ async function main() {
       return;
     }
     case 'check-only': {
-      output({ ok: true, command, checked: validation(projectRoot) });
+      output({
+        ok: true,
+        command,
+        checked: checkRuntimeAndStorage({ mode: 'check-only', projectRoot }),
+      });
       return;
     }
     case 'diagnose': {
@@ -167,7 +181,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+function handleMainError(error) {
   const managerIndex = process.argv.indexOf('--manager');
   const manager = managerIndex >= 0
     ? process.argv[managerIndex + 1]
@@ -188,4 +202,11 @@ main().catch((error) => {
   process.stderr.write(`${JSON.stringify({ ok: false, failure: failure.failure })}\n`);
   process.stderr.write(`${renderFailure(failure.failure, manager)}\n`);
   process.exitCode = 1;
-});
+}
+
+if (
+  process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
+) {
+  main().catch(handleMainError);
+}

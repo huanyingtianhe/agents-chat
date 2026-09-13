@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "next dev --port 3010 --experimental-https",
     "build": "next build",
-    "start": "next start --port 3010",
-    "start:prod": "next build && next start --port 3010",
-    "test:safety": "node --test tests/runtime-safety.test.mjs tests/database-backup.test.mjs",
+    "start": "node scripts/start-server.mjs",
+    "start:prod": "npm run build && npm start",
+    "test:safety": "node --test tests/runtime-safety.test.mjs tests/database-backup.test.mjs tests/managed-start.test.mjs",
     "diagnose": "node scripts/runtime-preflight.mjs diagnose"
   },
   "dependencies": {

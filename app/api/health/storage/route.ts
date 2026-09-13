@@ -8,8 +8,12 @@ export const runtime = 'nodejs';
 
 const logger = createLogger('api.health.storage');
 
-export async function GET() {
-  const result = await checkStorageHealth({ initialize: true });
+type StorageHealthCheck = typeof checkStorageHealth;
+
+export async function handleStorageHealth(
+  healthCheck: StorageHealthCheck = checkStorageHealth,
+) {
+  const result = await healthCheck({ initialize: true });
   if (result.ok) return NextResponse.json({ ok: true });
 
   logger.error({
@@ -22,4 +26,8 @@ export async function GET() {
     { ok: false, error: 'storage_unavailable' },
     { status: 503 },
   );
+}
+
+export async function GET() {
+  return handleStorageHealth();
 }

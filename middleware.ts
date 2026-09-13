@@ -20,6 +20,10 @@ function getPublicUrl(request: NextRequest): string {
 }
 
 export async function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname === '/api/health/storage') {
+    return NextResponse.next();
+  }
+
   const token = await getToken({ req: request, cookieName: 'next-auth.session-token' });
   if (!token) {
     // For API routes, return 401 JSON instead of redirecting to login page.

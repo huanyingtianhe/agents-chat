@@ -28,7 +28,7 @@ Usage:
   sudo ./scripts/safe-restart.sh systemd [--wait SECONDS]
   ./scripts/safe-restart.sh pm2 [--wait SECONDS]
 
-Internal deployment options:
+Deployment options:
   --deploy       Pull/install before backup and build
   --no-pull      Skip git pull during deployment
   --no-install   Skip npm ci during deployment
@@ -104,6 +104,14 @@ pm2_command() {
   fi
 }
 
+preflight_command() {
+  if [[ "$manager" == systemd ]]; then
+    sudo -u "$checkout_user" env HOME="$checkout_home" "$node_bin" "$@"
+  else
+    "$node_bin" "$@"
+  fi
+}
+
 service_state() {
   if [[ "$manager" == systemd ]]; then
     if command -v systemctl >/dev/null 2>&1 \
@@ -121,6 +129,42 @@ service_state() {
     printf 'running'
   else
     printf 'stopped'
+  fi
+}
+
+validate_build_output() {
+  if [[ ! -f "$project_dir/.next/BUILD_ID" \
+    || ! -s "$project_dir/.next/BUILD_ID" ]] \
+    || ! grep -q '[^[:space:]]' "$project_dir/.next/BUILD_ID"; then
+    render_failure BUILD_FAILED build-validation \
+      "No valid production build exists at .next/BUILD_ID. Run the deployment command to build before restarting."
+    return 1
+  fi
+}
+
+ensure_systemd_storage_ownership() {
+  [[ "$manager" == systemd ]] || return 0
+  local paths=()
+  for storage_path in \
+    "$project_dir/.agents-chat-storage.json" \
+    "$project_dir/.data/backups"; do
+    if [[ -L "$storage_path" ]]; then
+      render_failure BACKUP_PERMISSION_DENIED storage-ownership \
+        "Refusing to change ownership through the storage symlink: $storage_path"
+      return 1
+    fi
+  done
+  [[ ! -e "$project_dir/.agents-chat-storage.json" ]] \
+    || paths+=("$project_dir/.agents-chat-storage.json")
+  [[ ! -e "$project_dir/.data/backups" ]] \
+    || paths+=("$project_dir/.data/backups")
+  (( ${#paths[@]} == 0 )) && return 0
+
+  echo "→ assigning storage state and backups to checkout UID:GID $checkout_uid:$checkout_gid"
+  if ! chown -R -h -- "$checkout_uid:$checkout_gid" "${paths[@]}"; then
+    render_failure BACKUP_PERMISSION_DENIED storage-ownership \
+      "Could not assign storage state and backup ownership to the systemd service user."
+    return 1
   fi
 }
 
@@ -197,7 +241,7 @@ cleanup() {
   local status=$?
   trap - EXIT
   if [[ -n "$operation_id" ]]; then
-    if ! "$node_bin" "$lease_release" \
+    if ! preflight_command "$lease_release" \
       --project-root "$project_dir" \
       --operation-id "$operation_id" >/dev/null; then
       if (( status == 0 )); then
@@ -408,7 +452,7 @@ health_check() {
   return 1
 }
 
-if ! acquire_output="$("$node_bin" "$preflight" acquire-lease \
+if ! acquire_output="$(preflight_command "$preflight" acquire-lease \
   --project-root "$project_dir" \
   --owner "$manager-safe-restart" \
   --owner-pid "$$" \
@@ -429,6 +473,7 @@ operation_id="$(printf '%s' "$acquire_output" | json_field 'value.lease.operatio
 
 resolve_effective_port
 detect_manager_conflict
+ensure_systemd_storage_ownership
 
 if [[ "$manager" == pm2 ]]; then
   [[ "$(id -u)" == "$checkout_uid" ]] || {
@@ -455,13 +500,24 @@ if [[ "$manager" == pm2 ]]; then
   if [[ -z "$matching_pm2" ]]; then
     pm2_action=start
   elif pm2_topology_valid "$matching_pm2"; then
-    pm2_action=reload
+    IFS=$'\t' read -r _ _ _ _ _ current_interpreter current_node_version \
+      <<<"$matching_pm2"
+    if [[ "$current_interpreter" == "$node_bin" \
+      && "$current_node_version" == 24.* ]]; then
+      pm2_action=apply
+    else
+      pm2_action=replace
+    fi
   else
     render_failure \
       MANAGER_CONFLICT manager-topology \
       "PM2 reload requires exactly one fork-mode $service instance for this checkout."
     exit 1
   fi
+fi
+
+if (( ! deploy )); then
+  validate_build_output
 fi
 
 if (( deploy )); then
@@ -484,7 +540,7 @@ if (( deploy )); then
 fi
 
 echo "→ validating storage and creating a verified backup"
-if ! prepare_output="$("$node_bin" "$preflight" prepare \
+if ! prepare_output="$(preflight_command "$preflight" prepare \
   --project-root "$project_dir" \
   --operation-id "$operation_id" \
   --manager "$manager" 2>&1)"; then
@@ -507,10 +563,13 @@ fi
 backup_batch="$(printf '%s' "$prepare_output" | json_field 'value.backup.path')"
 data_state=validated
 
-echo "→ npm run build"
-if ! npm run build; then
-  render_failure BUILD_FAILED build "The production build failed."
-  exit 1
+if (( deploy )); then
+  echo "→ npm run build"
+  if ! npm run build; then
+    render_failure BUILD_FAILED build "The production build failed."
+    exit 1
+  fi
+  validate_build_output
 fi
 
 if [[ "$manager" == systemd ]]; then
@@ -525,18 +584,36 @@ else
   restart_began=1
   if [[ "$pm2_action" == start ]]; then
     echo "→ pm2 start ecosystem.config.js --only agents-chat --update-env"
-    if ! PORT="$effective_port" pm2_command "$pm2_bin" start \
+    if ! PORT="$effective_port" AGENTS_CHAT_NODE="$node_bin" \
+      pm2_command "$pm2_bin" start \
       ecosystem.config.js --only agents-chat --update-env; then
       render_failure SERVICE_START_FAILED service-start \
         "PM2 could not perform the safe first install for $service."
       exit 1
     fi
+  elif [[ "$pm2_action" == replace ]]; then
+    echo "→ pm2 delete $service (replacing unvalidated runtime)"
+    if ! pm2_command "$pm2_bin" delete "$service"; then
+      render_failure SERVICE_START_FAILED service-replace \
+        "PM2 could not remove the process using the unvalidated runtime."
+      exit 1
+    fi
+    echo "→ pm2 start ecosystem.config.js --only agents-chat --update-env"
+    if ! PORT="$effective_port" AGENTS_CHAT_NODE="$node_bin" \
+      pm2_command "$pm2_bin" start \
+      ecosystem.config.js --only agents-chat --update-env; then
+      render_failure SERVICE_START_FAILED service-replace \
+        "PM2 removed the old process but could not start the validated replacement." \
+        stopped
+      exit 1
+    fi
   else
-    echo "→ pm2 reload agents-chat --update-env"
-    if ! PORT="$effective_port" pm2_command "$pm2_bin" reload \
-      agents-chat --update-env; then
+    echo "→ pm2 startOrReload ecosystem.config.js --only agents-chat --update-env"
+    if ! PORT="$effective_port" AGENTS_CHAT_NODE="$node_bin" \
+      pm2_command "$pm2_bin" startOrReload \
+      ecosystem.config.js --only agents-chat --update-env; then
       render_failure SERVICE_START_FAILED service-restart \
-        "PM2 could not reload $service."
+        "PM2 could not apply the validated ecosystem configuration."
       exit 1
     fi
   fi

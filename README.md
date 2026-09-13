@@ -74,14 +74,16 @@ sudo ./scripts/deploy.sh --no-pull
 sudo ./scripts/deploy.sh --no-install
 sudo ./scripts/deploy.sh --wait 180
 
-# Restart only: skip git pull/npm ci, but still back up, build, restart, and check
+# Restart only: require the existing build, then back up, restart, and check
 sudo ./scripts/safe-restart.sh systemd
 sudo ./scripts/safe-restart.sh systemd --wait 0  # skip readiness polling
 ```
 
 The wrapper installs/enables `agents-chat.service`, prevents concurrent guarded
 operations, refuses a conflicting PM2 owner, creates a verified pre-stop
-backup, and checks `GET /api/health/storage` after restart.
+backup as the checkout/service user, and checks `GET /api/health/storage` after
+restart. Restart-only never builds and requires a non-empty `.next/BUILD_ID`;
+run `sudo ./scripts/deploy.sh` if the build is absent.
 
 ```bash
 sudo systemctl status agents-chat --no-pager
@@ -109,12 +111,18 @@ sudo ./scripts/safe-restart.sh systemd
 ### Deployment (PM2)
 
 Run PM2 as the checkout owner, not with `sudo`. The safe wrapper supports one
-fork-mode `agents-chat` instance only. It starts that instance on first use or
-reloads it thereafter, validates that PM2 uses the same absolute Node.js 24
-executable, performs the storage health check, and only then runs `pm2 save`.
+fork-mode `agents-chat` instance only. It validates the current runtime before
+changing it, applies the ecosystem file with the validated absolute Node.js 24
+executable, explicitly replaces an instance using an old runtime after the
+verified backup, performs the storage health check, and only then runs
+`pm2 save`. Restart-only requires an existing non-empty `.next/BUILD_ID`; use
+the deployment flow to create a new build.
 
 ```bash
-npm ci
+# Deploy/update: git pull, npm ci, verified backup, build, restart, health
+./scripts/safe-restart.sh pm2 --deploy
+
+# Restart only: require the existing build, then back up, restart, and check
 ./scripts/safe-restart.sh pm2
 ./scripts/safe-restart.sh pm2 --wait 180
 ./scripts/safe-restart.sh pm2 --wait 0

@@ -32,8 +32,10 @@ function createHarness(name, env = {}) {
   const scripts = path.join(root, 'scripts');
   const bin = path.join(root, 'mock-bin');
   mkdirSync(path.join(root, 'app'), { recursive: true });
+  mkdirSync(path.join(root, '.next'), { recursive: true });
   mkdirSync(scripts, { recursive: true });
   mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(root, '.next', 'BUILD_ID'), 'existing-build\n');
   writeFileSync(path.join(root, 'package.json'), '{"name":"agents-chat","private":true}\n');
   cpSync(path.join(projectRoot, 'scripts', 'safe-restart.sh'), path.join(scripts, 'safe-restart.sh'));
   cpSync(path.join(projectRoot, 'scripts', 'deploy.sh'), path.join(scripts, 'deploy.sh'));
@@ -92,10 +94,16 @@ case "$*" in
     ;;
 esac`);
   executable(path.join(bin, 'npm'), `${common}
+if [[ "$*" == "run build" ]]; then
+  mkdir -p "$PROJECT_ROOT/.next"
+  printf 'deployed-build\\n' > "$PROJECT_ROOT/.next/BUILD_ID"
+fi
 [[ "\${MOCK_NPM_FAIL:-0}" != 1 ]]`);
   executable(path.join(bin, 'git'), `${common}`);
   executable(path.join(bin, 'curl'), `${common}
 [[ "\${MOCK_HEALTH_FAIL:-0}" != 1 ]]`);
+  executable(path.join(bin, 'chown'), `${common}
+[[ "\${MOCK_CHOWN_FAIL:-0}" != 1 ]]`);
   executable(path.join(bin, 'journalctl'), `${common}`);
   executable(path.join(bin, 'install'), `${common}
 destination="\${!#}"
@@ -111,7 +119,7 @@ elif [[ "$*" == *"show"*"agents-chat"* ]]; then
   printf 'MainPID=2468\\nExecMainStartTimestamp=mock-start\\n'
 fi`);
   executable(path.join(bin, 'pm2'), `${common}
-printf 'PM2_ENV PORT=%s PM2_HOME=%s\\n' "\${PORT:-}" "\${PM2_HOME:-}" >> "$MOCK_LOG"
+printf 'PM2_ENV PORT=%s PM2_HOME=%s AGENTS_CHAT_NODE=%s\\n' "\${PORT:-}" "\${PM2_HOME:-}" "\${AGENTS_CHAT_NODE:-}" >> "$MOCK_LOG"
 if [[ "$1" == "jlist" ]]; then
   [[ "\${MOCK_PM2_FAIL:-0}" != 1 ]] || exit 1
   count_file="$PROJECT_ROOT/.pm2-jlist-count"
@@ -128,6 +136,8 @@ elif [[ "$1" == "pid" ]]; then
   printf '%s\\n' "\${MOCK_PM2_PID:-1357}"
 elif [[ "$1" == "describe" ]]; then
   printf 'interpreter: %s\\nnode.js version: 24.20.0\\nexec mode: fork_mode\\ninstances: 1\\n' "$MOCK_NODE"
+elif [[ "$1" == "start" && "\${MOCK_PM2_START_FAIL:-0}" == 1 ]]; then
+  exit 1
 fi`);
 
   return {
@@ -184,10 +194,12 @@ test('declares the deployment ordering and manager contracts', () => {
   assert.match(unit, /ExecStart=.*__NODE__.*scripts\/start-server\.mjs/);
   assert.match(safeRestart, /systemd\|pm2/);
   assert.match(safeRestart, /pm2_action=start/);
-  assert.match(safeRestart, /pm2_action=reload/);
+  assert.match(safeRestart, /pm2_action=apply/);
+  assert.match(safeRestart, /pm2_action=replace/);
   assert.match(safeRestart, /pm2 save/);
   assert.match(unit, /start-server\.mjs" --port "__PORT__"/);
-  assert.match(ecosystem, /interpreter:\s*process\.execPath/);
+  assert.match(ecosystem, /interpreter/);
+  assert.match(ecosystem, /AGENTS_CHAT_NODE/);
   assert.match(ecosystem, /exec_mode:\s*['"]fork['"]/);
   assert.match(ecosystem, /instances:\s*1/);
 });
@@ -200,8 +212,8 @@ test('holds the lease with the wrapper PID and completes systemd in safe order',
   const log = readFileSync(harness.log, 'utf8');
   assert.match(log, new RegExp(`--owner-pid ${result.pid}`));
   assertBefore(log, 'acquire-lease', 'prepare');
-  assertBefore(log, 'prepare', 'npm run build');
-  assertBefore(log, 'npm run build', 'systemctl restart agents-chat');
+  assertBefore(log, 'prepare', 'systemctl restart agents-chat');
+  assert.doesNotMatch(log, /npm run build/);
   assertBefore(log, 'systemctl restart agents-chat', 'curl -fsS');
   assertBefore(log, 'curl -fsS', 'release-operation-lease.mjs');
   assert.match(log, /api\/health\/storage/);
@@ -212,6 +224,9 @@ test('holds the lease with the wrapper PID and completes systemd in safe order',
   const escapedNode = harness.env.MOCK_NODE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   assert.match(installedUnit, new RegExp(`ExecStartPre="${escapedNode}"`));
   assert.match(installedUnit, new RegExp(`ExecStart="${escapedNode}"`));
+  assert.match(log, /sudo -u \S+ env HOME=.*runtime-preflight\.mjs acquire-lease/);
+  assert.match(log, /sudo -u \S+ env HOME=.*runtime-preflight\.mjs prepare/);
+  assert.match(log, /sudo -u \S+ env HOME=.*release-operation-lease\.mjs/);
 });
 
 test('deploy acquires the lease before npm ci, backup, build, restart, and health', () => {
@@ -255,6 +270,7 @@ test('failed preflight does not mutate either service manager', () => {
         }])
         : '[]',
     });
+
     const result = runHarness(harness, manager);
     assert.notEqual(result.status, 0);
     const log = readFileSync(harness.log, 'utf8');
@@ -263,6 +279,42 @@ test('failed preflight does not mutate either service manager', () => {
     assert.match(result.stderr, /Data state:/);
     assert.match(result.stderr, /Backup state:/);
   }
+});
+
+test('systemd prepare failure as checkout owner never restarts the service', () => {
+  const harness = createHarness('systemd-owner-prepare-failure', {
+    MOCK_PREPARE_FAIL: '1',
+  });
+  const result = runHarness(harness, 'systemd');
+
+  assert.notEqual(result.status, 0);
+  const log = readFileSync(harness.log, 'utf8');
+  assert.match(log, /sudo -u \S+ env HOME=.*runtime-preflight\.mjs prepare/);
+  assert.doesNotMatch(log, /systemctl restart/);
+});
+
+test('systemd fixes existing storage ownership before prepare and stops on chown failure', () => {
+  const success = createHarness('systemd-storage-ownership');
+  mkdirSync(path.join(success.root, '.data', 'backups'), { recursive: true });
+  writeFileSync(path.join(success.root, '.agents-chat-storage.json'), '{}\n');
+  const successResult = runHarness(success, 'systemd');
+  assert.equal(successResult.status, 0, successResult.stderr);
+  const successLog = readFileSync(success.log, 'utf8');
+  assertBefore(successLog, 'chown -R -h --', 'runtime-preflight.mjs prepare');
+  assert.match(successLog, /\.agents-chat-storage\.json .*\.data\/backups/);
+
+  const failure = createHarness('systemd-storage-ownership-failure', {
+    MOCK_CHOWN_FAIL: '1',
+  });
+  writeFileSync(path.join(failure.root, '.agents-chat-storage.json'), '{}\n');
+  const failureResult = runHarness(failure, 'systemd');
+  assert.notEqual(failureResult.status, 0);
+  assert.match(failureResult.stderr, /BACKUP_PERMISSION_DENIED/);
+  assert.match(failureResult.stderr, /storage state and backup ownership/i);
+  assert.doesNotMatch(
+    readFileSync(failure.log, 'utf8'),
+    /runtime-preflight\.mjs prepare|systemctl restart/,
+  );
 });
 
 test('detects manager conflicts without stopping either manager', () => {
@@ -293,7 +345,7 @@ test('detects manager conflicts without stopping either manager', () => {
   }
 });
 
-test('PM2 uses one fork, explicit Node, validates runtime and saves only after health', () => {
+test('PM2 applies one fork with explicit Node and saves only after health', () => {
   const harness = createHarness('pm2-success');
   harness.env.MOCK_PM2_JLIST = JSON.stringify([{
     name: 'agents-chat',
@@ -311,11 +363,101 @@ test('PM2 uses one fork, explicit Node, validates runtime and saves only after h
   assert.equal(result.status, 0, result.stderr);
 
   const log = readFileSync(harness.log, 'utf8');
-  assertBefore(log, 'prepare', 'pm2 reload agents-chat --update-env');
-  assertBefore(log, 'pm2 reload', 'pm2 describe agents-chat');
+  assertBefore(log, 'prepare', 'pm2 startOrReload ecosystem.config.js --only agents-chat --update-env');
+  assertBefore(log, 'pm2 startOrReload', 'pm2 describe agents-chat');
+  assert.match(log, new RegExp(`AGENTS_CHAT_NODE=${harness.env.MOCK_NODE}`));
+  assert.doesNotMatch(log, /pm2 reload agents-chat/);
   assertBefore(log, 'pm2 describe agents-chat', 'curl -fsS');
   assertBefore(log, 'curl -fsS', 'pm2 save');
   assertBefore(log, 'pm2 save', 'release-operation-lease.mjs');
+});
+
+test('PM2 replaces an app on an unvalidated runtime instead of blindly reloading it', () => {
+  const harness = createHarness('pm2-old-runtime');
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
+    name: 'agents-chat',
+    pid: 1357,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: harness.root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: '/old/node',
+      node_version: '22.0.0',
+    },
+  }]);
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([{
+    name: 'agents-chat',
+    pid: 2468,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: harness.root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: harness.env.MOCK_NODE,
+      node_version: '24.20.0',
+    },
+  }]);
+
+  const result = runHarness(harness, 'pm2');
+  assert.equal(result.status, 0, result.stderr);
+  const log = readFileSync(harness.log, 'utf8');
+  assertBefore(log, 'prepare', 'pm2 delete agents-chat');
+  assertBefore(log, 'pm2 delete agents-chat', 'pm2 start ecosystem.config.js --only agents-chat --update-env');
+  assert.doesNotMatch(log, /pm2 reload agents-chat/);
+});
+
+test('PM2 reports the service stopped when validated replacement cannot start', () => {
+  const harness = createHarness('pm2-old-runtime-start-failure', {
+    MOCK_PM2_START_FAIL: '1',
+  });
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
+    name: 'agents-chat',
+    pid: 1357,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: harness.root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: '/old/node',
+      node_version: '22.0.0',
+    },
+  }]);
+
+  const result = runHarness(harness, 'pm2');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /removed the old process/i);
+  assert.match(result.stderr, /service is stopped or inactive/i);
+  const log = readFileSync(harness.log, 'utf8');
+  assertBefore(log, 'pm2 delete agents-chat', 'pm2 start ecosystem.config.js');
+  assert.doesNotMatch(log, /pm2 reload agents-chat/);
+});
+
+test('restart-only requires an existing build and never builds', () => {
+  for (const manager of ['systemd', 'pm2']) {
+    const harness = createHarness(`missing-build-${manager}`, {
+      MOCK_PM2_JLIST: '[]',
+    });
+
+    rmSync(path.join(harness.root, '.next'), { recursive: true, force: true });
+    const result = runHarness(harness, manager);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BUILD_FAILED/);
+    assert.match(result.stderr, /deploy/i);
+    const log = readFileSync(harness.log, 'utf8');
+    assert.doesNotMatch(log, /prepare|npm run build|systemctl restart|pm2 (start|reload|delete)/);
+  }
+});
+
+test('restart-only rejects a whitespace-only BUILD_ID', () => {
+  const harness = createHarness('invalid-build-id');
+  writeFileSync(path.join(harness.root, '.next', 'BUILD_ID'), ' \n');
+  const result = runHarness(harness, 'systemd');
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /BUILD_FAILED/);
+  assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /prepare|systemctl restart/);
 });
 
 test('rejects an invalid PM2 topology before reload', () => {

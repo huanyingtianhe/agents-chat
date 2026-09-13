@@ -196,7 +196,9 @@ test('npm start, PM2, and build instrumentation cannot bypass the managed guard'
   assert.equal(packageJson.scripts.start, 'node scripts/start-server.mjs');
   assert.equal(packageJson.scripts['start:prod'], 'npm run build && npm start');
   assert.match(ecosystem, /script:\s*['"]scripts\/start-server\.mjs['"]/);
-  assert.match(ecosystem, /interpreter:\s*process\.execPath/);
+  assert.match(ecosystem, /process\.env\.AGENTS_CHAT_NODE/);
+  assert.match(ecosystem, /path\.isAbsolute\(interpreter\)/);
+  assert.match(ecosystem, /\sinterpreter,/);
   assert.match(ecosystem, /exec_mode:\s*['"]fork['"]/);
   assert.match(ecosystem, /instances:\s*1/);
   assert.doesNotMatch(ecosystem, /script:\s*['"]npm['"]/);

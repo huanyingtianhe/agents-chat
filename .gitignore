@@ -17,3 +17,5 @@ server-error.log
 
 .worktrees/
 .superpowers/
+.agents-chat-operation.json
+.agents-chat-storage.json

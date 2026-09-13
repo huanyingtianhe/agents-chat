@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -238,6 +239,39 @@ test('retains only the newest ten complete batches', async () => {
   }
 });
 
+test('retention always preserves the current batch when its clock moves backward', async () => {
+  const projectRoot = createRoot('retention-clock-rollback');
+  const sources = createProtectedDatabases(projectRoot);
+
+  try {
+    await withLease(projectRoot, async (operationId) => {
+      for (let index = 0; index < 10; index += 1) {
+        await createVerifiedBackup({
+          projectRoot,
+          operationId,
+          retain: 10,
+          now: new Date(Date.UTC(2027, 0, 1, 0, 0, index)),
+        });
+      }
+      const current = await createVerifiedBackup({
+        projectRoot,
+        operationId,
+        retain: 10,
+        now: new Date(Date.UTC(2026, 0, 1)),
+      });
+
+      assert.equal(existsSync(current.path), true);
+      assert.equal(
+        readdirSync(path.join(projectRoot, '.data', 'backups')).length,
+        10,
+      );
+    });
+  } finally {
+    sources.chats.close();
+    sources.config.close();
+  }
+});
+
 test('maps exhausted SQLite busy retries to an actionable failure', async () => {
   const projectRoot = createRoot('busy');
   const sources = createProtectedDatabases(projectRoot);
@@ -368,6 +402,10 @@ test('restore requires stopped service and rolls back replacements on rename fai
   sources = createProtectedDatabases(projectRoot, '-live');
   sources.chats.close();
   sources.config.close();
+  writeFileSync(path.join(projectRoot, '.data', 'chats.db-wal'), 'chat-wal');
+  writeFileSync(path.join(projectRoot, '.data', 'chats.db-shm'), 'chat-shm');
+  writeFileSync(path.join(projectRoot, '.data', 'config.db-wal'), 'config-wal');
+  writeFileSync(path.join(projectRoot, '.data', 'config.db-shm'), 'config-shm');
 
   await assert.rejects(
     withLease(projectRoot, (operationId) =>
@@ -397,6 +435,141 @@ test('restore requires stopped service and rolls back replacements on rename fai
                 error.code = 'EACCES';
                 throw error;
               }
+            }
+            rename(from, to);
+          },
+        },
+      })),
+    (error) => {
+      assert.equal(error.code, 'RESTORE_PRECONDITION_FAILED');
+      assert.equal(error.failure.dataState, 'unchanged');
+      return true;
+    },
+  );
+
+  for (const [file, expected] of [
+    ['chats.db-wal', 'chat-wal'],
+    ['chats.db-shm', 'chat-shm'],
+    ['config.db-wal', 'config-wal'],
+    ['config.db-shm', 'config-shm'],
+  ]) {
+    assert.equal(
+      readFileSync(path.join(projectRoot, '.data', file), 'utf8'),
+      expected,
+    );
+  }
+  assert.equal(
+    readValue(path.join(projectRoot, '.data', 'chats.db'), 'chats'),
+    'chat-live',
+  );
+  assert.equal(
+    readValue(path.join(projectRoot, '.data', 'config.db'), 'agents'),
+    'config-live',
+  );
+});
+
+test('restore reports recovery-required when rollback cannot exactly recover sidecars', async () => {
+  const projectRoot = createRoot('restore-inexact-rollback');
+  let sources = createProtectedDatabases(projectRoot, '-backup');
+  const batch = await withLease(projectRoot, (operationId) =>
+    createVerifiedBackup({ projectRoot, operationId }));
+  sources.chats.close();
+  sources.config.close();
+  rmSync(path.join(projectRoot, '.data', 'chats.db'));
+  rmSync(path.join(projectRoot, '.data', 'config.db'));
+  sources = createProtectedDatabases(projectRoot, '-live');
+  sources.chats.close();
+  sources.config.close();
+  const blockedSidecar = path.join(projectRoot, '.data', 'chats.db-wal');
+  writeFileSync(blockedSidecar, 'chat-wal');
+
+  let publishRenames = 0;
+  await assert.rejects(
+    withLease(projectRoot, (operationId) =>
+      restoreVerifiedBackup({
+        projectRoot,
+        operationId,
+        batchPath: batch.path,
+        serviceStopped: true,
+        hooks: {
+          rename(from, to, rename) {
+            if (from.endsWith('.restore-partial')) {
+              publishRenames += 1;
+              if (publishRenames === 2) {
+                mkdirSync(blockedSidecar);
+                const error = new Error('injected publish failure');
+                error.code = 'EACCES';
+                throw error;
+              }
+            }
+            rename(from, to);
+          },
+        },
+      })),
+    (error) => {
+      assert.equal(error.failure.dataState, 'recovery-required');
+      return true;
+    },
+  );
+});
+
+test('restore retries safely when restore-original is the only live copy', async () => {
+  const projectRoot = createRoot('restore-crash-retry');
+  let sources = createProtectedDatabases(projectRoot, '-backup');
+  const batch = await withLease(projectRoot, (operationId) =>
+    createVerifiedBackup({ projectRoot, operationId }));
+  sources.chats.close();
+  sources.config.close();
+  rmSync(path.join(projectRoot, '.data', 'chats.db'));
+  rmSync(path.join(projectRoot, '.data', 'config.db'));
+  sources = createProtectedDatabases(projectRoot, '-live');
+  sources.chats.close();
+  sources.config.close();
+
+  const chatsPath = path.join(projectRoot, '.data', 'chats.db');
+  renameSync(chatsPath, `${chatsPath}.restore-original`);
+  const result = await withLease(projectRoot, (operationId) =>
+    restoreVerifiedBackup({
+      projectRoot,
+      operationId,
+      batchPath: batch.path,
+      serviceStopped: true,
+    }));
+
+  assert.equal(readValue(chatsPath, 'chats'), 'chat-backup');
+  assert.equal(
+    readValue(path.join(result.recoveryPath, 'chats.db.pre-restore'), 'chats'),
+    'chat-live',
+  );
+  assert.equal(existsSync(`${chatsPath}.restore-original`), false);
+});
+
+test('rollback restores originals that were already archived to recovery', async () => {
+  const projectRoot = createRoot('restore-archive-rollback');
+  let sources = createProtectedDatabases(projectRoot, '-backup');
+  const batch = await withLease(projectRoot, (operationId) =>
+    createVerifiedBackup({ projectRoot, operationId }));
+  sources.chats.close();
+  sources.config.close();
+  rmSync(path.join(projectRoot, '.data', 'chats.db'));
+  rmSync(path.join(projectRoot, '.data', 'config.db'));
+  sources = createProtectedDatabases(projectRoot, '-live');
+  sources.chats.close();
+  sources.config.close();
+
+  await assert.rejects(
+    withLease(projectRoot, (operationId) =>
+      restoreVerifiedBackup({
+        projectRoot,
+        operationId,
+        batchPath: batch.path,
+        serviceStopped: true,
+        hooks: {
+          rename(from, to, rename) {
+            if (to.endsWith('config.db.pre-restore')) {
+              const error = new Error('injected archive failure');
+              error.code = 'EACCES';
+              throw error;
             }
             rename(from, to);
           },

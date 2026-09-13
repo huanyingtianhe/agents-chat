@@ -48,11 +48,16 @@ function failure(code, stage, details = {}, backupBatch = null) {
   });
 }
 
-function restoreFailure(stage, details = {}, backupBatch = null) {
+function restoreFailure(
+  stage,
+  details = {},
+  backupBatch = null,
+  dataState = 'unchanged',
+) {
   return safetyError('RESTORE_PRECONDITION_FAILED', {
     stage,
     serviceState: 'stopped',
-    dataState: 'unchanged',
+    dataState,
     backupBatch,
     details,
   });
@@ -454,10 +459,16 @@ function completeBatches(backupsPath) {
       || left.path.localeCompare(right.path));
 }
 
-function applyRetention(backupsPath, retain) {
+function applyRetention(backupsPath, retain, protectedBatchPath) {
   const batches = completeBatches(backupsPath);
-  for (const batch of batches.slice(0, Math.max(0, batches.length - retain))) {
+  const removable = batches.filter((batch) => batch.path !== protectedBatchPath);
+  for (const batch of removable.slice(0, Math.max(0, batches.length - retain))) {
     rmSync(batch.path, { recursive: true, force: true });
+  }
+  if (!existsSync(protectedBatchPath)) {
+    throw failure('BACKUP_VALIDATION_FAILED', 'backup-retention', {
+      reason: 'current backup batch was removed during retention',
+    }, protectedBatchPath);
   }
 }
 
@@ -603,7 +614,7 @@ export async function createVerifiedBackup({
 
     const validatedBatch = validateBackupBatch(finalPath);
     publishedAndValidated = true;
-    applyRetention(inspection.backupsPath, retain);
+    applyRetention(inspection.backupsPath, retain, finalPath);
     const expectedDatabases = [
       ...new Set([
         ...inspection.expectedDatabases,
@@ -642,6 +653,14 @@ function restoreRename(hooks, from, to) {
     rename(from, to, renameSync);
   } else {
     renameSync(from, to);
+  }
+}
+
+function filesEqual(left, right) {
+  try {
+    return readFileSync(left).equals(readFileSync(right));
+  } catch {
+    return false;
   }
 }
 
@@ -709,9 +728,7 @@ export async function restoreVerifiedBackup({
     recoveryRoot,
     `${timestamp(new Date())}-${randomUUID()}`,
   );
-  const originals = new Map();
-  const candidates = new Map();
-  const replaced = [];
+  const entries = [];
 
   try {
     mkdirSync(recoveryPath, { recursive: true, mode: 0o700 });
@@ -720,65 +737,95 @@ export async function restoreVerifiedBackup({
 
     for (const database of batch.databases) {
       const livePath = path.join(paths.dataPath, database.file);
-      if (existsSync(livePath)) {
-        copyFileSync(livePath, path.join(recoveryPath, database.file));
-      }
-      for (const suffix of ['-wal', '-shm']) {
-        const sidecar = `${livePath}${suffix}`;
-        if (existsSync(sidecar)) {
-          copyFileSync(
-            sidecar,
-            path.join(recoveryPath, `${database.file}${suffix}`),
-          );
-          unlinkSync(sidecar);
-        }
-      }
       const originalPath = `${livePath}.restore-original`;
       const candidatePath = `${livePath}.restore-partial`;
-      rmSync(originalPath, { force: true });
+      const interruptedOriginal = existsSync(originalPath);
+      const originalSource = interruptedOriginal
+        ? originalPath
+        : existsSync(livePath) ? livePath : null;
+      const rollbackPath = originalSource
+        ? path.join(recoveryPath, `${database.file}.rollback-copy`)
+        : null;
+      if (rollbackPath) {
+        copyFileSync(originalSource, rollbackPath);
+        secureFile(rollbackPath);
+      }
+      if (interruptedOriginal && existsSync(livePath)) {
+        const interruptedLivePath = path.join(
+          recoveryPath,
+          `${database.file}.interrupted-live`,
+        );
+        copyFileSync(livePath, interruptedLivePath);
+        secureFile(interruptedLivePath);
+      }
+      const sidecars = [];
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${livePath}${suffix}`;
+        const snapshot = path.join(
+          recoveryPath,
+          `${database.file}${suffix}`,
+        );
+        if (existsSync(sidecar)) {
+          copyFileSync(sidecar, snapshot);
+          secureFile(snapshot);
+          sidecars.push({ livePath: sidecar, snapshot });
+        } else {
+          sidecars.push({ livePath: sidecar, snapshot: null });
+        }
+      }
+      const entry = {
+        database,
+        livePath,
+        originalPath,
+        originalLocation: interruptedOriginal ? originalPath : null,
+        rollbackPath,
+        candidatePath,
+        sidecars,
+        mutated: false,
+      };
+      entries.push(entry);
       rmSync(candidatePath, { force: true });
       copyFileSync(batch.paths[database.file], candidatePath);
       secureFile(candidatePath);
       validateDatabaseFile(
         candidatePath,
-        loadDatabaseRegistry().find((entry) => entry.file === database.file),
+        registry.find((entry) => entry.file === database.file),
         'BACKUP_VALIDATION_FAILED',
         { cleanupSidecars: true },
       );
-      originals.set(database.file, originalPath);
-      candidates.set(database.file, candidatePath);
     }
 
-    for (const database of batch.databases) {
-      const livePath = path.join(paths.dataPath, database.file);
-      const originalPath = originals.get(database.file);
-      if (existsSync(livePath)) {
-        restoreRename(hooks, livePath, originalPath);
+    for (const entry of entries) {
+      entry.mutated = true;
+      for (const sidecar of entry.sidecars) {
+        rmSync(sidecar.livePath, { force: true });
       }
-      try {
-        restoreRename(hooks, candidates.get(database.file), livePath);
-        replaced.push(database.file);
-      } catch (error) {
-        if (existsSync(originalPath) && !existsSync(livePath)) {
-          renameSync(originalPath, livePath);
-        }
-        throw error;
+      if (entry.originalLocation) {
+        rmSync(entry.livePath, { force: true });
+      } else if (existsSync(entry.livePath)) {
+        restoreRename(hooks, entry.livePath, entry.originalPath);
+        entry.originalLocation = entry.originalPath;
       }
+      restoreRename(hooks, entry.candidatePath, entry.livePath);
     }
 
-    for (const database of batch.databases) {
+    for (const entry of entries) {
       validateDatabaseFile(
-        path.join(paths.dataPath, database.file),
-        registry.find((entry) => entry.file === database.file),
+        entry.livePath,
+        registry.find(({ file }) => file === entry.database.file),
         'DATABASE_INTEGRITY_FAILED',
         { cleanupSidecars: true },
       );
-      const originalPath = originals.get(database.file);
-      if (existsSync(originalPath)) {
-        renameSync(
-          originalPath,
-          path.join(recoveryPath, `${database.file}.pre-restore`),
+    }
+
+    for (const entry of entries) {
+      if (entry.originalLocation) {
+        const archivedPath = path.join(
+          recoveryPath,
+          `${entry.database.file}.pre-restore`,
         );
+        restoreRename(hooks, entry.originalLocation, archivedPath);
+        entry.originalLocation = archivedPath;
       }
     }
     return Object.freeze({
@@ -787,25 +834,57 @@ export async function restoreVerifiedBackup({
       recoveryPath,
     });
   } catch (error) {
-    for (const file of [...replaced].reverse()) {
-      const livePath = path.join(paths.dataPath, file);
-      const originalPath = originals.get(file);
-      rmSync(livePath, { force: true });
-      if (existsSync(originalPath)) {
-        renameSync(originalPath, livePath);
+    const recoveryErrors = [];
+    const attemptRecovery = (action) => {
+      try {
+        action();
+      } catch (recoveryError) {
+        recoveryErrors.push(recoveryError);
+      }
+    };
+
+    for (const entry of [...entries].reverse()) {
+      if (entry.mutated) {
+        attemptRecovery(() => rmSync(entry.livePath, { force: true }));
+        if (entry.originalLocation) {
+          attemptRecovery(() => {
+            renameSync(entry.originalLocation, entry.livePath);
+            entry.originalLocation = null;
+          });
+        }
+        for (const sidecar of entry.sidecars) {
+          attemptRecovery(() => rmSync(sidecar.livePath, { force: true }));
+          if (sidecar.snapshot) {
+            attemptRecovery(() => copyFileSync(sidecar.snapshot, sidecar.livePath));
+          }
+        }
       }
     }
-    for (const [file, originalPath] of originals) {
-      const livePath = path.join(paths.dataPath, file);
-      if (!existsSync(livePath) && existsSync(originalPath)) {
-        renameSync(originalPath, livePath);
-      }
+
+    for (const entry of entries) {
+      attemptRecovery(() => rmSync(entry.candidatePath, { force: true }));
     }
-    for (const candidatePath of candidates.values()) {
-      rmSync(candidatePath, { force: true });
+
+    const exactRecovery = entries.every((entry) => {
+      const mainRecovered = entry.rollbackPath
+        ? filesEqual(entry.livePath, entry.rollbackPath)
+        : !existsSync(entry.livePath);
+      const sidecarsRecovered = entry.sidecars.every((sidecar) =>
+        sidecar.snapshot
+          ? filesEqual(sidecar.livePath, sidecar.snapshot)
+          : !existsSync(sidecar.livePath));
+      return mainRecovered && sidecarsRecovered;
+    });
+    if (!exactRecovery && recoveryErrors.length === 0) {
+      recoveryErrors.push(new Error('restored files did not match recovery snapshots'));
     }
     throw restoreFailure('restore-replace', {
       osCode: error?.code,
-    }, resolvedBatch);
+      recoveryErrors: recoveryErrors.map((recoveryError) => ({
+        code: recoveryError?.code,
+        message: recoveryError?.message,
+      })),
+      recoveryPath,
+    }, resolvedBatch, exactRecovery ? 'unchanged' : 'recovery-required');
   }
 }

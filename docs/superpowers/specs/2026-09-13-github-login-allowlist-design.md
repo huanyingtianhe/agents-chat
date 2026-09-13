@@ -20,7 +20,7 @@ The value is a comma-separated list of allowed email addresses. Email matching i
 
 When GitHub OAuth is configured with `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`, the `GITHUB_ALLOWED_EMAILS` configuration entry must be present. Its effective default value is the comma-separated `ADMIN_EMAILS` list, so existing admin configuration remains the fallback when the new variable is left empty.
 
-If both `GITHUB_ALLOWED_EMAILS` and `ADMIN_EMAILS` are empty while GitHub OAuth is enabled, GitHub sign-in is denied. `ADMIN_EMAILS` continues to control admin role assignment in addition to serving as the GitHub allowlist fallback.
+If both `GITHUB_ALLOWED_EMAILS` and `ADMIN_EMAILS` are empty while GitHub OAuth is enabled, GitHub sign-in is denied with a dedicated configuration error. `ADMIN_EMAILS` continues to control admin role assignment in addition to serving as the GitHub allowlist fallback.
 
 ## Authentication flow
 
@@ -35,6 +35,8 @@ The NextAuth `signIn` callback will:
 
 Denied GitHub users are redirected back to `/login` with the standard NextAuth access denied error. No partial app session is created.
 
+When neither allowlist variable is configured, the sign-in flow uses the dedicated error code `GitHubAllowlistNotConfigured`. The login page displays a clear message instructing the operator to define `GITHUB_ALLOWED_EMAILS` or `ADMIN_EMAILS` in the environment configuration and restart the service.
+
 ## Components and boundaries
 
 Add small pure helpers in `lib/auth.ts` so the parsing and allowlist decision can be unit tested without going through NextAuth:
@@ -48,7 +50,7 @@ The NextAuth route will call these helpers from its `signIn` callback. Existing 
 
 If GitHub email lookup fails and no verified email is available from the OAuth profile/user data, the sign-in is denied. The failure should not be silently converted into an allowed login.
 
-The callback should not throw for normal unauthorized users; it should return `false` so NextAuth handles the access denied login flow.
+The callback should not throw for normal unauthorized users; it should return `false` so NextAuth handles the access denied login flow. The missing-configuration case should return the dedicated error code so the login page can explain how to fix the environment.
 
 ## Testing
 
@@ -58,6 +60,7 @@ Unit tests will cover the pure allowlist helpers:
 - Non-matching GitHub email is denied.
 - Empty or missing `GITHUB_ALLOWED_EMAILS` falls back to `ADMIN_EMAILS`.
 - Empty `GITHUB_ALLOWED_EMAILS` and empty `ADMIN_EMAILS` deny GitHub login when GitHub OAuth is enabled.
+- Missing both variables shows the explicit environment-configuration error on the login page.
 - Matching is case-insensitive and trims whitespace.
 
 E2E coverage will verify login-page behavior around GitHub access denied handling and provider availability without requiring a real GitHub OAuth round trip. Full Playwright E2E will be run before opening the PR.

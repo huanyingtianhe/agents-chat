@@ -1,12 +1,15 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { isRuntimeDataArtifact } from './lib/build-data-safety.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(__dirname, '..');
 const outputDir = join(projectDir, 'dist', 'release');
 const target = process.env.RELEASE_TARGET || `${process.platform}-${process.arch}`;
 const bundleDir = join(outputDir, `agents-chat-${target}`);
+const standaloneDir = join(projectDir, '.next', 'standalone');
 
 function resetDir(dir) {
   rmSync(dir, { force: true, recursive: true });
@@ -21,7 +24,13 @@ function copyIfExists(source, destination) {
 resetDir(bundleDir);
 mkdirSync(join(bundleDir, '.next'), { recursive: true });
 
-copyIfExists(join(projectDir, '.next', 'standalone'), bundleDir);
+if (existsSync(standaloneDir)) {
+  cpSync(standaloneDir, bundleDir, {
+    recursive: true,
+    filter: (source) =>
+      !isRuntimeDataArtifact(relative(standaloneDir, source)),
+  });
+}
 copyIfExists(join(projectDir, '.next', 'static'), join(bundleDir, '.next', 'static'));
 copyIfExists(join(projectDir, 'public'), join(bundleDir, 'public'));
 copyIfExists(join(projectDir, '.env.example'), join(bundleDir, '.env.example'));

@@ -16,6 +16,7 @@ export type UseFileWorkspaceStateDeps = {
   agentsLoading: boolean;
   mounted: boolean;
   schedulerAgentId: string;
+  onBeforeTabChange?: (tab: LeftSidebarTab) => void;
   onFileOpened?: (payload: FileOpenedPayload) => void | Promise<void>;
 };
 

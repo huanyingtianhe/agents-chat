@@ -19,7 +19,7 @@ const SQLITE_STORAGE_CODES = new Set([
 ]);
 
 const STORAGE_MESSAGE_PATTERN =
-  /better-sqlite3|could not locate the bindings file|invalid elf header|node_module_version|compiled against a different node\.js|database disk image is malformed|file is not a database|unable to open database file|database is locked|database is busy|disk i\/o error|readonly database|read-only database|no such table|sqlite_(?:busy|locked|cantopen|corrupt|ioerr|notadb|readonly|full|perm)/i;
+  /better-sqlite3|could not locate the bindings file|invalid elf header|node_module_version|compiled against a different node\.js|database disk image is malformed|file is not a database|unable to open database file|database is locked|database is busy|disk i\/o error|readonly database|read-only database|no such table|no such column|has no column named|malformed database schema|database schema has changed|sqlite_(?:busy|locked|cantopen|corrupt|ioerr|notadb|readonly|full|perm)/i;
 
 function errorCode(error: unknown): string {
   if (!error || typeof error !== 'object') return '';
@@ -34,7 +34,12 @@ function errorMessage(error: unknown): string {
 
 export function getStorageErrorCode(error: unknown): StorageErrorCode | null {
   const code = errorCode(error);
-  if (code === 'DATABASE_MISSING' || code === 'DATABASE_INTEGRITY_FAILED' || code === 'DATABASE_BUSY') {
+  if (
+    code === 'DATABASE_MISSING'
+    || code === 'DATABASE_INTEGRITY_FAILED'
+    || code === 'DATABASE_BUSY'
+    || code === 'STORAGE_UNAVAILABLE'
+  ) {
     return code;
   }
   if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') {
@@ -48,6 +53,10 @@ export function getStorageErrorCode(error: unknown): StorageErrorCode | null {
 
 export function isStorageError(error: unknown): boolean {
   return getStorageErrorCode(error) !== null;
+}
+
+export function rethrowStorageError(error: unknown): void {
+  if (isStorageError(error)) throw error;
 }
 
 export function toStorageErrorResponse(error: unknown): NextResponse | null {

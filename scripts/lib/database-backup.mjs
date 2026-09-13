@@ -76,17 +76,26 @@ export function loadDatabaseRegistry() {
       || path.basename(entry.file) !== entry.file
       || !entry.file.endsWith('.db')
       || seen.has(entry.file)
-      || !Array.isArray(entry.requiredTables)
-      || entry.requiredTables.length === 0
-      || entry.requiredTables.some((table) =>
-        typeof table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table))
+      || !entry.requiredTables
+      || typeof entry.requiredTables !== 'object'
+      || Array.isArray(entry.requiredTables)
+      || Object.keys(entry.requiredTables).length === 0
+      || Object.entries(entry.requiredTables).some(([table, columns]) =>
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)
+        || !Array.isArray(columns)
+        || columns.length === 0
+        || columns.some((column) =>
+          typeof column !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)))
     ) {
       throw new TypeError('Protected database registry is invalid');
     }
     seen.add(entry.file);
     return Object.freeze({
       file: entry.file,
-      requiredTables: Object.freeze([...entry.requiredTables]),
+      requiredTables: Object.freeze(Object.fromEntries(
+        Object.entries(entry.requiredTables).map(([table, columns]) =>
+          [table, Object.freeze([...columns])]),
+      )),
     });
   }));
 }
@@ -179,17 +188,19 @@ function quickCheck(database, file, code = 'DATABASE_INTEGRITY_FAILED') {
 }
 
 function requiredTables(database, entry, code = 'DATABASE_INTEGRITY_FAILED') {
-  const existing = new Set(
-    database.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-    ).pluck().all(),
-  );
-  const missing = entry.requiredTables.filter((table) => !existing.has(table));
-  if (missing.length > 0) {
-    throw failure(code, 'database-schema', {
-      database: entry.file,
-      missingTables: missing,
-    });
+  for (const [table, requiredColumns] of Object.entries(entry.requiredTables)) {
+    const columns = new Set(
+      database.prepare(`PRAGMA table_info("${table}")`).all()
+        .map(({ name }) => name),
+    );
+    const missingColumns = requiredColumns.filter((column) => !columns.has(column));
+    if (columns.size === 0 || missingColumns.length > 0) {
+      throw failure(code, 'database-schema', {
+        database: entry.file,
+        table,
+        missingColumns,
+      });
+    }
   }
 }
 
@@ -213,7 +224,10 @@ function validateDatabaseFile(databasePath, entry, code, { cleanupSidecars = fal
       file: entry.file,
       size: statSync(databasePath).size,
       quickCheck: 'ok',
-      requiredTables: [...entry.requiredTables],
+      requiredTables: Object.fromEntries(
+        Object.entries(entry.requiredTables).map(([table, columns]) =>
+          [table, [...columns]]),
+      ),
     };
   } catch (error) {
     if (error instanceof SafetyError) {

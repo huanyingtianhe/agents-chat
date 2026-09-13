@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import Database from 'better-sqlite3';
 
-import { isStorageError, toStorageErrorResponse } from '../lib/storage/storageErrors';
+import { isStorageError, rethrowStorageError, toStorageErrorResponse } from '../lib/storage/storageErrors';
 import { checkStorageHealth } from '../lib/storage/storageHealth';
 import { getStoragePaths } from '../lib/storage/storagePaths';
 
@@ -89,6 +89,27 @@ test('wrong schemas and corrupt files are unhealthy', async () => {
   if (!corrupt.ok) assert.equal(corrupt.code, 'DATABASE_INTEGRITY_FAILED');
 });
 
+test('tables missing required columns are unhealthy', async () => {
+  const projectRoot = await createProjectRoot();
+  const paths = getStoragePaths(projectRoot);
+  await checkStorageHealth({ projectRoot, initialize: true });
+
+  const database = new Database(paths.chatDbPath);
+  database.exec(`
+    ALTER TABLE chats RENAME TO chats_complete;
+    CREATE TABLE chats (
+      user_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      messages TEXT NOT NULL,
+      agent_sessions TEXT NOT NULL
+    );
+  `);
+  database.close();
+
+  const result = await checkStorageHealth({ projectRoot, initialize: false });
+  assert.deepEqual(result, { ok: false, code: 'DATABASE_INTEGRITY_FAILED' });
+});
+
 test('storage errors map to a generic 503 without changing application errors', async () => {
   const malformed = new Error('database disk image is malformed');
   const response = toStorageErrorResponse(malformed);
@@ -100,4 +121,43 @@ test('storage errors map to a generic 503 without changing application errors', 
   assert.equal(toStorageErrorResponse(new Error('validation failed')), null);
   assert.equal(isStorageError(Object.assign(new Error('unique constraint failed'), { code: 'SQLITE_CONSTRAINT' })), false);
   assert.equal(isStorageError(new Error('The module was compiled against a different Node.js version')), true);
+  assert.equal(isStorageError(new Error('no such column: chats.git_context')), true);
+  assert.equal(isStorageError(new Error('table chats has no column named git_context')), true);
+  assert.equal(isStorageError(Object.assign(new Error('storage failed'), { code: 'STORAGE_UNAVAILABLE' })), true);
+  assert.throws(
+    () => rethrowStorageError(new Error('no such column: chats.git_context')),
+    /no such column/,
+  );
+  assert.doesNotThrow(() => rethrowStorageError(new Error('ACP session not found')));
+});
+
+test('ACP storage persistence is awaited and classified errors reach the 503 boundary', async () => {
+  const routeSource = await readFile(path.join(process.cwd(), 'app/api/acp/route.ts'), 'utf8');
+
+  assert.equal(
+    routeSource.match(/await updateChatAgentSession\(/g)?.length,
+    6,
+    'all required ACP session mapping writes must be awaited',
+  );
+  assert.doesNotMatch(
+    routeSource,
+    /updateChatAgentSession\([^;]+\.catch\(/,
+    'required persistence must not be detached',
+  );
+  assert.match(
+    routeSource,
+    /async function resolveChatCwd[\s\S]+?catch \(error\) \{\s+rethrowStorageError\(error\);/,
+  );
+  assert.match(
+    routeSource,
+    /catch \(recoveryErr\) \{\s+rethrowStorageError\(recoveryErr\);/,
+  );
+  assert.match(
+    routeSource,
+    /catch \(loadErr: any\) \{\s+replayBuffers\.delete\(savedSessionId\);\s+rethrowStorageError\(loadErr\);/,
+  );
+
+  const response = toStorageErrorResponse(new Error('no such column: chats.agent_sessions'));
+  assert.equal(response?.status, 503);
+  assert.deepEqual(await response?.json(), { ok: false, error: 'storage_unavailable' });
 });

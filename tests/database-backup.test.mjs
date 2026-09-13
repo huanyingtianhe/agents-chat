@@ -60,9 +60,25 @@ function createDatabase(projectRoot, file, table, value) {
 
 function createProtectedDatabases(projectRoot, suffix = '') {
   const chats = createDatabase(projectRoot, 'chats.db', 'chats', `chat${suffix}`);
-  chats.exec('CREATE TABLE user_prefs (value TEXT)');
+  chats.exec(`
+    ALTER TABLE chats ADD COLUMN user_id TEXT;
+    ALTER TABLE chats ADD COLUMN chat_id TEXT;
+    ALTER TABLE chats ADD COLUMN messages TEXT;
+    ALTER TABLE chats ADD COLUMN agent_sessions TEXT;
+    ALTER TABLE chats ADD COLUMN git_context TEXT;
+    CREATE TABLE user_prefs (value TEXT, user_id TEXT, last_chat_id TEXT)
+  `);
   const config = createDatabase(projectRoot, 'config.db', 'agents', `config${suffix}`);
-  config.exec('CREATE TABLE nodes (value TEXT)');
+  config.exec(`
+    ALTER TABLE agents ADD COLUMN id TEXT;
+    ALTER TABLE agents ADD COLUMN name TEXT;
+    ALTER TABLE agents ADD COLUMN command TEXT;
+    ALTER TABLE agents ADD COLUMN args TEXT;
+    ALTER TABLE agents ADD COLUMN cwd TEXT;
+    ALTER TABLE agents ADD COLUMN models TEXT;
+    ALTER TABLE agents ADD COLUMN owner TEXT;
+    CREATE TABLE nodes (value TEXT, name TEXT, label TEXT, owner TEXT)
+  `);
   writeFileSync(
     path.join(projectRoot, '.agents-chat-storage.json'),
     `${JSON.stringify({
@@ -597,6 +613,30 @@ test('inspection validates schemas and expected state without modifying data', (
     assert.deepEqual(
       result.databases.map(({ file }) => file),
       ['chats.db', 'config.db'],
+    );
+  } finally {
+    sources.chats.close();
+    sources.config.close();
+  }
+});
+
+test('inspection rejects a registered table missing a required column', () => {
+  const projectRoot = createRoot('inspect-missing-column');
+  const sources = createProtectedDatabases(projectRoot);
+  try {
+    sources.chats.exec(`
+      ALTER TABLE chats RENAME TO chats_complete;
+      CREATE TABLE chats (
+        value TEXT,
+        user_id TEXT,
+        chat_id TEXT,
+        messages TEXT,
+        agent_sessions TEXT
+      )
+    `);
+    assert.throws(
+      () => inspectProtectedDatabases({ projectRoot }),
+      (error) => error?.failure?.code === 'DATABASE_INTEGRITY_FAILED',
     );
   } finally {
     sources.chats.close();

@@ -28,10 +28,10 @@ type StorageState = {
 
 type DatabaseEntry = {
   file: string;
-  requiredTables: string[];
+  requiredTables: Record<string, string[]>;
 };
 
-const registry = databaseRegistry.databases as DatabaseEntry[];
+const registry = databaseRegistry.databases as unknown as DatabaseEntry[];
 
 function storageFailure(code: StorageErrorCode): Error & { code: StorageErrorCode } {
   return Object.assign(new Error(code), { code });
@@ -75,8 +75,14 @@ function writeState(statePath: string, expectedDatabases: string[]): void {
 
 function checkRequiredTables(database: Database.Database, entry: DatabaseEntry): void {
   try {
-    for (const table of entry.requiredTables) {
-      database.prepare(`SELECT 1 FROM "${table}" LIMIT 1`).get();
+    for (const [table, requiredColumns] of Object.entries(entry.requiredTables)) {
+      const columns = new Set(
+        database.prepare(`PRAGMA table_info("${table}")`).all()
+          .map((column) => (column as { name: string }).name),
+      );
+      if (columns.size === 0 || requiredColumns.some((column) => !columns.has(column))) {
+        throw storageFailure('DATABASE_INTEGRITY_FAILED');
+      }
     }
   } catch (error) {
     const code = getStorageErrorCode(error);

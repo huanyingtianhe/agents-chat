@@ -16,7 +16,7 @@ import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
 import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
 import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
 import { createLogger } from '@/lib/logger';
-import { getStorageErrorCode, toStorageErrorResponse } from '@/lib/storage/storageErrors';
+import { getStorageErrorCode, rethrowStorageError, toStorageErrorResponse } from '@/lib/storage/storageErrors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -564,7 +564,9 @@ async function loadMcpServers(isAdmin: boolean): Promise<Record<string, unknown>
         .map(([name, cfg]) => normalizeMcpServerConfig(name, cfg))
         .filter((server): server is Record<string, unknown> => !!server);
     }
-  } catch { /* ignore */ }
+  } catch (error) {
+    rethrowStorageError(error);
+  }
   return [];
 }
 
@@ -588,7 +590,9 @@ async function resolveChatCwd(userId: string, chatId?: string): Promise<string |
     const chat = await getChat(userId, chatId);
     const chatCwd = chat?.gitContext?.worktreePath;
     if (chatCwd && existsSync(chatCwd)) return chatCwd;
-  } catch { /* ignore */ }
+  } catch (error) {
+    rethrowStorageError(error);
+  }
   return undefined;
 }
 
@@ -652,7 +656,7 @@ async function createFreshSessionForSend(
   proc.knownSessions.add(session.sessionId);
   if (chatId) {
     pushChatSession(sess, chatId, session.sessionId);
-    updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+    await updateChatAgentSession(userId, chatId, agentId, session.sessionId);
   }
   if (sess.activeTurns.size === 0) sess.phase = 'idle';
   log(`[ACP:${agentId}] Recovered stale session ${previousSessionId || '(none)'} with fresh session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
@@ -686,6 +690,7 @@ async function recoverStaleSessionForSend(
         log(`[ACP:${agentId}] Recovered stale session ${staleSessionId} with session/load for user ${userId}`);
         return 'loaded';
       } catch (loadErr) {
+        rethrowStorageError(loadErr);
         const msg = loadErr instanceof Error ? loadErr.message : String(loadErr);
         logSessionLoadFallback(agentId, userId, undefined, staleSessionId, msg);
       }
@@ -731,6 +736,7 @@ async function loadSavedChatSessionForSend(
     return true;
   } catch (loadErr: any) {
     replayBuffers.delete(savedSessionId);
+    rethrowStorageError(loadErr);
     const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
     let code = loadErr?.data?.code ?? loadErr?.code;
     if (!code) { try { code = JSON.parse(errStr)?.code; } catch { /* ignore */ } }
@@ -924,7 +930,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
   sess.phase = 'busy';
   sess.turnCount++;
 
-  proc.rpc!
+  void proc.rpc!
     .send('session/prompt', {
       sessionId: sess.sessionId,
       prompt: promptParts,
@@ -961,7 +967,7 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
 
         // Persist the new sessionId to SQLite so chat history references stay current
         if (chatId) {
-          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+          await updateChatAgentSession(userId, chatId, agentId, session.sessionId);
         }
 
         // Build context-aware prompt if chat history is available
@@ -1006,13 +1012,27 @@ function sendPrompt(proc: AgentProcess, sess: UserSession, agentId: string, prom
         if (!turn.done) {
           turn.done = true;
           turn.phase = 'done';
-          turn.error = errMsg || (retryErr instanceof Error ? retryErr.message : String(retryErr));
+          turn.error = getStorageErrorCode(retryErr)
+            ? 'storage_unavailable'
+            : errMsg || (retryErr instanceof Error ? retryErr.message : String(retryErr));
           turn.statusText = turn.error;
           if (sess.activeTurns.size === 0) sess.phase = 'idle';
         }
         await flushTurnPersist(turn);
         turn.prompt = '';
         scheduleTurnRelease(sess, turnChatKey, turn);
+      }
+    })
+    .catch((error) => {
+      const message = getStorageErrorCode(error)
+        ? 'storage_unavailable'
+        : error instanceof Error ? error.message : String(error);
+      logger.error({ agentId, err: message }, `[ACP:${agentId}] Detached prompt handler failed`);
+      if (!turn.done) {
+        turn.done = true;
+        turn.phase = 'done';
+        turn.error = message;
+        turn.statusText = message;
       }
     });
 
@@ -2059,7 +2079,7 @@ export async function POST(req: NextRequest) {
           sess.sessionId = session.sessionId;
           proc.knownSessions.add(session.sessionId);
           pushChatSession(sess, chatId, session.sessionId);
-          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+          await updateChatAgentSession(userId, chatId, agentId, session.sessionId);
         } else {
           // Best-effort close the probe session so it doesn't linger on the agent.
           proc.rpc.send('session/close', { sessionId: session.sessionId }).catch(() => { /* ignore if unsupported */ });
@@ -2170,7 +2190,7 @@ export async function POST(req: NextRequest) {
       // Store in chatSessions list and persist to SQLite
       if (chatId && sess.sessionId) {
         pushChatSession(sess, chatId, sess.sessionId);
-        updateChatAgentSession(userId, chatId, agentId, sess.sessionId).catch(() => { /* ignore */ });
+        await updateChatAgentSession(userId, chatId, agentId, sess.sessionId);
       }
 
       log(`[ACP:${agentId}] send: chat=${chatId}, session=${sess.sessionId}, sessions=${JSON.stringify(chatId ? sess.chatSessions.get(chatId) : null)}`);
@@ -2187,6 +2207,7 @@ export async function POST(req: NextRequest) {
       try {
         await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
       } catch (err) {
+        rethrowStorageError(err);
         if (isSessionNotFoundError(err)) {
           const staleSessionId = sess.sessionId;
           log(`[ACP:${agentId}] model switch found stale session ${staleSessionId || '(none)'}; attempting session/load before send`);
@@ -2195,6 +2216,7 @@ export async function POST(req: NextRequest) {
             if (recovery === 'created' && !chatHistory && chatId) chatHistory = await getStoredChatHistoryForRecovery(userId, chatId);
             await applySessionModelIfRequested(proc, sess.sessionId, requestedModelId);
           } catch (recoveryErr) {
+            rethrowStorageError(recoveryErr);
             const msg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
             return NextResponse.json({ ok: false, error: msg }, { status: 400 });
           }
@@ -2344,11 +2366,12 @@ export async function POST(req: NextRequest) {
         if (chatId) pushChatSession(sess, chatId, session.sessionId);
         // Persist session ID to SQLite
         if (chatId) {
-          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+          await updateChatAgentSession(userId, chatId, agentId, session.sessionId);
         }
         log(`[ACP:${agentId}] New session ${session.sessionId} for user ${userId}${chatId ? ` (chat ${chatId})` : ''}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId });
       } catch (err) {
+        rethrowStorageError(err);
         const msg = err instanceof Error ? err.message : String(err);
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });
       }
@@ -2425,6 +2448,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn), ...recovery });
         } catch (loadErr: any) {
           replayBuffers.delete(savedSessionId);
+          rethrowStorageError(loadErr);
           // If session is already loaded, just reuse it
           const errStr = loadErr instanceof Error ? loadErr.message : String(loadErr);
           let code = loadErr?.data?.code ?? loadErr?.code;
@@ -2456,11 +2480,12 @@ export async function POST(req: NextRequest) {
         proc.knownSessions.add(session.sessionId);
         // Update SQLite with the new sessionId
         if (chatId) {
-          updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+          await updateChatAgentSession(userId, chatId, agentId, session.sessionId);
         }
         log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });
       } catch (newErr) {
+        rethrowStorageError(newErr);
         const msg = newErr instanceof Error ? newErr.message : String(newErr);
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });
       }

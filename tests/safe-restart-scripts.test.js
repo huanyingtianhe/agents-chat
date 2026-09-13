@@ -521,15 +521,41 @@ test('declares the guarded Windows deployment and restart contracts', () => {
   assert.match(safeRestart, /PORT_IN_USE/);
   assert.match(safeRestart, /Get-NetTCPConnection[\s\S]*Get-CimInstance Win32_Process/);
   assert.doesNotMatch(safeRestart, /Stop-Process\s+-Id\s+\$[A-Za-z]+\s+-Force[\s\S]{0,120}Get-NetTCPConnection/);
+  assert.match(safeRestart, /Write-StopRequest[\s\S]*Generation[\s\S]*WatchdogPid/);
+  assert.match(safeRestart, /Get-OwnedProcessSnapshots/);
+  assert.match(safeRestart, /Test-ProcessSnapshot/);
+  assert.match(safeRestart, /Wait-ForOwnedProcesses/);
+  assert.match(safeRestart, /Clear-MatchingStopRequest/);
+  assert.match(
+    safeRestart,
+    /Installing Scheduled Task[\s\S]*try \{[\s\S]*& \$Installer[\s\S]*catch \{[\s\S]*SERVICE_START_FAILED[\s\S]*task-install/,
+  );
+  assert.match(safeRestart, /finally \{[\s\S]*Clear-MatchingStopRequest/);
+  assert.doesNotMatch(safeRestart, /Stop-ScheduledTask/);
+  assert.doesNotMatch(safeRestart, /Stop-Process\s+-Id\s+\$watchdogPid(?![\s\S]{0,80}-Force)/i);
 
   assert.match(start, /\[string\]\$NodePath/);
+  assert.match(start, /\[string\]\$Generation/);
+  assert.match(start, /\[int\]\$WatchdogPid/);
+  assert.match(start, /\[string\]\$StopRequestPath/);
+  assert.match(start, /Test-StopRequested/);
+  assert.match(start, /Generation[\s\S]*WatchdogPid/);
+  assert.match(start, /\$exitCode = 0\s*try \{[\s\S]*\$server = Start-Process[\s\S]*finally \{/);
   assert.match(start, /runtime-preflight\.mjs[\s\S]*check-only/);
   assert.match(start, /start-server\.mjs/);
   assert.doesNotMatch(start, /npm\s+run\s+build/i);
   assert.doesNotMatch(start, /Get-NetTCPConnection/);
 
   assert.match(watchdog, /\[string\]\$NodePath/);
-  assert.match(watchdog, /start\.ps1[\s\S]*-NodePath/);
+  assert.match(watchdog, /\[guid\]::NewGuid\(\)/i);
+  assert.match(watchdog, /start\.ps1[\s\S]*-NodePath[\s\S]*-Generation[\s\S]*-WatchdogPid[\s\S]*-StopRequestPath/);
+  assert.match(watchdog, /Test-StopRequested/);
+  assert.match(watchdog, /Get-OwnedProcessSnapshots/);
+  assert.match(watchdog, /Wait-ForOwnedProcesses/);
+  assert.match(watchdog, /Clear-MatchingStopRequest/);
+  assertBefore(watchdog, 'Remove-Item -LiteralPath $StopRequest', 'Write-JsonFile -Path $WatchdogStateFile');
+  assert.match(watchdog, /finally \{[\s\S]*Clear-MatchingStopRequest/);
+  assert.doesNotMatch(watchdog, /Stop-Process\s+-Id\s+\$RootPid\s+-ErrorAction/);
   assert.doesNotMatch(watchdog, /C:\\Program Files\\nodejs/);
   assert.doesNotMatch(watchdog, /Stop-Port3000Processes/);
 
@@ -537,6 +563,7 @@ test('declares the guarded Windows deployment and restart contracts', () => {
   assert.match(installer, /service-watchdog\.ps1[\s\S]*-NodePath/);
   assert.match(installer, /process\.execPath/);
   assert.match(installer, /24/);
+  assert.doesNotMatch(installer, /Remove-Item\s+\(Join-Path\s+\$ProjectDir\s+'\.service-stop'\)/);
 });
 
 test('PowerShell scripts parse when PowerShell is available', (t) => {

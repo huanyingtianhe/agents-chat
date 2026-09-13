@@ -19,3 +19,12 @@ server-error.log
 .superpowers/
 .agents-chat-operation.json
 .agents-chat-storage.json
+.service-stop
+.service-stop-request.json
+.service-stop-request.json.*.new
+.service-watchdog.pid
+.service-child.pid
+.service-watchdog-state.json
+.service-watchdog-state.json.*.new
+.service-child-state.json
+.service-child-state.json.*.new

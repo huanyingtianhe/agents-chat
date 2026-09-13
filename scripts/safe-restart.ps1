@@ -12,7 +12,7 @@ param(
     [string]$TaskTriggerType = 'AtLogOn',
     [switch]$NoWait,
     [int]$WaitSeconds = 120,
-    [int]$StopWaitSeconds = 30
+    [int]$StopWaitSeconds = 45
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +26,9 @@ $AppPort = 3000
 $WatchdogLog = $null
 $ChildLog = $null
 $ChildErrLog = $null
+$StopRequest = $null
+$stopGeneration = $null
+$stopWatchdogPid = 0
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -141,61 +144,125 @@ function Write-StructuredFailure {
     Write-Host "  Get-Content `"$ChildErrLog`" -Tail 100"
 }
 
-function Get-TrackedWatchdogPid {
-    $pidFile = Join-Path $ProjectDir '.service-watchdog.pid'
-    if (-not (Test-Path -LiteralPath $pidFile -PathType Leaf)) { return 0 }
-    $value = 0
-    if (-not [int]::TryParse((Get-Content -LiteralPath $pidFile -Raw).Trim(), [ref]$value)) { return 0 }
-    return $value
+function Read-JsonFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try { return (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json } catch { return $null }
+}
+
+function Get-TrackedWatchdogState {
+    return (Read-JsonFile -Path (Join-Path $ProjectDir '.service-watchdog-state.json'))
 }
 
 function Test-OwnedWatchdog {
-    param([int]$ProcessId)
-    if ($ProcessId -le 0) { return $false }
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    param($State)
+    if (-not $State -or [int]$State.Pid -le 0 -or [string]::IsNullOrWhiteSpace([string]$State.Generation)) {
+        return $false
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$State.Pid)" -ErrorAction SilentlyContinue
     if (-not $process) { return $false }
-    return $process.CommandLine -and
+    return (
+        [string]$process.CreationDate -eq [string]$State.CreationDate -and
+        $process.CommandLine -and
         $process.CommandLine.IndexOf((Join-Path $PSScriptRoot 'service-watchdog.ps1'), [StringComparison]::OrdinalIgnoreCase) -ge 0
+    )
 }
 
-function Get-ChildProcessIds {
-    param([int]$ParentId)
+function Get-OwnedProcessSnapshots {
+    param([int]$RootPid)
     $result = @()
-    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" -ErrorAction SilentlyContinue)) {
-        $result += Get-ChildProcessIds -ParentId ([int]$child.ProcessId)
-        $result += [int]$child.ProcessId
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$RootPid" -ErrorAction SilentlyContinue)) {
+        $result += @(Get-OwnedProcessSnapshots -RootPid ([int]$child.ProcessId))
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$RootPid" -ErrorAction SilentlyContinue
+    if ($process) {
+        $result += [pscustomobject]@{
+            Pid = [int]$process.ProcessId
+            CreationDate = [string]$process.CreationDate
+        }
     }
     return $result
 }
 
-function Stop-TrackedTaskGracefully {
-    $stopFile = Join-Path $ProjectDir '.service-stop'
-    $watchdogPid = Get-TrackedWatchdogPid
-    $ownedPids = @()
-    if ($watchdogPid -gt 0 -and (Get-Process -Id $watchdogPid -ErrorAction SilentlyContinue)) {
-        if (-not (Test-OwnedWatchdog -ProcessId $watchdogPid)) {
-            throw "Tracked watchdog PID $watchdogPid no longer belongs to this checkout; refusing to terminate it."
-        }
-        $ownedPids = @(Get-ChildProcessIds -ParentId $watchdogPid)
-        $ownedPids += $watchdogPid
+function Test-ProcessSnapshot {
+    param($Snapshot)
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$Snapshot.Pid)" -ErrorAction SilentlyContinue
+    return ($process -and ([string]$process.CreationDate -eq [string]$Snapshot.CreationDate))
+}
+
+function Wait-ForOwnedProcesses {
+    param([object[]]$Snapshots, [datetime]$Deadline)
+    $remaining = @($Snapshots)
+    while ((Get-Date) -lt $Deadline) {
+        $remaining = @($remaining | Where-Object { Test-ProcessSnapshot -Snapshot $_ })
+        if ($remaining.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
     }
-    New-Item -ItemType File -Path $stopFile -Force | Out-Null
-    $deadline = (Get-Date).AddSeconds($StopWaitSeconds)
-    while ((Get-Date) -lt $deadline) {
-        $remaining = @($ownedPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        if ($remaining.Count -eq 0 -and (-not $task -or $task.State -ne 'Running')) { break }
-        Start-Sleep -Milliseconds 500
+    return @($remaining | Where-Object { Test-ProcessSnapshot -Snapshot $_ })
+}
+
+function Write-StopRequest {
+    param([string]$Generation, [int]$WatchdogPid)
+    $request = [ordered]@{
+        Generation = $Generation
+        WatchdogPid = $WatchdogPid
+        RequestedByPid = $PID
+        RequestedAt = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $temporary = "$StopRequest.$PID.new"
+    [IO.File]::WriteAllText($temporary, ($request | ConvertTo-Json -Compress))
+    Move-Item -LiteralPath $temporary -Destination $StopRequest -Force
+}
+
+function Clear-MatchingStopRequest {
+    param([string]$Generation, [int]$WatchdogPid)
+    if (-not $Generation -or $WatchdogPid -le 0) { return }
+    $request = Read-JsonFile -Path $StopRequest
+    if ($request -and [string]$request.Generation -eq $Generation -and
+        [int]$request.WatchdogPid -eq $WatchdogPid) {
+        Remove-Item -LiteralPath $StopRequest -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-TrackedTaskGracefully {
+    $state = Get-TrackedWatchdogState
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $state) {
+        if ($task -and $task.State -eq 'Running') {
+            throw 'The Scheduled Task is running without an owned watchdog state file; refusing an unscoped stop.'
+        }
+        Remove-Item -LiteralPath $StopRequest -Force -ErrorAction SilentlyContinue
+        return
+    }
+    if (-not (Get-Process -Id ([int]$state.Pid) -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath (Join-Path $ProjectDir '.service-watchdog-state.json') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $StopRequest -Force -ErrorAction SilentlyContinue
+        if ($task -and $task.State -eq 'Running') {
+            throw 'The Scheduled Task is running but its recorded watchdog PID has exited; retry after Task Scheduler updates its state.'
+        }
+        return
+    }
+    if (-not (Test-OwnedWatchdog -State $state)) {
+        throw "Tracked watchdog PID $($state.Pid) no longer belongs to this checkout; refusing to terminate it."
     }
 
-    $remaining = @($ownedPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $script:stopGeneration = [string]$state.Generation
+    $script:stopWatchdogPid = [int]$state.Pid
+    Write-StopRequest -Generation $script:stopGeneration -WatchdogPid $script:stopWatchdogPid
+    $ownedProcesses = @(Get-OwnedProcessSnapshots -RootPid $script:stopWatchdogPid)
+    $remaining = @(Wait-ForOwnedProcesses -Snapshots $ownedProcesses -Deadline (Get-Date).AddSeconds($StopWaitSeconds))
     if ($remaining.Count -gt 0) {
-        Write-Step "Grace period expired; forcing only owned watchdog tree PID $watchdogPid."
-        foreach ($ownedPid in $remaining) {
-            Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue
+        Write-Step "Grace period expired; forcing only remaining owned processes from watchdog generation $script:stopGeneration."
+        foreach ($snapshot in $remaining) {
+            if (Test-ProcessSnapshot -Snapshot $snapshot) {
+                Stop-Process -Id ([int]$snapshot.Pid) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $remaining = @(Wait-ForOwnedProcesses -Snapshots $remaining -Deadline (Get-Date).AddSeconds(5))
+        if ($remaining.Count -gt 0) {
+            throw "Owned processes did not exit after forced shutdown: $((@($remaining | ForEach-Object { $_.Pid })) -join ', ')"
         }
     }
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 }
 
 function Assert-PortAvailable {
@@ -250,6 +317,7 @@ try {
     $WatchdogLog = Join-Path $ProjectDir 'logs\service-watchdog.log'
     $ChildLog = Join-Path $ProjectDir 'logs\start-service-child.log'
     $ChildErrLog = Join-Path $ProjectDir 'logs\start-service-child.err.log'
+    $StopRequest = Join-Path $ProjectDir '.service-stop-request.json'
     $NodePath = Resolve-Node24
     $NpmPath = Join-Path (Split-Path -Parent $NodePath) 'npm.cmd'
     if (-not (Test-Path -LiteralPath $NpmPath -PathType Leaf)) {
@@ -325,15 +393,18 @@ try {
     }
 
     Write-Step "Installing Scheduled Task '$TaskName' with NodePath=$NodePath..."
-    & $Installer -TaskName $TaskName -ProjectDir $ProjectDir -LogonType $TaskLogonType `
-        -TriggerType $TaskTriggerType -NodePath $NodePath -AppPort $AppPort | Out-Host
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        & $Installer -TaskName $TaskName -ProjectDir $ProjectDir -LogonType $TaskLogonType `
+            -TriggerType $TaskTriggerType -NodePath $NodePath -AppPort $AppPort | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installer exited with code $LASTEXITCODE."
+        }
+    } catch {
         $failureCode = 'SERVICE_START_FAILED'
         $failureStage = 'task-install'
-        throw 'Scheduled Task installation failed.'
+        throw "Scheduled Task installation failed: $($_.Exception.Message)"
     }
 
-    Remove-Item (Join-Path $ProjectDir '.service-stop') -Force -ErrorAction SilentlyContinue
     $restartBegan = $true
     Write-Step "Starting Scheduled Task '$TaskName'..."
     Start-ScheduledTask -TaskName $TaskName
@@ -364,6 +435,7 @@ try {
     Write-StructuredFailure -Code $failureCode -Stage $failureStage -Summary $failureSummary
     Show-RecentLogs
 } finally {
+    Clear-MatchingStopRequest -Generation $stopGeneration -WatchdogPid $stopWatchdogPid
     if ($operationId) {
         & $NodePath $LeaseRelease --project-root $ProjectDir --operation-id $operationId | Out-Null
         if ($LASTEXITCODE -ne 0) {

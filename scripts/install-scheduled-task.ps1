@@ -52,8 +52,6 @@ if (-not (Test-Path -LiteralPath $WatchdogScript -PathType Leaf)) {
     throw "Watchdog script not found: $WatchdogScript"
 }
 
-Remove-Item (Join-Path $ProjectDir '.service-stop') -Force -ErrorAction SilentlyContinue
-
 $escapedWatchdog = $WatchdogScript.Replace('"', '""')
 $escapedNode = $NodePath.Replace('"', '""')
 $actionArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$escapedWatchdog`" -NodePath `"$escapedNode`" -AppPort $AppPort"

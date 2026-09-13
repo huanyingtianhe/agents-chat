@@ -13,14 +13,14 @@ This change applies only to the NextAuth GitHub provider. Microsoft Entra ID and
 Add a new environment variable:
 
 ```env
-GITHUB_ALLOWED_EMAILS=x12jiang@outlook.com
+GITHUB_ALLOWED_EMAILS=
 ```
 
 The value is a comma-separated list of allowed email addresses. Email matching is case-insensitive and ignores surrounding whitespace.
 
-When GitHub OAuth is configured with `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`, `GITHUB_ALLOWED_EMAILS` is required. The environment example will include `x12jiang@outlook.com` as the default value so first-time deployments can see that this variable must be reviewed and set deliberately.
+When GitHub OAuth is configured with `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`, the `GITHUB_ALLOWED_EMAILS` configuration entry must be present. Its effective default value is the comma-separated `ADMIN_EMAILS` list, so existing admin configuration remains the fallback when the new variable is left empty.
 
-If `GITHUB_ALLOWED_EMAILS` is empty or missing while GitHub OAuth is enabled, GitHub sign-in is denied. `ADMIN_EMAILS` does not act as a runtime fallback for GitHub login access; it only controls admin role assignment.
+If both `GITHUB_ALLOWED_EMAILS` and `ADMIN_EMAILS` are empty while GitHub OAuth is enabled, GitHub sign-in is denied. `ADMIN_EMAILS` continues to control admin role assignment in addition to serving as the GitHub allowlist fallback.
 
 ## Authentication flow
 
@@ -30,7 +30,7 @@ The NextAuth `signIn` callback will:
 
 1. Apply the allowlist check only when `account.provider === "github"`.
 2. Resolve the GitHub user's email from the OAuth profile/user object, and when needed from `https://api.github.com/user/emails` using the OAuth access token.
-3. Build the allowed email set from `GITHUB_ALLOWED_EMAILS`.
+3. Build the allowed email set from `GITHUB_ALLOWED_EMAILS`; when it is empty, use `ADMIN_EMAILS`.
 4. Allow sign-in only when the resolved email appears in that set.
 
 Denied GitHub users are redirected back to `/login` with the standard NextAuth access denied error. No partial app session is created.
@@ -56,7 +56,8 @@ Unit tests will cover the pure allowlist helpers:
 
 - `GITHUB_ALLOWED_EMAILS` allows matching GitHub email.
 - Non-matching GitHub email is denied.
-- Empty or missing `GITHUB_ALLOWED_EMAILS` denies GitHub login when GitHub OAuth is enabled.
+- Empty or missing `GITHUB_ALLOWED_EMAILS` falls back to `ADMIN_EMAILS`.
+- Empty `GITHUB_ALLOWED_EMAILS` and empty `ADMIN_EMAILS` deny GitHub login when GitHub OAuth is enabled.
 - Matching is case-insensitive and trims whitespace.
 
 E2E coverage will verify login-page behavior around GitHub access denied handling and provider availability without requiring a real GitHub OAuth round trip. Full Playwright E2E will be run before opening the PR.
@@ -67,8 +68,8 @@ Update the environment example/configuration file to include:
 
 ```env
 # Required when GitHub OAuth is enabled. Only these GitHub account emails can sign in.
-# Use a comma-separated list for multiple users.
-GITHUB_ALLOWED_EMAILS=x12jiang@outlook.com
+# Use a comma-separated list for multiple users. If left empty, ADMIN_EMAILS is used.
+GITHUB_ALLOWED_EMAILS=
 ```
 
 Deployments that should allow more GitHub users can add additional comma-separated emails.

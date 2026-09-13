@@ -13,6 +13,7 @@ import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
 import { recoverInterruptedOrchestration } from '@/lib/workflow/recoverInterrupted.mjs';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
+import { readJsonApiResponse, StorageUnavailableError } from '../chatApi';
 
 export type UseChatRuntimeParams = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -70,6 +71,7 @@ export function useChatRuntime({
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<import('@/lib/workflow/workflowTypes.mjs').WorkflowPlan | null>(null);
   const [dismissedFollowUpOrchId, setDismissedFollowUpOrchId] = useState<string | null>(null);
   const [dismissedWorkflowBarOrchId, setDismissedWorkflowBarOrchId] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<StorageUnavailableError | null>(null);
 
   /* ── Refs ── */
   const messagesRef = useRef(messages);
@@ -197,6 +199,7 @@ export function useChatRuntime({
     onCloseAgentsPanel: () => panelCallbacksRef.current.setShowAgentsPanel?.(false),
     prepareResume: (chatId) => hydrateOrchestrationsForChatRef.current(chatId),
     finalizeResume: (chatId) => reconcileRunningWorkflowNodesRef.current(chatId),
+    onStorageUnavailable: setStorageError,
   });
   saveChatToHistoryRef.current = persistHandlers.saveChatToHistory;
 
@@ -563,50 +566,71 @@ export function useChatRuntime({
 
   function dismissAgentUserRequest(_requestId: string) { /* no-op currently */ }
 
+  async function reloadStoredChatState() {
+    try {
+      const data = await readJsonApiResponse(await fetch('/api/chats'));
+      if (!data.ok || !Array.isArray(data.chats)) return;
+      const normalizedHistory = normalizeChatHistory(data.chats);
+      const loadedChatId = currentChatIdRef.current;
+      if (loadedChatId) {
+        const serverIds = new Set(normalizedHistory.map((chat) => chat.id));
+        const retainedLocalEntries = chatHistoryRef.current.filter((chat) => !serverIds.has(chat.id));
+        setChatHistory(normalizeChatHistory([...normalizedHistory, ...retainedLocalEntries]));
+        setStorageError(null);
+        return;
+      }
+
+      const preferredChatId = (data.lastChatId as string | null) || (data.chats[0]?.id as string | null);
+      if (!preferredChatId) {
+        setChatHistory(normalizedHistory);
+        setStorageError(null);
+        return;
+      }
+
+      const chatData = await readJsonApiResponse(await fetch(`/api/chats?id=${encodeURIComponent(preferredChatId)}`));
+      if (!chatData.ok || !chatData.chat) return;
+
+      const agentSessions = chatData.chat.agentSessions || {};
+      const isReviewChat = preferredChatId.startsWith('comment-review:');
+      const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions, { inferLatestUserFailure: !isReviewChat });
+      const msgs = migration.messages;
+      setChatHistory(normalizedHistory);
+      currentChatIdRef.current = preferredChatId;
+      setCurrentChatId(preferredChatId);
+      setActiveSidebarChatId(preferredChatId);
+      currentAgentSessionsRef.current = agentSessions;
+      setMessagesForChat(preferredChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
+      setChatName(chatData.chat.name || preferredChatId);
+      needsContextRestoreRef.current = true;
+      await hydrateOrchestrationsForChat(preferredChatId);
+      setLoadedChatIdForResume(preferredChatId);
+      if (migration.changed) {
+        void persistHandlers.persistLoadedChatMigration(preferredChatId, chatData.chat.name || preferredChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
+      }
+      if (!inputHistoryRef.current[preferredChatId]) {
+        const userTexts = msgs.filter((m: ChatMessage) => m.type === 'user' && m.content).map((m: ChatMessage) => m.content as string).filter((t: string) => t.trim().length > 0);
+        if (userTexts.length > 0) {
+          inputHistoryRef.current[preferredChatId] = userTexts.slice(-100);
+          try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(inputHistoryRef.current)); } catch { /* ignore */ }
+        }
+      }
+      setStorageError(null);
+    } catch (error) {
+      if (error instanceof StorageUnavailableError) {
+        setStorageError(error);
+        return;
+      }
+      console.error('Failed to load stored chats', error);
+    }
+  }
+
   /* ── Mount effect: load last chat + agent sessions ── */
   useEffect(() => {
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
       if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || {};
     } catch { /* ignore */ }
-    fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
-      const lastChatId = (data.lastChatId as string | null) || (data.chats?.[0]?.id as string | null);
-      if (lastChatId) {
-        currentChatIdRef.current = lastChatId;
-        setCurrentChatId(lastChatId);
-        setActiveSidebarChatId(lastChatId);
-        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`).then(r => r.json()).then(async (chatData) => {
-          if (chatData.ok && chatData.chat) {
-            const agentSessions = chatData.chat.agentSessions || {};
-            const isReviewChat = typeof lastChatId === 'string' && lastChatId.startsWith('comment-review:');
-            const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions, { inferLatestUserFailure: !isReviewChat });
-            const msgs = migration.messages;
-            currentAgentSessionsRef.current = agentSessions;
-            setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
-            setChatName(chatData.chat.name || lastChatId);
-            needsContextRestoreRef.current = true;
-            // Load workflow orchestrations BEFORE triggering session-resume:
-            // the resume effect pre-seeds sessionRunsRef from running nodes,
-            // and reconcileRunningWorkflowNodes uses sessionRunsRef to decide
-            // which nodes truly need awaiting-input recovery.
-            await hydrateOrchestrationsForChat(lastChatId);
-            setLoadedChatIdForResume(lastChatId);
-            if (migration.changed) {
-              void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
-            }
-            // Backfill input history from loaded messages if none exists for this chat
-            if (!inputHistoryRef.current[lastChatId]) {
-              const userTexts = msgs.filter((m: ChatMessage) => m.type === 'user' && m.content).map((m: ChatMessage) => m.content as string).filter((t: string) => t.trim().length > 0);
-              if (userTexts.length > 0) {
-                inputHistoryRef.current[lastChatId] = userTexts.slice(-100);
-                try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(inputHistoryRef.current)); } catch { /* ignore */ }
-              }
-            }
-          }
-        }).catch(() => { /* ignore */ });
-      }
-    }).catch(() => { /* ignore */ });
+    void reloadStoredChatState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -690,6 +714,7 @@ export function useChatRuntime({
     /* state */
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
+    storageError,
     orchestrationMode,
     pendingWorkflowPlan,
     /* state setters exposed for page.tsx */
@@ -717,6 +742,7 @@ export function useChatRuntime({
     /* persistence handlers */
     ...persistHandlers,
     loadChat: wrappedLoadChat,
+    reloadStoredChatState,
     /* send/stop/answer */
     handleSend, handleStop, retryFailedSend, resendFailedUserMessage,
     sendWorkflowFollowUpReply,

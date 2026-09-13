@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { Agent } from '../../agents/agentTypes';
-import { warmLocalAgentsOnce } from '../chatApi';
+import { StorageUnavailableError, warmLocalAgentsOnce } from '../chatApi';
 import { SCHEDULER_AGENT_ID } from '../chatHelpers';
 import { STORAGE_AGENT_FILTER, STORAGE_REMEMBERED_CHAT_AGENTS } from './sessionPersistence';
 import type { EnsureAgentModelsOptions } from './chatRuntimeTypes';
@@ -17,6 +17,7 @@ export type UseAgentRegistryParams = {
 export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
+  const [storageError, setStorageError] = useState<StorageUnavailableError | null>(null);
   // Per-user "last @-mentioned agent" — persisted server-side so it travels
   // across browsers/devices. Used when lastUsedAgentScope === 'user'.
   const [lastUsedAgent, setLastUsedAgentState] = useState<string | null>(null);
@@ -93,12 +94,16 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
   async function reloadAgents() {
     setAgentsLoading(true);
     try {
+      const ignoreNonStorageFailure = (error: unknown) => {
+        if (error instanceof StorageUnavailableError) throw error;
+        return null;
+      };
       const [agentsData, prefsData, lastUsedData, chatLastUsedData, settingsData] = await Promise.all([
         acp({ action: 'list-agents' }),
-        acp({ action: 'get-model-prefs' }).catch(() => null),
-        acp({ action: 'get-last-used-agent' }).catch(() => null),
-        acp({ action: 'get-chat-last-used-agents' }).catch(() => null),
-        acp({ action: 'get-user-settings' }).catch(() => null),
+        acp({ action: 'get-model-prefs' }).catch(ignoreNonStorageFailure),
+        acp({ action: 'get-last-used-agent' }).catch(ignoreNonStorageFailure),
+        acp({ action: 'get-chat-last-used-agents' }).catch(ignoreNonStorageFailure),
+        acp({ action: 'get-user-settings' }).catch(ignoreNonStorageFailure),
       ]);
       if (agentsData.ok && Array.isArray(agentsData.agents)) {
         const loadedAgents = agentsData.agents as Agent[];
@@ -118,7 +123,12 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
         const scope = (settingsData.settings as Record<string, string>)[LAST_USED_AGENT_SCOPE_KEY];
         if (scope === 'user' || scope === 'chat') setLastUsedAgentScopeState(scope);
       }
+      setStorageError(null);
     } catch (err) {
+      if (err instanceof StorageUnavailableError) {
+        setStorageError(err);
+        return;
+      }
       console.error('Failed to load agents', err);
     } finally {
       setAgentsLoading(false);
@@ -166,6 +176,7 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
     setAgents,
     agentsLoading,
     setAgentsLoading,
+    storageError,
     selectedAgentFilter,
     setSelectedAgentFilter,
     selectedAgentModels,

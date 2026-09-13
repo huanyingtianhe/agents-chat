@@ -1,6 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { ChatHistoryEntry, ChatMessage, ShareDialog } from '../chatTypes';
 import { getPersistableMessages, migrateFailedSendWarnings, normalizeChatHistory, lastSessionId } from '../chatHelpers';
+import { readJsonApiResponse, StorageUnavailableError } from '../chatApi';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 
 export type PersistenceContext = {
@@ -30,9 +31,20 @@ export type PersistenceContext = {
   inputHistoryRef?: MutableRefObject<Record<string, string[]>>;
   prepareResume?: (chatId: string) => Promise<void> | void;
   finalizeResume?: (chatId: string) => Promise<void> | void;
+  onStorageUnavailable?: (error: StorageUnavailableError) => void;
 };
 
 export function createPersistenceHandlers(ctx: PersistenceContext) {
+  function reportStorageUnavailable(error: unknown): error is StorageUnavailableError {
+    if (!(error instanceof StorageUnavailableError)) return false;
+    ctx.onStorageUnavailable?.(error);
+    return true;
+  }
+
+  async function requestStorage(input: RequestInfo | URL, init?: RequestInit) {
+    return readJsonApiResponse(await fetch(input, init));
+  }
+
   async function persistLoadedChatMigration(
     chatId: string, name: string, ts: number,
     chatMessages: ChatMessage[], agentSessions: Record<string, string>,
@@ -42,17 +54,18 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
       messages: getPersistableMessages(chatMessages), agentSessions,
     };
     try {
-      await fetch('/api/chats', {
+      await requestStorage('/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
   }
 
   async function loadChatIntoCache(chatId: string) {
     try {
-      const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
-      const data = await res.json();
+      const data = await requestStorage(`/api/chats?id=${encodeURIComponent(chatId)}`);
       if (data.ok && data.chat) {
         const agentSessions = data.chat.agentSessions || {};
         const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
@@ -75,6 +88,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         });
       }
     } catch (err) {
+      if (reportStorageUnavailable(err)) return;
       console.error('Failed to load review chat', err);
     }
   }
@@ -103,17 +117,19 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
     const chatData = { id: chatId, name, ts: savedAt, messages: persistable, agentSessions, agentId };
     try {
-      await fetch('/api/chats', {
+      await requestStorage('/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
       if (chatId === ctx.currentChatIdRef.current) {
-        await fetch('/api/chats', {
+        await requestStorage('/api/chats', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'set-last-chat', chatId }),
         });
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
     ctx.setChatHistory(prev => {
       const entry = { id: chatId, name, ts: savedAt, agentSessions, agentId };
       if (prev.some(c => c.id === chatId)) return prev.map(c => c.id === chatId ? entry : c);
@@ -142,7 +158,6 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const currentChatId = ctx.currentChatIdRef.current;
     if (chatId === currentChatId) return;
 
-    ctx.setActiveSidebarChatId(chatId);
     await saveCurrentChatToHistory(true);
 
     let targetMessages: ChatMessage[] = [];
@@ -151,9 +166,8 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     let migratedFailedSendState = false;
     let targetTs = Date.now();
     try {
-      const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
-      const data = await res.json();
-      if (!res.ok || !data.ok || !data.chat) {
+      const data = await requestStorage(`/api/chats?id=${encodeURIComponent(chatId)}`);
+      if (!data.ok || !data.chat) {
         ctx.addMessage({ type: 'system', content: `Failed to load chat: ${data.error || 'not found'}` });
         return;
       }
@@ -174,7 +188,8 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         targetTs = data.chat.ts || targetTs;
         ctx.currentAgentSessionsRef.current = agentSessions;
       }
-    } catch {
+    } catch (error) {
+      if (reportStorageUnavailable(error)) return;
       ctx.addMessage({ type: 'system', content: 'Failed to load chat. Please try again.' });
       return;
     }
@@ -191,6 +206,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.setMessagesForChat(chatId, targetMessages);
     ctx.setChatName(targetName);
     ctx.setCurrentChatId(chatId);
+    ctx.setActiveSidebarChatId(chatId);
     ctx.setExpandedMessages({});
     ctx.onClearInput?.();
 
@@ -214,10 +230,10 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     });
 
     // Persist last active chat AFTER all state updates to fix lastChatId race
-    void fetch('/api/chats', {
+    void requestStorage('/api/chats', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'set-last-chat', chatId }),
-    }).catch(() => { /* ignore */ });
+    }).catch((error) => { reportStorageUnavailable(error); });
 
     const hasAnySessions = Object.values(agentSessions).some(s => !!lastSessionId(s));
     ctx.needsContextRestoreRef.current = true;
@@ -262,11 +278,13 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
     try {
-      await fetch('/api/chats', {
+      await requestStorage('/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
       });
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
     ctx.currentChatIdRef.current = newId;
     clearChatMessages({ clearAgentFilter: false });
     ctx.setChatName(newName);
@@ -275,11 +293,13 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.setCurrentChatId(newId);
     ctx.setActiveSidebarChatId(newId);
     try {
-      await fetch('/api/chats', {
+      await requestStorage('/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'set-last-chat', chatId: newId }),
       });
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
     ctx.setChatHistory(prev => {
       if (prev.some(c => c.id === newId)) return prev;
       return normalizeChatHistory([newEntry, ...prev]);
@@ -287,9 +307,9 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.addMessage({ type: 'system', content: `✅ New chat "${newName}" created.` });
     ctx.onCloseChatsPanel?.();
     ctx.onCloseAgentsPanel?.();
-    fetch('/api/chats').then(r => r.json()).then(data => {
+    requestStorage('/api/chats').then(data => {
       if (data.ok && Array.isArray(data.chats)) ctx.setChatHistory(normalizeChatHistory(data.chats));
-    }).catch(() => { /* ignore */ });
+    }).catch((error) => { reportStorageUnavailable(error); });
     return newId;
   }
 
@@ -316,19 +336,21 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     if (!newName.trim()) return;
     const trimmed = newName.trim();
     try {
-      await fetch('/api/chats', {
+      await requestStorage('/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'rename', chatId, name: trimmed }),
       });
       ctx.setChatHistory(prev => prev.map(c => c.id === chatId ? { ...c, name: trimmed } : c));
       if (chatId === ctx.currentChatIdRef.current) ctx.setChatName(trimmed);
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
     onDone?.();
   }
 
   async function deleteChatById(chatId: string, onDone?: () => void) {
     try {
-      await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      await requestStorage(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
       ctx.setChatHistory(prev => prev.filter(c => c.id !== chatId));
       if (chatId === ctx.currentChatIdRef.current) {
         ctx.currentChatIdRef.current = '';
@@ -338,7 +360,9 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         clearChatMessages({ clearAgentFilter: false });
         ctx.currentAgentSessionsRef.current = {};
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportStorageUnavailable(error);
+    }
     onDone?.();
   }
 

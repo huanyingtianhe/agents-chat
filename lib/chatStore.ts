@@ -2,14 +2,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
+import { getStoragePaths } from '@/lib/storage/storagePaths';
 
 /**
  * Server-side chat history storage — SQLite backend.
  * Single file: .data/chats.db
  */
-
-const DATA_DIR = path.join(process.cwd(), '.data');
-const DB_PATH = path.join(DATA_DIR, 'chats.db');
 
 export type StoredAttachment = {
   id: string;
@@ -112,19 +110,21 @@ export type ResolveCommentResult =
 
 /* ─────────── SQLite singleton ─────────── */
 
-let _db: Database.Database | null = null;
+const databases = new Map<string, Database.Database>();
 
-export function getDb(): Database.Database {
-  if (_db) return _db;
+export function getDb(projectRoot = process.cwd()): Database.Database {
+  const { dataPath, chatDbPath } = getStoragePaths(projectRoot);
+  const existing = databases.get(chatDbPath);
+  if (existing) return existing;
   // Ensure .data/ dir exists (sync, runs once)
   const fsSync = require('fs');
-  if (!fsSync.existsSync(DATA_DIR)) fsSync.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fsSync.existsSync(dataPath)) fsSync.mkdirSync(dataPath, { recursive: true });
 
-  _db = new Database(DB_PATH);
-  _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
+  const db = new Database(chatDbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       user_id   TEXT NOT NULL,
       chat_id   TEXT NOT NULL,
@@ -223,15 +223,16 @@ export function getDb(): Database.Database {
 
   // Migration: add agent_id column to chats
   try {
-    _db.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''`);
+    db.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''`);
   } catch { /* column already exists */ }
 
   // Migration: add git_context column to chats
   try {
-    _db.exec(`ALTER TABLE chats ADD COLUMN git_context TEXT NOT NULL DEFAULT '{}'`);
+    db.exec(`ALTER TABLE chats ADD COLUMN git_context TEXT NOT NULL DEFAULT '{}'`);
   } catch { /* column already exists */ }
 
-  return _db;
+  databases.set(chatDbPath, db);
+  return db;
 }
 
 /* ─────────── Chat CRUD ─────────── */

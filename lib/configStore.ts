@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import Database from 'better-sqlite3';
 import { createLogger } from '@/lib/logger';
+import { getStoragePaths } from '@/lib/storage/storagePaths';
 
 const logger = createLogger('configStore');
 
@@ -9,11 +10,6 @@ const logger = createLogger('configStore');
  * Server-side config storage for agents and nodes — SQLite backend.
  * Single file: .data/config.db
  */
-
-const DATA_DIR = path.join(process.cwd(), '.data');
-const DB_PATH = path.join(DATA_DIR, 'config.db');
-const AGENTS_JSON_PATH = path.join(process.cwd(), 'agents.json');
-const NODES_JSON_PATH = path.join(process.cwd(), 'nodes.json');
 
 // ─── Types ───
 
@@ -52,14 +48,16 @@ export type NodeRecord = {
 
 // ─── DB Initialization ───
 
-let _db: ReturnType<typeof Database> | null = null;
+const databases = new Map<string, ReturnType<typeof Database>>();
 
-function getDb(): ReturnType<typeof Database> {
-  if (_db) return _db;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  _db = new Database(DB_PATH);
-  _db.pragma('journal_mode = WAL');
-  _db.exec(`
+export function getConfigDb(projectRoot = process.cwd()): ReturnType<typeof Database> {
+  const { dataPath, configDbPath } = getStoragePaths(projectRoot);
+  const existing = databases.get(configDbPath);
+  if (existing) return existing;
+  fs.mkdirSync(dataPath, { recursive: true });
+  const db = new Database(configDbPath);
+  db.pragma('journal_mode = WAL');
+  db.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
       key TEXT PRIMARY KEY,
       completed_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -124,20 +122,24 @@ function getDb(): ReturnType<typeof Database> {
       PRIMARY KEY (user_email, key)
     );
   `);
-  runMigrations();
-  return _db;
+  runMigrations(db, projectRoot);
+  databases.set(configDbPath, db);
+  return db;
 }
+
+const getDb = getConfigDb;
 
 // ─── Migration from JSON files ───
 
-function runMigrations(): void {
-  const db = _db!;
+function runMigrations(db: ReturnType<typeof Database>, projectRoot: string): void {
+  const agentsJsonPath = path.join(projectRoot, 'agents.json');
+  const nodesJsonPath = path.join(projectRoot, 'nodes.json');
 
   // Migrate agents.json
   const agentsMigrated = db.prepare('SELECT 1 FROM migrations WHERE key = ?').get('agents_json_import');
   if (!agentsMigrated) {
     try {
-      const raw = fs.readFileSync(AGENTS_JSON_PATH, 'utf-8');
+      const raw = fs.readFileSync(agentsJsonPath, 'utf-8');
       const data = JSON.parse(raw);
       const agents = (data.agents || []) as any[];
       const defaultOwner = getDefaultOwner();
@@ -182,7 +184,7 @@ function runMigrations(): void {
   const nodesMigrated = db.prepare('SELECT 1 FROM migrations WHERE key = ?').get('nodes_json_import');
   if (!nodesMigrated) {
     try {
-      const raw = fs.readFileSync(NODES_JSON_PATH, 'utf-8');
+      const raw = fs.readFileSync(nodesJsonPath, 'utf-8');
       const data = JSON.parse(raw);
       const nodes = (data.nodes || []) as any[];
       const defaultOwner = getDefaultOwner();

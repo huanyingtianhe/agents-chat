@@ -16,6 +16,7 @@ import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
 import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
 import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
 import { createLogger } from '@/lib/logger';
+import { getStorageErrorCode, toStorageErrorResponse } from '@/lib/storage/storageErrors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -2467,6 +2468,16 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: false, error: 'unsupported_action' }, { status: 400 });
   } catch (error) {
+    const storageResponse = toStorageErrorResponse(error);
+    if (storageResponse) {
+      logger.error({
+        code: getStorageErrorCode(error),
+        nodeVersion: process.version,
+        platform: process.platform,
+        architecture: process.arch,
+      }, '[ACP] Storage request failed');
+      return storageResponse;
+    }
     logger.error({ err: error instanceof Error ? error.message : String(error) }, `[ACP] POST error`);
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : String(error) },

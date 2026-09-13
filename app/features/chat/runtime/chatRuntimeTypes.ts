@@ -59,6 +59,7 @@ export type AgentRegistry = {
   rememberLastUsedAgent: (agentId: string, chatId?: string) => void;
   clearLastUsedAgent: (chatId?: string) => void;
   reloadAgents: () => Promise<void>;
+  retryStorage: () => Promise<void>;
   ensureAgentModels: (agentId: string, opts: EnsureAgentModelsOptions) => Promise<void>;
 };
 

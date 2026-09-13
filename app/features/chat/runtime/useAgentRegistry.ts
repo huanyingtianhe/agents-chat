@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Agent } from '../../agents/agentTypes';
 import { StorageUnavailableError, warmLocalAgentsOnce } from '../chatApi';
 import { SCHEDULER_AGENT_ID } from '../chatHelpers';
@@ -34,6 +34,51 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
   // Model selection state
   const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const [ensuringAgentModels, setEnsuringAgentModels] = useState<Record<string, boolean>>({});
+  const pendingWritesRef = useRef<Array<{ key: string; body: Record<string, unknown>; version: number }>>([]);
+  const writeDrainRef = useRef<Promise<boolean> | null>(null);
+
+  function queueWrite(key: string, body: Record<string, unknown>) {
+    const existing = pendingWritesRef.current.find((write) => write.key === key);
+    if (existing) {
+      existing.body = body;
+      existing.version += 1;
+    } else {
+      pendingWritesRef.current.push({ key, body, version: 0 });
+    }
+    void retryPendingWrites();
+  }
+
+  async function retryPendingWrites(): Promise<boolean> {
+    if (writeDrainRef.current) return writeDrainRef.current;
+    const drain = (async () => {
+      while (pendingWritesRef.current.length > 0) {
+        const write = pendingWritesRef.current[0];
+        const version = write.version;
+        try {
+          await acp(write.body);
+        } catch (error) {
+          if (error instanceof StorageUnavailableError) {
+            setStorageError(error);
+            return false;
+          }
+          if (pendingWritesRef.current[0] === write && write.version === version) {
+            pendingWritesRef.current.shift();
+          }
+          continue;
+        }
+        if (pendingWritesRef.current[0] === write && write.version === version) {
+          pendingWritesRef.current.shift();
+        }
+      }
+      return true;
+    })();
+    writeDrainRef.current = drain;
+    try {
+      return await drain;
+    } finally {
+      if (writeDrainRef.current === drain) writeDrainRef.current = null;
+    }
+  }
 
   // Load persisted registry state from localStorage on mount
   useEffect(() => {
@@ -57,17 +102,17 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
 
   function setSelectedModelForAgent(agentId: string, modelId: string) {
     setSelectedAgentModels((prev) => ({ ...prev, [agentId]: modelId }));
-    void acp({ action: 'set-model-pref', agentId, modelId }).catch(() => { /* ignore */ });
+    queueWrite(`model-pref:${agentId}`, { action: 'set-model-pref', agentId, modelId });
   }
 
   function rememberLastUsedAgent(agentId: string, chatId?: string) {
     if (!agentId) return;
     if (lastUsedAgentScope === 'chat' && chatId) {
       setChatLastUsedAgentsState((prev) => ({ ...prev, [chatId]: agentId }));
-      void acp({ action: 'set-last-used-agent', agentId, chatId }).catch(() => { /* ignore */ });
+      queueWrite(`last-used-agent:chat:${chatId}`, { action: 'set-last-used-agent', agentId, chatId });
     } else {
       setLastUsedAgentState(agentId);
-      void acp({ action: 'set-last-used-agent', agentId }).catch(() => { /* ignore */ });
+      queueWrite('last-used-agent:user', { action: 'set-last-used-agent', agentId });
     }
   }
 
@@ -79,16 +124,16 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
         delete next[chatId];
         return next;
       });
-      void acp({ action: 'set-last-used-agent', agentId: '', chatId }).catch(() => { /* ignore */ });
+      queueWrite(`last-used-agent:chat:${chatId}`, { action: 'set-last-used-agent', agentId: '', chatId });
     } else {
       setLastUsedAgentState(null);
-      void acp({ action: 'set-last-used-agent', agentId: '' }).catch(() => { /* ignore */ });
+      queueWrite('last-used-agent:user', { action: 'set-last-used-agent', agentId: '' });
     }
   }
 
   function setLastUsedAgentScope(scope: LastUsedAgentScope) {
     setLastUsedAgentScopeState(scope);
-    void acp({ action: 'set-user-setting', key: LAST_USED_AGENT_SCOPE_KEY, value: scope }).catch(() => { /* ignore */ });
+    queueWrite(`user-setting:${LAST_USED_AGENT_SCOPE_KEY}`, { action: 'set-user-setting', key: LAST_USED_AGENT_SCOPE_KEY, value: scope });
   }
 
   async function reloadAgents() {
@@ -123,7 +168,7 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
         const scope = (settingsData.settings as Record<string, string>)[LAST_USED_AGENT_SCOPE_KEY];
         if (scope === 'user' || scope === 'chat') setLastUsedAgentScopeState(scope);
       }
-      setStorageError(null);
+      if (pendingWritesRef.current.length === 0) setStorageError(null);
     } catch (err) {
       if (err instanceof StorageUnavailableError) {
         setStorageError(err);
@@ -139,6 +184,11 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
     void reloadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function retryStorage() {
+    if (!await retryPendingWrites()) return;
+    await reloadAgents();
+  }
 
   async function ensureAgentModels(agentId: string, opts: EnsureAgentModelsOptions) {
     const { currentChatId, currentAgentSessionsRef, setChatHistory } = opts;
@@ -192,6 +242,7 @@ export function useAgentRegistry({ acp }: UseAgentRegistryParams) {
     rememberLastUsedAgent,
     clearLastUsedAgent,
     reloadAgents,
+    retryStorage,
     ensureAgentModels,
   };
 }

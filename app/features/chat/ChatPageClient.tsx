@@ -51,7 +51,7 @@ export function ChatPageClient() {
   const ui = usePageUIState({ mounted });
   const { themeId, setThemeId, normalizedThemeId, themeStyle, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, sidebarDragRef, lightboxImage, setLightboxImage, showChatsPanel, setShowChatsPanel, openChatMenuId, setOpenChatMenuId, chatMenuButtonRefs, renamingChatId, setRenamingChatId, renameValue, setRenameValue, mentionSelectedIndex, setMentionSelectedIndex } = ui;
   const registry = useAgentRegistry({ acp });
-  const { agents, agentsLoading, lastUsedAgent, chatLastUsedAgents, lastUsedAgentScope, rememberLastUsedAgent, reloadAgents } = registry;
+  const { agents, agentsLoading, lastUsedAgent, chatLastUsedAgents, lastUsedAgentScope, rememberLastUsedAgent, reloadAgents, retryStorage: retryRegistryStorage } = registry;
   const agentsRef = useRef(agents); agentsRef.current = agents;
   const agentsLoadingRef = useRef(agentsLoading); agentsLoadingRef.current = agentsLoading;
   // Resolve which agent the composer should pre-fill for a given chat, based
@@ -81,10 +81,10 @@ export function ChatPageClient() {
   const retryStorage = useCallback(async () => {
     await Promise.allSettled([
       reloadStoredChatState(),
-      reloadAgents(),
+      retryRegistryStorage(),
       chatSearch.retry(),
     ]);
-  }, [reloadStoredChatState, reloadAgents, chatSearch]);
+  }, [reloadStoredChatState, retryRegistryStorage, chatSearch]);
   // runVersion is read so the PlanProgressBar re-renders as node statuses change.
   void runVersion;
   const activeWorkflow = selectActiveWorkflowOrchestration(orchestrationsRef, currentChatId, dismissedWorkflowBarOrchId);

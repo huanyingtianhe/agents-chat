@@ -23,10 +23,10 @@ export function isStorageUnavailableResult(value: unknown): value is StorageUnav
 }
 
 export async function readJsonApiResponse<T = any>(res: Response): Promise<T> {
-  const data = await res.json();
-  if (res.status === 503 && isStorageUnavailableResult(data)) {
+  if (res.status === 503) {
     throw new StorageUnavailableError();
   }
+  const data = await res.json();
   return data as T;
 }
 
@@ -40,6 +40,9 @@ export async function acpApi(body: Record<string, unknown>) {
     // Session expired — redirect to login
     window.location.href = '/login';
     return { ok: false, error: 'Session expired. Please sign in again.' };
+  }
+  if (res.status === 503) {
+    throw new StorageUnavailableError();
   }
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {

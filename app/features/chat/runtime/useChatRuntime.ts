@@ -7,7 +7,7 @@ import type { AgentUserRequestResponse, ChatHistoryEntry, ChatMessage, DispatchT
 import { makeId, PromptSendFailedError } from './chatRunLoop';
 import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
-import { createPersistenceHandlers } from './chatPersistenceService';
+import { createPersistenceHandlers, type PendingStorageWrite } from './chatPersistenceService';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
@@ -90,6 +90,8 @@ export function useChatRuntime({
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
+  const pendingStorageWritesRef = useRef<PendingStorageWrite[]>([]);
+  const storageWriteDrainRef = useRef<Promise<boolean> | null>(null);
 
   /* ── Cross-service callback refs ── */
   const maybeAdvanceOrchestrationRef = useRef<(id: string) => Promise<void>>(async () => {});
@@ -200,6 +202,8 @@ export function useChatRuntime({
     prepareResume: (chatId) => hydrateOrchestrationsForChatRef.current(chatId),
     finalizeResume: (chatId) => reconcileRunningWorkflowNodesRef.current(chatId),
     onStorageUnavailable: setStorageError,
+    pendingStorageWritesRef,
+    storageWriteDrainRef,
   });
   saveChatToHistoryRef.current = persistHandlers.saveChatToHistory;
 
@@ -568,6 +572,7 @@ export function useChatRuntime({
 
   async function reloadStoredChatState() {
     try {
+      if (!await persistHandlers.retryPendingStorageWrites()) return;
       const data = await readJsonApiResponse(await fetch('/api/chats'));
       if (!data.ok || !Array.isArray(data.chats)) return;
       const normalizedHistory = normalizeChatHistory(data.chats);
@@ -576,14 +581,14 @@ export function useChatRuntime({
         const serverIds = new Set(normalizedHistory.map((chat) => chat.id));
         const retainedLocalEntries = chatHistoryRef.current.filter((chat) => !serverIds.has(chat.id));
         setChatHistory(normalizeChatHistory([...normalizedHistory, ...retainedLocalEntries]));
-        setStorageError(null);
+        if (!persistHandlers.hasPendingStorageWrites()) setStorageError(null);
         return;
       }
 
       const preferredChatId = (data.lastChatId as string | null) || (data.chats[0]?.id as string | null);
       if (!preferredChatId) {
         setChatHistory(normalizedHistory);
-        setStorageError(null);
+        if (!persistHandlers.hasPendingStorageWrites()) setStorageError(null);
         return;
       }
 
@@ -614,7 +619,7 @@ export function useChatRuntime({
           try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(inputHistoryRef.current)); } catch { /* ignore */ }
         }
       }
-      setStorageError(null);
+      if (!persistHandlers.hasPendingStorageWrites()) setStorageError(null);
     } catch (error) {
       if (error instanceof StorageUnavailableError) {
         setStorageError(error);

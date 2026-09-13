@@ -32,6 +32,15 @@ export type PersistenceContext = {
   prepareResume?: (chatId: string) => Promise<void> | void;
   finalizeResume?: (chatId: string) => Promise<void> | void;
   onStorageUnavailable?: (error: StorageUnavailableError) => void;
+  pendingStorageWritesRef: MutableRefObject<PendingStorageWrite[]>;
+  storageWriteDrainRef: MutableRefObject<Promise<boolean> | null>;
+};
+
+export type PendingStorageWrite = {
+  key: string | null;
+  input: RequestInfo | URL;
+  init?: RequestInit;
+  version: number;
 };
 
 export function createPersistenceHandlers(ctx: PersistenceContext) {
@@ -45,6 +54,57 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     return readJsonApiResponse(await fetch(input, init));
   }
 
+  function queueStorageWrite(key: string | null, input: RequestInfo | URL, init?: RequestInit) {
+    const existing = key
+      ? ctx.pendingStorageWritesRef.current.find((write) => write.key === key)
+      : undefined;
+    if (existing) {
+      existing.input = input;
+      existing.init = init;
+      existing.version += 1;
+      return;
+    }
+    ctx.pendingStorageWritesRef.current.push({ key, input, init, version: 0 });
+  }
+
+  async function retryPendingStorageWrites(): Promise<boolean> {
+    if (ctx.storageWriteDrainRef.current) return ctx.storageWriteDrainRef.current;
+    const drain = (async () => {
+      while (ctx.pendingStorageWritesRef.current.length > 0) {
+        const write = ctx.pendingStorageWritesRef.current[0];
+        const version = write.version;
+        try {
+          await requestStorage(write.input, write.init);
+        } catch (error) {
+          if (reportStorageUnavailable(error)) return false;
+          if (ctx.pendingStorageWritesRef.current[0] === write && write.version === version) {
+            ctx.pendingStorageWritesRef.current.shift();
+          }
+          throw error;
+        }
+        if (ctx.pendingStorageWritesRef.current[0] === write && write.version === version) {
+          ctx.pendingStorageWritesRef.current.shift();
+        }
+      }
+      return true;
+    })();
+    ctx.storageWriteDrainRef.current = drain;
+    try {
+      return await drain;
+    } finally {
+      if (ctx.storageWriteDrainRef.current === drain) ctx.storageWriteDrainRef.current = null;
+    }
+  }
+
+  async function persistQueuedWrite(
+    key: string | null,
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<boolean> {
+    queueStorageWrite(key, input, init);
+    return retryPendingStorageWrites();
+  }
+
   async function persistLoadedChatMigration(
     chatId: string, name: string, ts: number,
     chatMessages: ChatMessage[], agentSessions: Record<string, string>,
@@ -54,7 +114,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
       messages: getPersistableMessages(chatMessages), agentSessions,
     };
     try {
-      await requestStorage('/api/chats', {
+      await persistQueuedWrite(`save-chat:${chatId}`, '/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
@@ -117,16 +177,17 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
     const chatData = { id: chatId, name, ts: savedAt, messages: persistable, agentSessions, agentId };
     try {
-      await requestStorage('/api/chats', {
+      queueStorageWrite(`save-chat:${chatId}`, '/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: chatData }),
       });
       if (chatId === ctx.currentChatIdRef.current) {
-        await requestStorage('/api/chats', {
+        queueStorageWrite('set-last-chat', '/api/chats', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'set-last-chat', chatId }),
         });
       }
+      await retryPendingStorageWrites();
     } catch (error) {
       reportStorageUnavailable(error);
     }
@@ -230,7 +291,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     });
 
     // Persist last active chat AFTER all state updates to fix lastChatId race
-    void requestStorage('/api/chats', {
+    void persistQueuedWrite('set-last-chat', '/api/chats', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'set-last-chat', chatId }),
     }).catch((error) => { reportStorageUnavailable(error); });
@@ -278,7 +339,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
     try {
-      await requestStorage('/api/chats', {
+      await persistQueuedWrite(`save-chat:${newId}`, '/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
       });
@@ -293,7 +354,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.setCurrentChatId(newId);
     ctx.setActiveSidebarChatId(newId);
     try {
-      await requestStorage('/api/chats', {
+      await persistQueuedWrite('set-last-chat', '/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'set-last-chat', chatId: newId }),
       });
@@ -336,10 +397,11 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     if (!newName.trim()) return;
     const trimmed = newName.trim();
     try {
-      await requestStorage('/api/chats', {
+      const persisted = await persistQueuedWrite(null, '/api/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'rename', chatId, name: trimmed }),
       });
+      if (!persisted) return;
       ctx.setChatHistory(prev => prev.map(c => c.id === chatId ? { ...c, name: trimmed } : c));
       if (chatId === ctx.currentChatIdRef.current) ctx.setChatName(trimmed);
     } catch (error) {
@@ -350,7 +412,8 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
 
   async function deleteChatById(chatId: string, onDone?: () => void) {
     try {
-      await requestStorage(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      const persisted = await persistQueuedWrite(null, `/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      if (!persisted) return;
       ctx.setChatHistory(prev => prev.filter(c => c.id !== chatId));
       if (chatId === ctx.currentChatIdRef.current) {
         ctx.currentChatIdRef.current = '';
@@ -369,5 +432,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
   return {
     loadChatIntoCache, persistLoadedChatMigration, saveChatToHistory, saveCurrentChatToHistory,
     clearChatMessages, loadChat, createNewChat, shareCurrentChat, renameChatById, deleteChatById,
+    retryPendingStorageWrites,
+    hasPendingStorageWrites: () => ctx.pendingStorageWritesRef.current.length > 0,
   };
 }

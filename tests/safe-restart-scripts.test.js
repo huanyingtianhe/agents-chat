@@ -504,3 +504,132 @@ test('accepts --wait 0 and skips health polling', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /curl /);
 });
+
+test('declares the guarded Windows deployment and restart contracts', () => {
+  const safeRestart = readFileSync(path.join(projectRoot, 'scripts', 'safe-restart.ps1'), 'utf8');
+  const start = readFileSync(path.join(projectRoot, 'scripts', 'start.ps1'), 'utf8');
+  const watchdog = readFileSync(path.join(projectRoot, 'scripts', 'service-watchdog.ps1'), 'utf8');
+  const installer = readFileSync(path.join(projectRoot, 'scripts', 'install-scheduled-task.ps1'), 'utf8');
+
+  assertBefore(safeRestart, 'acquire-lease', 'npm ci');
+  assertBefore(safeRestart, 'npm ci', ' prepare ');
+  assertBefore(safeRestart, ' prepare ', 'npm run build');
+  assertBefore(safeRestart, 'npm run build', 'Stopping Scheduled Task');
+  assert.match(safeRestart, /\[switch\]\$Deploy/);
+  assert.match(safeRestart, /if \(\$Deploy\)[\s\S]*npm ci/);
+  assert.match(safeRestart, /release-operation-lease\.mjs/);
+  assert.match(safeRestart, /PORT_IN_USE/);
+  assert.match(safeRestart, /Get-NetTCPConnection[\s\S]*Get-CimInstance Win32_Process/);
+  assert.doesNotMatch(safeRestart, /Stop-Process\s+-Id\s+\$[A-Za-z]+\s+-Force[\s\S]{0,120}Get-NetTCPConnection/);
+
+  assert.match(start, /\[string\]\$NodePath/);
+  assert.match(start, /runtime-preflight\.mjs[\s\S]*check-only/);
+  assert.match(start, /start-server\.mjs/);
+  assert.doesNotMatch(start, /npm\s+run\s+build/i);
+  assert.doesNotMatch(start, /Get-NetTCPConnection/);
+
+  assert.match(watchdog, /\[string\]\$NodePath/);
+  assert.match(watchdog, /start\.ps1[\s\S]*-NodePath/);
+  assert.doesNotMatch(watchdog, /C:\\Program Files\\nodejs/);
+  assert.doesNotMatch(watchdog, /Stop-Port3000Processes/);
+
+  assert.match(installer, /\[string\]\$NodePath/);
+  assert.match(installer, /service-watchdog\.ps1[\s\S]*-NodePath/);
+  assert.match(installer, /process\.execPath/);
+  assert.match(installer, /24/);
+});
+
+test('PowerShell scripts parse when PowerShell is available', (t) => {
+  const shell = ['pwsh', 'powershell'].find((candidate) =>
+    spawnSync(candidate, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], {
+      encoding: 'utf8',
+    }).status === 0);
+  if (!shell) {
+    t.skip('PowerShell is not installed on this host');
+    return;
+  }
+
+  const scripts = [
+    'safe-restart.ps1',
+    'deploy.ps1',
+    'start.ps1',
+    'service-watchdog.ps1',
+    'install-scheduled-task.ps1',
+  ].map((name) => path.join(projectRoot, 'scripts', name));
+  const command = [
+    '$failed = $false',
+    ...scripts.map((script) => [
+      '$errors = $null',
+      `[System.Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'", "''")}', [ref]$null, [ref]$errors) | Out-Null`,
+      'if ($errors.Count) { $errors | ForEach-Object { [Console]::Error.WriteLine($_) }; $failed = $true }',
+    ].join('; ')),
+    'if ($failed) { exit 1 }',
+  ].join('; ');
+  const result = spawnSync(shell, ['-NoProfile', '-Command', command], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('deploy.ps1 forwards deployment options to the safe restart wrapper', (t) => {
+  const shell = ['pwsh', 'powershell'].find((candidate) =>
+    spawnSync(candidate, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], {
+      encoding: 'utf8',
+    }).status === 0);
+  if (!shell) {
+    t.skip('PowerShell is not installed on this host');
+    return;
+  }
+
+  const root = path.join(workRoot, 'windows-deploy-wrapper');
+  const scripts = path.join(root, 'scripts');
+  mkdirSync(scripts, { recursive: true });
+  cpSync(path.join(projectRoot, 'scripts', 'deploy.ps1'), path.join(scripts, 'deploy.ps1'));
+  writeFileSync(path.join(scripts, 'safe-restart.ps1'), String.raw`
+param(
+  [switch]$Deploy,
+  [switch]$SkipGitPull,
+  [switch]$RemoveTask,
+  [string]$TaskName,
+  [string]$ProjectDir,
+  [string]$TaskLogonType,
+  [string]$TaskTriggerType,
+  [switch]$NoWait,
+  [int]$WaitSeconds
+)
+[pscustomobject]@{
+  Deploy = [bool]$Deploy
+  SkipGitPull = [bool]$SkipGitPull
+  RemoveTask = [bool]$RemoveTask
+  TaskName = $TaskName
+  ProjectDir = $ProjectDir
+  TaskLogonType = $TaskLogonType
+  TaskTriggerType = $TaskTriggerType
+  NoWait = [bool]$NoWait
+  WaitSeconds = $WaitSeconds
+} | ConvertTo-Json -Compress
+`);
+  const result = spawnSync(shell, [
+    '-NoProfile',
+    '-File',
+    path.join(scripts, 'deploy.ps1'),
+    '-ProjectDir', root,
+    '-SkipGitPull',
+    '-NoWait',
+    '-WaitSeconds', '7',
+  ], { cwd: root, encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  const forwarded = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
+  assert.deepEqual(forwarded, {
+    Deploy: true,
+    SkipGitPull: true,
+    RemoveTask: false,
+    TaskName: 'Agents-Chat-Startup',
+    ProjectDir: root,
+    TaskLogonType: 'Interactive',
+    TaskTriggerType: 'AtLogOn',
+    NoWait: true,
+    WaitSeconds: 7,
+  });
+});

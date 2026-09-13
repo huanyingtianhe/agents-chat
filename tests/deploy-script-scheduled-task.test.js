@@ -10,23 +10,23 @@ function includesAll(...needles) {
 }
 
 assert(
-  includesAll('$ExpectedWatchdogScript', 'Join-Path $PSScriptRoot \'service-watchdog.ps1\'', 'WorkingDirectory'),
-  'deploy.ps1 should validate that the Scheduled Task action points to scripts/service-watchdog.ps1 with the expected working directory'
+  includesAll('safe-restart.ps1', 'Deploy = $true', 'SkipGitPull', 'NoWait', 'WaitSeconds'),
+  'deploy.ps1 should delegate the guarded deployment sequence to safe-restart.ps1'
 );
 
 assert(
-  includesAll('$watchdogLogLastWriteBefore', '$watchdogLogUpdated', 'LastWriteTimeUtc'),
-  'deploy.ps1 should require a fresh watchdog log update instead of treating stale logs as proof that the task started'
+  !/npm\s+install/i.test(script),
+  'deploy.ps1 should not use npm install'
 );
 
 assert(
-  includesAll('Installing npm dependencies', 'npm install --no-audit --no-fund', "throw 'npm install failed'"),
-  'deploy.ps1 should install npm dependencies before restarting the Scheduled Task'
+  !script.includes('Stop-Port3000Processes') && !script.includes('Get-NetTCPConnection'),
+  'deploy.ps1 should not kill arbitrary port owners'
 );
 
 assert(
-  !script.includes('if ((Test-Path $WatchdogLog) -or ($task -and $task.State -eq \'Running\') -or ($taskInfo -and $taskInfo.LastRunTime -ne $lastRunBefore))'),
-  'deploy.ps1 should not treat an existing stale watchdog log or LastRunTime change alone as a successful task start'
+  !script.includes('npm ci') || script.indexOf('acquire-lease') < script.indexOf('npm ci'),
+  'if deploy.ps1 performs work directly, it must acquire the lease before npm ci'
 );
 
 console.log('deploy.ps1 scheduled task validation checks passed');

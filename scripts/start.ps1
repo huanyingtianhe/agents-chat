@@ -1,307 +1,247 @@
-# Start ACP Chat with tunnel (Dev Tunnel or Cloudflare) or just the local server
-# Usage: .\start.ps1              → uses Dev Tunnel (permanent URL)
-#        .\start.ps1 -Cloudflare  → uses Cloudflare quick tunnel (random URL)
-#        .\start.ps1 -NoTunnel    → just start the local server (no tunnel, no Azure AD update)
+# Start an existing guarded Agents-Chat production build.
+
 param(
     [switch]$Cloudflare,
-    [switch]$NoTunnel
+    [switch]$NoTunnel,
+    [string]$NodePath,
+    [int]$AppPort = 3000
 )
 
+$ErrorActionPreference = 'Stop'
 if ($Cloudflare -and $NoTunnel) {
-    Write-Host "-Cloudflare and -NoTunnel are mutually exclusive" -ForegroundColor Red
-    exit 2
+    throw '-Cloudflare and -NoTunnel are mutually exclusive.'
 }
 
-$ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $PSScriptRoot
-$EnvFile = Join-Path $ProjectDir ".env.local"
-$AppPort = 3000
+$EnvFile = Join-Path $ProjectDir '.env.local'
+$Preflight = Join-Path $PSScriptRoot 'runtime-preflight.mjs'
+$ServerLauncher = Join-Path $PSScriptRoot 'start-server.mjs'
+$BuildId = Join-Path $ProjectDir '.next\BUILD_ID'
+$LogDir = Join-Path $ProjectDir 'logs'
+$server = $null
+$tunnel = $null
 
 function Read-DotEnvFile {
-    param([Parameter(Mandatory=$true)][string]$Path)
-
+    param([string]$Path)
     $values = @{}
-    if (-not (Test-Path $Path)) {
-        throw "Environment file not found: $Path"
-    }
-
-    Get-Content $Path | ForEach-Object {
+    if (-not (Test-Path -LiteralPath $Path)) { return $values }
+    Get-Content -LiteralPath $Path | ForEach-Object {
         $line = $_.Trim()
-        if (-not $line -or $line.StartsWith("#")) { return }
-        $parts = $line -split "=", 2
+        if (-not $line -or $line.StartsWith('#')) { return }
+        $parts = $line -split '=', 2
         if ($parts.Count -ne 2) { return }
-
-        $key = $parts[0].Trim()
         $value = $parts[1].Trim()
-        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'"))) {
             $value = $value.Substring(1, $value.Length - 2)
         }
-        $values[$key] = $value
+        $values[$parts[0].Trim()] = $value
     }
-
     return $values
 }
 
 function Get-RequiredEnvValue {
-    param(
-        [Parameter(Mandatory=$true)][hashtable]$Values,
-        [Parameter(Mandatory=$true)][string]$Name
-    )
-
+    param([hashtable]$Values, [string]$Name)
     if (-not $Values.ContainsKey($Name) -or [string]::IsNullOrWhiteSpace($Values[$Name])) {
         throw "Missing required value '$Name' in $EnvFile"
     }
-
     return $Values[$Name]
+}
+
+function Set-NextAuthUrl {
+    param([string]$Url)
+    if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { return }
+    $lines = @(Get-Content -LiteralPath $EnvFile)
+    $found = $false
+    $updated = @($lines | ForEach-Object {
+        if ($_ -match '^\s*#?\s*NEXTAUTH_URL\b') {
+            $found = $true
+            "NEXTAUTH_URL=$Url"
+        } else {
+            $_
+        }
+    })
+    if (-not $found) { $updated += "NEXTAUTH_URL=$Url" }
+    $updated | Set-Content -LiteralPath $EnvFile
+}
+
+function Stop-TrackedProcess {
+    param($Process, [string]$Name)
+    if (-not $Process) { return }
+    try { $Process.Refresh() } catch { return }
+    if ($Process.HasExited) { return }
+    Write-Host "Stopping tracked $Name process PID $($Process.Id)..." -ForegroundColor Yellow
+    Stop-Process -Id $Process.Id -ErrorAction SilentlyContinue
+    if (-not $Process.WaitForExit(10000)) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($NodePath)) {
+    $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeCommand) { throw 'Node.js was not found. Install or activate Node.js 24.' }
+    $NodePath = (& $nodeCommand.Source -p 'process.execPath').Trim()
+}
+if (-not [IO.Path]::IsPathRooted($NodePath) -or -not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
+    throw "NodePath must be an existing absolute Node.js 24 executable path: $NodePath"
+}
+$nodeMajor = (& $NodePath -p "process.versions.node.split('.')[0]").Trim()
+if ($LASTEXITCODE -ne 0 -or $nodeMajor -ne '24') {
+    throw "NodePath must run Node.js 24: $NodePath"
+}
+if (-not (Test-Path -LiteralPath $BuildId -PathType Leaf)) {
+    throw "Production build is missing ($BuildId). Run .\scripts\deploy.ps1 from an elevated PowerShell session."
+}
+if ($AppPort -lt 1 -or $AppPort -gt 65535) {
+    throw "AppPort must be between 1 and 65535."
+}
+
+Set-Location $ProjectDir
+& $NodePath $Preflight check-only --project-root $ProjectDir --manager windows
+if ($LASTEXITCODE -ne 0) {
+    throw "Runtime/storage check-only failed under Node executable: $NodePath"
 }
 
 $DotEnv = Read-DotEnvFile -Path $EnvFile
 if ($NoTunnel) {
-    $AppId = $null
-    $DevTunnelName = $null
-    $DevTunnelUrl = $null
-} else {
-    $AppId = Get-RequiredEnvValue -Values $DotEnv -Name "AZURE_AD_CLIENT_ID"
-    $DevTunnelName = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_NAME"
-    $DevTunnelUrl = Get-RequiredEnvValue -Values $DotEnv -Name "DEV_TUNNEL_URL"
-}
-
-Write-Host "[$ProjectDir] Cleaning .next cache..." -ForegroundColor Cyan
-Set-Location $ProjectDir
-Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue
-
-Write-Host "[$ProjectDir] Building..." -ForegroundColor Cyan
-npm run build
-if ($LASTEXITCODE -ne 0) { Write-Host "Build failed" -ForegroundColor Red; exit 1 }
-
-if ($NoTunnel) {
-    Write-Host "No tunnel mode: serving on http://localhost:$AppPort only" -ForegroundColor Cyan
     $tunnelUrl = "http://localhost:$AppPort"
 } elseif ($Cloudflare) {
-    # --- Cloudflare quick tunnel (random URL each time) ---
-    Write-Host "Starting Cloudflare tunnel..." -ForegroundColor Cyan
-    $tunnelLog = "$env:TEMP\cloudflared-$PID.log"
-    $tunnel = Start-Process -FilePath "C:\Program Files (x86)\cloudflared\cloudflared.exe" `
+    $AppId = Get-RequiredEnvValue -Values $DotEnv -Name 'AZURE_AD_CLIENT_ID'
+    $tunnelLog = Join-Path $LogDir "cloudflared-$PID.log"
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    $tunnel = Start-Process -FilePath 'C:\Program Files (x86)\cloudflared\cloudflared.exe' `
         -ArgumentList "tunnel --url http://localhost:$AppPort" `
         -PassThru -NoNewWindow -RedirectStandardError $tunnelLog
-
     $tunnelUrl = $null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Seconds 1
-        if (Test-Path $tunnelLog) {
-            $match = Select-String -Path $tunnelLog -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" | Select-Object -First 1
-            if ($match) { $tunnelUrl = $match.Matches[0].Value; break }
+        $match = Select-String -Path $tunnelLog -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($match) { $tunnelUrl = $match.Matches[0].Value; break }
+    }
+    if (-not $tunnelUrl) { throw "Failed to obtain a Cloudflare tunnel URL. Log: $tunnelLog" }
+    Write-Host "Cloudflare tunnel: $tunnelUrl" -ForegroundColor Green
+    Set-NextAuthUrl -Url $tunnelUrl
+    $appObjectId = (& az ad app show --id $AppId --query id -o tsv 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $appObjectId) {
+        $azureBody = Join-Path $LogDir "az-publicclient-update-$PID.json"
+        @{
+            publicClient = @{
+                redirectUris = @(
+                    "$tunnelUrl/api/auth/callback/azure-ad",
+                    "http://localhost:$AppPort/api/auth/callback/azure-ad"
+                )
+            }
+        } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $azureBody -Encoding UTF8
+        & az rest --method PATCH `
+            --url "https://graph.microsoft.com/v1.0/applications/$appObjectId" `
+            --body "@$azureBody" `
+            --headers 'Content-Type=application/json' 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Azure AD redirect update failed. Run 'az login' and restart." -ForegroundColor Yellow
         }
-    }
-    if (-not $tunnelUrl) {
-        Write-Host "Failed to get tunnel URL" -ForegroundColor Red
-        Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue
-        exit 1
-    }
-    Write-Host "Tunnel: $tunnelUrl" -ForegroundColor Green
-
-    # Update .env.local
-    $envFile = Join-Path $ProjectDir ".env.local"
-    if (Test-Path $envFile) {
-        $lines = Get-Content $envFile
-        $hasNextAuthUrl = [bool]($lines | Where-Object { $_ -match "^\s*#?\s*NEXTAUTH_URL\b" } | Select-Object -First 1)
-        $lines = $lines | ForEach-Object {
-            if ($_ -match "^\s*#?\s*NEXTAUTH_URL\b") { "NEXTAUTH_URL=$tunnelUrl" } else { $_ }
-        }
-        if (-not $hasNextAuthUrl) { $lines += "NEXTAUTH_URL=$tunnelUrl" }
-        $lines | Set-Content $envFile
-    }
-
-    # Update Azure AD redirect URIs (publicClient platform)
-    Write-Host "Updating Azure AD app redirect URIs..." -ForegroundColor Cyan
-    $appObjId = (az ad app show --id $AppId --query "id" -o tsv 2>$null)
-    if ($appObjId) {
-        $bodyFile = "$env:TEMP\az-publicclient-update.json"
-        @{ publicClient = @{ redirectUris = @("$tunnelUrl/api/auth/callback/azure-ad", "http://localhost:$AppPort/api/auth/callback/azure-ad") } } |
-            ConvertTo-Json -Depth 3 | Set-Content $bodyFile -Encoding UTF8
-        az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$appObjId" --body "@$bodyFile" --headers "Content-Type=application/json" 2>$null
-        if ($LASTEXITCODE -eq 0) { Write-Host "Azure AD redirect updated" -ForegroundColor Green }
-        else { Write-Host "Warning: Failed to update Azure AD app" -ForegroundColor Yellow }
-        Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $azureBody -Force -ErrorAction SilentlyContinue
     } else {
-        Write-Host "Warning: Failed to get app (run 'az login' first?)" -ForegroundColor Yellow
+        Write-Host "Azure AD application lookup failed. Run 'az login' and restart." -ForegroundColor Yellow
     }
 } else {
-    # --- Dev Tunnel (permanent URL) ---
-    $tunnelUrl = $DevTunnelUrl
-
-    # Ensure .env.local has the permanent URL
-    $envFile = Join-Path $ProjectDir ".env.local"
-    if (Test-Path $envFile) {
-        $lines = Get-Content $envFile
-        $hasNextAuthUrl = [bool]($lines | Where-Object { $_ -match "^\s*#?\s*NEXTAUTH_URL\b" } | Select-Object -First 1)
-        $lines = $lines | ForEach-Object {
-            if ($_ -match "^\s*#?\s*NEXTAUTH_URL\b") { "NEXTAUTH_URL=$tunnelUrl" } else { $_ }
-        }
-        if (-not $hasNextAuthUrl) { $lines += "NEXTAUTH_URL=$tunnelUrl" }
-        $lines | Set-Content $envFile
-    }
+    $DevTunnelName = Get-RequiredEnvValue -Values $DotEnv -Name 'DEV_TUNNEL_NAME'
+    $tunnelUrl = Get-RequiredEnvValue -Values $DotEnv -Name 'DEV_TUNNEL_URL'
+    Set-NextAuthUrl -Url $tunnelUrl
 }
 
-# Kill any existing server on the supervised app port
-$oldPids = Get-NetTCPConnection -LocalPort $AppPort -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | Where-Object { $_ -ne 0 }
-foreach ($p in $oldPids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
-if ($oldPids) { Write-Host "Killed old server on port $AppPort" -ForegroundColor Yellow; Start-Sleep -Seconds 1 }
-
-# Logging defaults for pino + pino-roll (override via .env.local if needed)
-if (-not $env:LOG_LEVEL)            { $env:LOG_LEVEL = "info" }
-if (-not $env:LOG_DIR)              { $env:LOG_DIR = Join-Path $ProjectDir "logs" }
-if (-not $env:LOG_FILE)             { $env:LOG_FILE = "app.log" }
-if (-not $env:LOG_ROTATE_FREQUENCY) { $env:LOG_ROTATE_FREQUENCY = "daily" }
-if (-not $env:LOG_ROTATE_SIZE)      { $env:LOG_ROTATE_SIZE = "10m" }
-if (-not $env:LOG_RETENTION)        { $env:LOG_RETENTION = "7" }
+if (-not $env:LOG_LEVEL) { $env:LOG_LEVEL = 'info' }
+if (-not $env:LOG_DIR) { $env:LOG_DIR = $LogDir }
+if (-not $env:LOG_FILE) { $env:LOG_FILE = 'app.log' }
+if (-not $env:LOG_ROTATE_FREQUENCY) { $env:LOG_ROTATE_FREQUENCY = 'daily' }
+if (-not $env:LOG_ROTATE_SIZE) { $env:LOG_ROTATE_SIZE = '10m' }
+if (-not $env:LOG_RETENTION) { $env:LOG_RETENTION = '7' }
 New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
-Write-Host "Logs -> $($env:LOG_DIR)\$($env:LOG_FILE) (level=$($env:LOG_LEVEL), rotate=$($env:LOG_ROTATE_FREQUENCY)/$($env:LOG_ROTATE_SIZE), keep=$($env:LOG_RETENTION))" -ForegroundColor DarkGray
-
-Write-Host "Starting Next.js server on port $AppPort..." -ForegroundColor Cyan
-$serverOut = Join-Path $env:LOG_DIR "server.log"
-$serverErr = Join-Path $env:LOG_DIR "server-error.log"
-$nextStartCommand = "npx next start --port $AppPort"
-$server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c $nextStartCommand" -WorkingDirectory $ProjectDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
-Start-Sleep -Seconds 2
+$serverOut = Join-Path $env:LOG_DIR 'server.log'
+$serverErr = Join-Path $env:LOG_DIR 'server-error.log'
+$serverArguments = "`"$ServerLauncher`" --port $AppPort"
+$server = Start-Process -FilePath $NodePath `
+    -ArgumentList $serverArguments `
+    -WorkingDirectory $ProjectDir `
+    -PassThru -WindowStyle Hidden `
+    -RedirectStandardOutput $serverOut `
+    -RedirectStandardError $serverErr
 
 if (-not $Cloudflare -and -not $NoTunnel) {
-    Write-Host "Starting Dev Tunnel ($DevTunnelName)..." -ForegroundColor Cyan
-    $tunnel = Start-Process -FilePath "devtunnel" -ArgumentList "host $DevTunnelName" -PassThru -NoNewWindow
-    Start-Sleep -Seconds 3
+    $tunnel = Start-Process -FilePath 'devtunnel' `
+        -ArgumentList @('host', $DevTunnelName) `
+        -PassThru -NoNewWindow
 }
 
-Write-Host "`nReady! $tunnelUrl" -ForegroundColor Green
-Write-Host "Press Ctrl+C to stop`n" -ForegroundColor DarkGray
-
-$healthCheckUrl = "http://localhost:$AppPort/api/auth/providers"
+$healthCheckUrl = "http://localhost:$AppPort/api/health/storage"
 $tunnelHealthCheckUrl = $null
-if (-not $NoTunnel) {
-    $tunnelHealthCheckUrl = "$($tunnelUrl.TrimEnd('/'))/api/auth/providers"
-    Write-Host "Public tunnel health check: $tunnelHealthCheckUrl" -ForegroundColor DarkGray
-}
+if (-not $NoTunnel) { $tunnelHealthCheckUrl = "$($tunnelUrl.TrimEnd('/'))/api/health/storage" }
 $healthFailures = 0
 $tunnelHealthFailures = 0
 $maxHealthFailures = 3
 $maxTunnelHealthFailures = 3
 $exitCode = 0
 
-# Wait for the server to respond before entering the monitoring loop
 Write-Host "Waiting for server to become ready at $healthCheckUrl..." -ForegroundColor Cyan
 $startupDeadline = (Get-Date).AddSeconds(60)
 $startupReady = $false
 while ((Get-Date) -lt $startupDeadline) {
-    try { $server.Refresh() } catch {}
-    if ($server.HasExited) {
-        Write-Host "Next.js server exited during startup (code $($server.ExitCode))." -ForegroundColor Red
-        $exitCode = 1
-        break
-    }
+    $server.Refresh()
+    if ($server.HasExited) { $exitCode = 1; break }
     try {
-        $r = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-        if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400) {
-            Write-Host "Server is ready." -ForegroundColor Green
+        $response = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
             $startupReady = $true
             break
         }
-    } catch { }
+    } catch {}
     Start-Sleep -Seconds 3
 }
-
-if (-not $startupReady -and $exitCode -eq 0) {
-    Write-Host "Server did not become ready within 60 seconds; exiting." -ForegroundColor Red
-    $exitCode = 1
-}
+if (-not $startupReady -and $exitCode -eq 0) { $exitCode = 1 }
 
 try {
     while ($exitCode -eq 0) {
         Start-Sleep -Seconds 10
-
-        try { $server.Refresh() } catch {}
-        if ($server.HasExited) {
-            Write-Host "Next.js server exited unexpectedly with code $($server.ExitCode)." -ForegroundColor Red
-            $exitCode = 1
-            break
-        }
-
+        $server.Refresh()
+        if ($server.HasExited) { $exitCode = 1; break }
         if ($tunnel) {
-            try { $tunnel.Refresh() } catch {}
-            if ($tunnel.HasExited) {
-                Write-Host "Tunnel exited unexpectedly with code $($tunnel.ExitCode)." -ForegroundColor Red
-                $exitCode = 1
-                break
-            }
+            $tunnel.Refresh()
+            if ($tunnel.HasExited) { $exitCode = 1; break }
         }
-
         try {
-            $response = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5
+            $response = Invoke-WebRequest -Uri $healthCheckUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
             if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
                 $healthFailures = 0
             } else {
                 $healthFailures++
-                Write-Host "Health check failed: $healthCheckUrl returned HTTP $($response.StatusCode) ($healthFailures/$maxHealthFailures)." -ForegroundColor Yellow
             }
         } catch {
             $healthFailures++
-            Write-Host "Health check failed: $healthCheckUrl did not respond ($healthFailures/$maxHealthFailures). $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "Health check failed: $healthCheckUrl ($healthFailures/$maxHealthFailures)." -ForegroundColor Yellow
         }
-
-        if ($healthFailures -ge $maxHealthFailures) {
-            Write-Host "Health check failed $healthFailures times; exiting so service-watchdog.ps1 can restart the app." -ForegroundColor Red
-            $exitCode = 1
-            break
-        }
+        if ($healthFailures -ge $maxHealthFailures) { $exitCode = 1; break }
 
         if ($tunnelHealthCheckUrl) {
             try {
-                $tunnelResponse = Invoke-WebRequest -Uri $tunnelHealthCheckUrl -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 5 -ErrorAction Stop
-                if ($tunnelResponse.StatusCode -ge 200 -and $tunnelResponse.StatusCode -lt 400) {
-                    if ($tunnelHealthFailures -gt 0) {
-                        Write-Host "Tunnel health check recovered: $tunnelHealthCheckUrl returned HTTP $($tunnelResponse.StatusCode)." -ForegroundColor Green
-                    }
+                $response = Invoke-WebRequest -Uri $tunnelHealthCheckUrl -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 5 -ErrorAction Stop
+                if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
                     $tunnelHealthFailures = 0
                 } else {
                     $tunnelHealthFailures++
-                    Write-Host "Tunnel health check failed: $tunnelHealthCheckUrl returned HTTP $($tunnelResponse.StatusCode) ($tunnelHealthFailures/$maxTunnelHealthFailures)." -ForegroundColor Yellow
                 }
             } catch {
-                $statusCode = $null
-                if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-                    $statusCode = [int]$_.Exception.Response.StatusCode
-                }
-
-                if ($statusCode -and $statusCode -ge 200 -and $statusCode -lt 400) {
-                    if ($tunnelHealthFailures -gt 0) {
-                        Write-Host "Tunnel health check recovered: $tunnelHealthCheckUrl returned HTTP $statusCode." -ForegroundColor Green
-                    }
-                    $tunnelHealthFailures = 0
-                } elseif ($statusCode) {
-                    $tunnelHealthFailures++
-                    Write-Host "Tunnel health check failed: $tunnelHealthCheckUrl returned HTTP $statusCode ($tunnelHealthFailures/$maxTunnelHealthFailures)." -ForegroundColor Yellow
-                } else {
-                    $tunnelHealthFailures++
-                    Write-Host "Tunnel health check failed: $tunnelHealthCheckUrl did not respond ($tunnelHealthFailures/$maxTunnelHealthFailures). $($_.Exception.Message)" -ForegroundColor Yellow
-                }
+                $tunnelHealthFailures++
+                Write-Host "Tunnel health check failed: $tunnelHealthCheckUrl ($tunnelHealthFailures/$maxTunnelHealthFailures)." -ForegroundColor Yellow
             }
-
-            if ($tunnelHealthFailures -ge $maxTunnelHealthFailures) {
-                Write-Host "Tunnel health check failed $tunnelHealthFailures times; exiting so service-watchdog.ps1 can restart the app and dev tunnel." -ForegroundColor Red
-                $exitCode = 1
-                break
-            }
+            if ($tunnelHealthFailures -ge $maxTunnelHealthFailures) { $exitCode = 1; break }
         }
     }
-} catch {
-    Write-Host "Supervisor loop failed: $($_.Exception.Message)" -ForegroundColor Red
-    $exitCode = 1
 } finally {
-    # Cleanup
-    if ($tunnel -and -not $tunnel.HasExited) { Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue }
-    if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    $pids = Get-NetTCPConnection -LocalPort $AppPort -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
-    foreach ($p in $pids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
-    if ($Cloudflare) { Remove-Item "$env:TEMP\cloudflared-$PID.log" -Force -ErrorAction SilentlyContinue }
-    Write-Host "Stopped." -ForegroundColor Yellow
+    Stop-TrackedProcess -Process $tunnel -Name 'tunnel'
+    Stop-TrackedProcess -Process $server -Name 'server'
 }
 
+if ($exitCode -ne 0) {
+    Write-Host "Managed process became unhealthy. Logs: $serverOut ; $serverErr" -ForegroundColor Red
+}
 exit $exitCode

@@ -3,7 +3,7 @@ module.exports = {
     name: 'agents-chat',
     script: 'scripts/start-server.mjs',
     interpreter: process.execPath,
-    cwd: '/home/xujx/wa/agents-chat',
+    cwd: __dirname,
     exec_mode: 'fork',
     instances: 1,
     env: {

@@ -19,11 +19,11 @@ EnvironmentFile=-__PROJECT_DIR__/.env.local
 EnvironmentFile=-/etc/agents-chat.env
 
 Environment=NODE_ENV=production
-Environment=PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment="PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Absolute path required — systemd's PATH doesn't include nvm.
-# If npm lives elsewhere, override with: sudo systemctl edit agents-chat
-ExecStart=__NPM__ start
+# The preflight and server use the same validated absolute Node executable.
+ExecStartPre="__NODE__" "__PROJECT_DIR__/scripts/runtime-preflight.mjs" check-only --project-root "__PROJECT_DIR__"
+ExecStart="__NODE__" "__PROJECT_DIR__/scripts/start-server.mjs"
 
 Restart=on-failure
 RestartSec=10

@@ -10,7 +10,9 @@
     "dev": "next dev --port 3010 --experimental-https",
     "build": "next build",
     "start": "next start --port 3010",
-    "start:prod": "next build && next start --port 3010"
+    "start:prod": "next build && next start --port 3010",
+    "test:safety": "node --test tests/runtime-safety.test.mjs tests/database-backup.test.mjs",
+    "diagnose": "node scripts/runtime-preflight.mjs diagnose"
   },
   "dependencies": {
     "@types/turndown": "^5.0.6",

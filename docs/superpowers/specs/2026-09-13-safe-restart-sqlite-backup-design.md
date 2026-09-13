@@ -45,6 +45,8 @@ The current repository does not prevent this failure:
 6. Retain startup guards when users bypass the recommended wrapper.
 7. Test failure paths without touching the developer's or production `.data`
    directory.
+8. Make every failed restart explain what failed, whether the previous service
+   and data are safe, and the exact next actions an operator can take.
 
 ## Non-goals
 
@@ -402,6 +404,88 @@ Every safety command emits a stable stage name and exits non-zero on failure.
 - Ctrl+C and termination handlers release owned locks and retain completed
   backups.
 
+## Operator-facing Failure Guidance
+
+A failed restart must never end with only a stack trace, native loader error,
+or generic message such as `health check failed`. Shared safety code returns a
+structured failure object; Bash and PowerShell wrappers render the same
+information in platform-appropriate commands.
+
+Every terminal failure contains these fields in this order:
+
+```text
+SAFE RESTART FAILED [NATIVE_ADDON_INCOMPATIBLE]
+
+What failed:
+  better-sqlite3 cannot load under Node.js 24.20.0 (ABI 137).
+
+Service state:
+  The existing agents-chat service is still running. It was not restarted.
+
+Data state:
+  chats.db and config.db were not modified.
+
+Next actions:
+  1. Activate Node.js 24.
+  2. Reinstall locked dependencies: npm ci
+  3. Retry: sudo ./scripts/safe-restart.sh systemd
+
+Diagnostics:
+  node --version
+  node -p "process.execPath + ' ABI=' + process.versions.modules"
+  sudo journalctl -u agents-chat -n 100 --no-pager
+```
+
+The exact wording may vary by platform, but every failure must answer:
+
+1. What failed, in plain language?
+2. Did the restart begin, and is the old service still running?
+3. Were the live databases modified?
+4. Was a verified backup created, and where is its batch directory?
+5. What safe commands should the user run next?
+6. Where can the user find detailed logs?
+
+### Stable failure categories
+
+| Code | User-facing meaning | Required next-action guidance |
+|---|---|---|
+| `NODE_VERSION_MISMATCH` | The command is using an unsupported Node version or executable. | Show expected and actual versions/path; activate or install Node 24, then retry the same safe command. |
+| `NATIVE_ADDON_INCOMPATIBLE` | `better-sqlite3` was built for another ABI/platform or cannot load. | Keep the old service running; activate Node 24, run `npm ci`, rerun preflight, then retry safe restart. |
+| `INVALID_PROJECT_ROOT` | The command is running from the wrong checkout/directory. | Show the resolved non-sensitive path and the exact `cd` command for the configured project root. |
+| `OPERATION_IN_PROGRESS` | Another deploy, backup, restart, or restore owns the lease. | Show owner PID/start time; wait for it, inspect the process, and only use the documented stale-lock command when the process is absent. |
+| `DATABASE_MISSING` | A database expected on this initialized instance is absent. | Do not start an empty database; verify the configured data path, list backup batches, and follow the restore procedure. |
+| `DATABASE_INTEGRITY_FAILED` | SQLite reported corruption or unreadable pages. | Do not restart or run migrations; preserve the live files, inspect available verified backups, and restore explicitly or escalate for recovery. |
+| `DATABASE_BUSY` | A long transaction prevented validation or backup within the timeout. | Keep the service running; wait for active work to finish, inspect logs, then retry. Do not copy the live `.db` manually. |
+| `BACKUP_NO_SPACE` | There is not enough free space for a verified batch. | Show required and available space; free space or move old backups through the supported cleanup command, then retry. |
+| `BACKUP_PERMISSION_DENIED` | The service account cannot write or secure the backup directory. | Show the expected owner/mode or Windows account and provide the applicable permission inspection commands. |
+| `BACKUP_VALIDATION_FAILED` | A candidate backup could not be reopened or failed `quick_check`. | Do not restart; retain the source database, identify the partial batch, and inspect logs before retrying. |
+| `DEPENDENCY_INSTALL_FAILED` | `npm ci` did not complete. | State that the old process may still run but on-disk dependencies are incomplete; rerun `npm ci` successfully before any restart. |
+| `BUILD_FAILED` | The production build failed. | State that no restart occurred, point to build output, fix the build, and rerun deployment. |
+| `MANAGER_CONFLICT` | Another manager is already running the same checkout. | Show which managers are active and commands to inspect/stop the unintended one; never stop it automatically. |
+| `PORT_IN_USE` | An unrelated process owns the configured port. | Show the PID and inspection command; require the user to identify and stop/reconfigure it rather than killing it automatically. |
+| `SERVICE_START_FAILED` | The manager could not start the guarded process. | State whether a verified backup exists and show `systemctl`, PM2, or Scheduled Task status/log commands. |
+| `STORAGE_HEALTH_FAILED` | The process started but real database reads failed. | Show backup batch, manager logs, safe stop command, and explicit restore/repair options; do not report deployment success. |
+| `RESTORE_PRECONDITION_FAILED` | Restore was requested while the service may still hold the databases or the batch is invalid. | Show how to stop and verify the selected manager, then revalidate the batch. |
+
+The structured object also carries `stage`, `serviceState`, `dataState`,
+`backupBatch`, and a list of action IDs. Wrappers map action IDs to commands so
+Linux systemd, PM2, and Windows users never receive irrelevant instructions.
+Unexpected failures use `UNEXPECTED_ERROR` but still report known service/data
+state and log locations; they do not expose raw secrets or SQL.
+
+If failure occurs after the old process has stopped, the message must say so
+prominently and prioritize the shortest non-destructive recovery path:
+
+1. Inspect the manager/startup logs.
+2. Correct a runtime/configuration problem and retry guarded start.
+3. Restore only when storage validation proves the live database is unusable
+   and the operator has selected a verified batch.
+
+README troubleshooting tables reproduce these categories in shorter form. The
+safe scripts also support a non-mutating diagnostics command, for example
+`runtime-preflight.mjs diagnose`, so users can rerun checks without attempting
+a restart or creating another backup.
+
 ## Testing
 
 Tests use temporary directories and isolated databases.
@@ -426,6 +510,9 @@ Use the built-in `node:test` runner to cover:
 - Health helper success, missing database, bad schema, and corrupt database.
 - Storage-error classification without swallowing unrelated application
   errors.
+- Stable operator-facing failures include service state, data state, backup
+  state, platform-correct actions, and log commands.
+- Failure rendering never includes secrets, SQL text, or database row values.
 - A guard that every production SQLite file belongs to the protected list.
 
 ### Script contract tests
@@ -441,6 +528,8 @@ Extend existing lightweight script tests to verify:
 - Windows watchdog restarts do not rebuild an existing deployment.
 - Both safe-restart wrappers call the common safety implementation and the
   correct manager.
+- Representative failures render actionable Linux systemd, PM2, and Windows
+  instructions and preserve the original non-zero exit code.
 - Build-time instrumentation does not initialize scheduler storage.
 - The managed launcher executes preflight under the same Node process that
   loads Next.js and forwards termination correctly.
@@ -469,6 +558,8 @@ Update the root README:
   `pm2 restart ... --update-env`.
 - Explain backup location, 10-batch retention, sensitive contents, restore
   prerequisites, and the lack of off-host disaster recovery.
+- Add a troubleshooting table mapping stable failure codes to plain-language
+  causes, service/data safety, diagnostic commands, and recovery actions.
 - Correct port override documentation so it matches actual startup behavior.
 
 ## User Flows

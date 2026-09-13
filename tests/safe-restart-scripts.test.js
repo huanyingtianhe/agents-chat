@@ -566,6 +566,21 @@ test('declares the guarded Windows deployment and restart contracts', () => {
   assert.doesNotMatch(installer, /Remove-Item\s+\(Join-Path\s+\$ProjectDir\s+'\.service-stop'\)/);
 });
 
+test('pack.ps1 packages verified database snapshots and always releases its lease', () => {
+  const pack = readFileSync(path.join(projectRoot, 'scripts', 'pack.ps1'), 'utf8');
+
+  assertBefore(pack, 'acquire-lease', "'prepare'");
+  assertBefore(pack, "'prepare'", 'Compress-Archive');
+  assert.match(pack, /@\(['"]chats\.db['"], ['"]config\.db['"]\)/);
+  assert.match(pack, /backup\.paths\.PSObject\.Properties\[\$database\]\.Value/);
+  assert.match(pack, /Copy-Item[\s\S]*-LiteralPath \$snapshotPath/);
+  assert.match(pack, /dataDestination = Join-Path \$StagingDir ['"]\.data['"]/);
+  assert.match(pack, /finally\s*\{[\s\S]*release-operation-lease\.mjs/);
+  assert.doesNotMatch(pack, /["']\.data[\\/]chats\.db["']/);
+  assert.doesNotMatch(pack, /chats\.db-(?:wal|shm)/);
+  assert.match(pack, /SetAccessRuleProtection|icacls/);
+});
+
 test('PowerShell scripts parse when PowerShell is available', (t) => {
   const shell = ['pwsh', 'powershell'].find((candidate) =>
     spawnSync(candidate, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], {

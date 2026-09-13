@@ -146,15 +146,19 @@ export async function checkStorageHealth({
     }
 
     mkdirSync(paths.dataPath, { recursive: true });
-    getDb(paths.projectRoot);
-    getConfigDb(paths.projectRoot);
+    const initializedDatabases = new Map<string, Database.Database>([
+      ['chats.db', getDb(paths.projectRoot)],
+      ['config.db', getConfigDb(paths.projectRoot)],
+    ]);
 
     for (const entry of registry) {
       const databasePath = databasePaths.get(entry.file);
       if (!databasePath || !existsSync(databasePath)) {
         throw storageFailure('DATABASE_MISSING');
       }
-      checkDatabase(databasePath, entry);
+      const database = initializedDatabases.get(entry.file);
+      if (!database) throw storageFailure('DATABASE_MISSING');
+      checkRequiredTables(database, entry);
     }
 
     const expectedDatabases = registry.map((entry) => entry.file);

@@ -62,6 +62,124 @@ jobs:
             -DestinationPath "${{ matrix.asset_name }}" `
             -Force
 
+      - name: Smoke test archived release (Linux)
+        if: matrix.archive_kind == 'tar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="dist/release-smoke-${{ matrix.release_target }}"
+          rm -rf "$smoke_root"
+          mkdir -p "$smoke_root"
+          tar -xzf "${{ matrix.asset_name }}" -C "$smoke_root"
+          bundle="$smoke_root/agents-chat-${{ matrix.release_target }}"
+
+          if find "$bundle" -mindepth 1 -printf '%P\n' \
+            | grep -E '(^|/)(\.data|\.env\.local|backups|restore-recovery)(/|$)|(^|/)\.(agents-chat-(storage|operation)|service-(stop|watchdog|child))' ; then
+            echo "Release archive contains private runtime data" >&2
+            exit 1
+          fi
+
+          node "$bundle/scripts/runtime-preflight.mjs" check-only --project-root "$bundle"
+          port="$(node -e "const n=require('node:net'),s=n.createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
+          secret="release-smoke-only"
+          token="$(NEXTAUTH_SECRET="$secret" node --input-type=module -e "import { encode } from 'next-auth/jwt'; console.log(await encode({ token: { sub: 'release-smoke' }, secret: process.env.NEXTAUTH_SECRET }))")"
+          (
+            cd "$bundle"
+            PORT="$port" NEXTAUTH_SECRET="$secret" AGENTS_CHAT_STDOUT_LOGGING=1 node server.js --port "$port"
+          ) >"$smoke_root/server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -sS \
+              --cookie "next-auth.session-token=$token" \
+              "http://127.0.0.1:$port/api/health/storage" >"$smoke_root/health.json"; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$smoke_root/server.log" >&2
+              exit 1
+            fi
+            sleep 0.5
+          done
+          grep -q '"ok":true' "$smoke_root/health.json"
+          kill "$server_pid"
+          wait "$server_pid" || true
+          trap - EXIT
+
+      - name: Smoke test archived release (Windows)
+        if: matrix.archive_kind == 'zip'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smokeRoot = "dist\release-smoke-${{ matrix.release_target }}"
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -LiteralPath "${{ matrix.asset_name }}" -DestinationPath $smokeRoot
+          $bundle = Join-Path $smokeRoot "agents-chat-${{ matrix.release_target }}"
+
+          $private = Get-ChildItem -LiteralPath $bundle -Recurse -Force | Where-Object {
+            $relative = $_.FullName.Substring($bundle.Length).TrimStart('\').Replace('\', '/')
+            $relative -match '(^|/)(\.data|\.env\.local|backups|restore-recovery)(/|$)' -or
+              $relative -match '(^|/)\.(agents-chat-(storage|operation)|service-(stop|watchdog|child))'
+          }
+          if ($private) {
+            $private.FullName | Write-Error
+            throw 'Release archive contains private runtime data'
+          }
+
+          & node "$bundle\scripts\runtime-preflight.mjs" check-only --project-root $bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $listener = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback,
+            0
+          )
+          $listener.Start()
+          $port = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          $env:NEXTAUTH_SECRET = 'release-smoke-only'
+          $env:AGENTS_CHAT_STDOUT_LOGGING = '1'
+          $token = & node -e "const { encode } = require('next-auth/jwt'); encode({ token: { sub: 'release-smoke' }, secret: process.env.NEXTAUTH_SECRET }).then(console.log)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $serverLog = Join-Path $smokeRoot 'server.log'
+          $server = Start-Process node `
+            -ArgumentList @('server.js', '--port', "$port") `
+            -WorkingDirectory $bundle `
+            -RedirectStandardOutput $serverLog `
+            -RedirectStandardError (Join-Path $smokeRoot 'server-error.log') `
+            -PassThru `
+            -WindowStyle Hidden
+          try {
+            $healthy = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              if ($server.HasExited) {
+                Get-Content $serverLog -ErrorAction SilentlyContinue
+                throw 'Release server exited before health check'
+              }
+              try {
+                $healthPath = Join-Path $smokeRoot 'health.json'
+                $status = & curl.exe -sS `
+                  -o $healthPath `
+                  -w '%{http_code}' `
+                  --cookie "next-auth.session-token=$token" `
+                  "http://127.0.0.1:$port/api/health/storage"
+                if ($LASTEXITCODE -eq 0) {
+                  $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+                }
+                if ($LASTEXITCODE -eq 0 -and $health.ok -eq $true) {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $healthy) { throw 'Release storage health check timed out' }
+          } finally {
+            if (-not $server.HasExited) {
+              Stop-Process -Id $server.Id
+              $server.WaitForExit()
+            }
+          }
+
       - name: Ensure GitHub release exists
         shell: bash
         env:

@@ -4,14 +4,15 @@ import path from "node:path";
 import { mkdirSync } from "node:fs";
 import type { CronJob, CronRun, CronRunStatus, ScheduleSpec } from "../../app/features/scheduler/scheduleTypes";
 import { DEFAULT_TIMEOUT_MINUTES } from "../../app/features/scheduler/scheduleTypes";
+import { getDb } from "../chatStore";
 import { CHAT_DB_PATH } from "../storage/storagePaths";
 
 export type ScheduleStore = ReturnType<typeof openScheduleStore>;
 
 export function openScheduleStore(dbPath?: string) {
   const file = dbPath ?? CHAT_DB_PATH;
-  mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
+  if (dbPath) mkdirSync(path.dirname(file), { recursive: true });
+  const db = dbPath ? new Database(file) : getDb();
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   migrate(db);

@@ -38,6 +38,19 @@ function createHarness(name, env = {}) {
   cpSync(path.join(projectRoot, 'scripts', 'safe-restart.sh'), path.join(scripts, 'safe-restart.sh'));
   cpSync(path.join(projectRoot, 'scripts', 'deploy.sh'), path.join(scripts, 'deploy.sh'));
   cpSync(path.join(projectRoot, 'scripts', 'agents-chat.service'), path.join(scripts, 'agents-chat.service'));
+  cpSync(
+    path.join(projectRoot, 'scripts', 'release-operation-lease.mjs'),
+    path.join(scripts, 'release-operation-lease.mjs'),
+  );
+  mkdirSync(path.join(scripts, 'lib'), { recursive: true });
+  cpSync(
+    path.join(projectRoot, 'scripts', 'lib', 'runtime-safety.mjs'),
+    path.join(scripts, 'lib', 'runtime-safety.mjs'),
+  );
+  cpSync(
+    path.join(projectRoot, 'scripts', 'lib', 'safety-errors.mjs'),
+    path.join(scripts, 'lib', 'safety-errors.mjs'),
+  );
   cpSync(path.join(projectRoot, 'ecosystem.config.js'), path.join(root, 'ecosystem.config.js'));
   chmodSync(path.join(scripts, 'safe-restart.sh'), 0o755);
   chmodSync(path.join(scripts, 'deploy.sh'), 0o755);
@@ -54,6 +67,7 @@ if [[ "\${1:-}" == "-p" ]]; then
 fi
 case "$*" in
   *"runtime-preflight.mjs acquire-lease"*)
+    printf '{"operationId":"operation-test","pid":%s,"owner":"mock","startedAt":"2026-01-01T00:00:00.000Z"}\n' "$PPID" > "$PROJECT_ROOT/.agents-chat-operation.json"
     printf '{"ok":true,"lease":{"operationId":"operation-test"}}\\n'
     ;;
   *"runtime-preflight.mjs prepare"*)
@@ -63,7 +77,11 @@ case "$*" in
     fi
     printf '{"ok":true,"backup":{"path":"%s/.data/backups/verified"}}\\n' "$PROJECT_ROOT"
     ;;
-  *"runtime-preflight.mjs release-lease"*)
+  *"release-operation-lease.mjs"*)
+    if [[ "\${MOCK_REAL_RELEASE:-0}" == 1 ]]; then
+      exec "$REAL_NODE" "$@"
+    fi
+    rm -f "$PROJECT_ROOT/.agents-chat-operation.json"
     printf '{"ok":true}\\n'
     ;;
   *"runtime-preflight.mjs check-only"*)
@@ -82,6 +100,10 @@ esac`);
   executable(path.join(bin, 'install'), `${common}
 destination="\${!#}"
 cat > "$destination"`);
+  executable(path.join(bin, 'sudo'), `${common}
+[[ "\${MOCK_SUDO_FAIL:-0}" != 1 ]] || exit 1
+shift 2
+exec "$@"`);
   executable(path.join(bin, 'systemctl'), `${common}
 if [[ "$*" == *"is-active"*"agents-chat"* ]]; then
   [[ "\${MOCK_SYSTEMD_ACTIVE:-0}" == 1 ]]
@@ -89,8 +111,19 @@ elif [[ "$*" == *"show"*"agents-chat"* ]]; then
   printf 'MainPID=2468\\nExecMainStartTimestamp=mock-start\\n'
 fi`);
   executable(path.join(bin, 'pm2'), `${common}
+printf 'PM2_ENV PORT=%s PM2_HOME=%s\\n' "\${PORT:-}" "\${PM2_HOME:-}" >> "$MOCK_LOG"
 if [[ "$1" == "jlist" ]]; then
-  printf '%s\\n' "\${MOCK_PM2_JLIST:-[]}"
+  [[ "\${MOCK_PM2_FAIL:-0}" != 1 ]] || exit 1
+  count_file="$PROJECT_ROOT/.pm2-jlist-count"
+  count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$count_file"
+  if (( count > 1 )) && [[ -n "\${MOCK_PM2_JLIST_AFTER:-}" ]]; then
+    printf '%s\\n' "$MOCK_PM2_JLIST_AFTER"
+  else
+    printf '%s\\n' "\${MOCK_PM2_JLIST:-[]}"
+  fi
 elif [[ "$1" == "pid" ]]; then
   printf '%s\\n' "\${MOCK_PM2_PID:-1357}"
 elif [[ "$1" == "describe" ]]; then
@@ -110,6 +143,7 @@ fi`);
       AGENTS_CHAT_UNIT_DEST: path.join(root, 'agents-chat.service.installed'),
       AGENTS_CHAT_SKIP_ROOT_CHECK: '1',
       AGENTS_CHAT_HEALTH_INTERVAL: '0',
+      AGENTS_CHAT_SYSTEM_ENV_FILE: path.join(root, 'etc-agents-chat.env'),
       ...env,
     },
   };
@@ -149,8 +183,10 @@ test('declares the deployment ordering and manager contracts', () => {
   assert.match(unit, /ExecStartPre=.*__NODE__.*runtime-preflight\.mjs.*check-only/);
   assert.match(unit, /ExecStart=.*__NODE__.*scripts\/start-server\.mjs/);
   assert.match(safeRestart, /systemd\|pm2/);
-  assert.match(safeRestart, /pm2 startOrReload ecosystem\.config\.js --only agents-chat --update-env/);
+  assert.match(safeRestart, /pm2_action=start/);
+  assert.match(safeRestart, /pm2_action=reload/);
   assert.match(safeRestart, /pm2 save/);
+  assert.match(unit, /start-server\.mjs" --port "__PORT__"/);
   assert.match(ecosystem, /interpreter:\s*process\.execPath/);
   assert.match(ecosystem, /exec_mode:\s*['"]fork['"]/);
   assert.match(ecosystem, /instances:\s*1/);
@@ -167,7 +203,7 @@ test('holds the lease with the wrapper PID and completes systemd in safe order',
   assertBefore(log, 'prepare', 'npm run build');
   assertBefore(log, 'npm run build', 'systemctl restart agents-chat');
   assertBefore(log, 'systemctl restart agents-chat', 'curl -fsS');
-  assertBefore(log, 'curl -fsS', 'release-lease');
+  assertBefore(log, 'curl -fsS', 'release-operation-lease.mjs');
   assert.match(log, /api\/health\/storage/);
   const installedUnit = readFileSync(
     harness.env.AGENTS_CHAT_UNIT_DEST,
@@ -197,7 +233,7 @@ test('deploy acquires the lease before npm ci, backup, build, restart, and healt
   assertBefore(log, 'prepare', 'npm run build');
   assertBefore(log, 'npm run build', 'systemctl restart agents-chat');
   assertBefore(log, 'systemctl restart agents-chat', 'api/health/storage');
-  assertBefore(log, 'api/health/storage', 'release-lease');
+  assertBefore(log, 'api/health/storage', 'release-operation-lease.mjs');
 });
 
 test('failed preflight does not mutate either service manager', () => {
@@ -275,11 +311,11 @@ test('PM2 uses one fork, explicit Node, validates runtime and saves only after h
   assert.equal(result.status, 0, result.stderr);
 
   const log = readFileSync(harness.log, 'utf8');
-  assertBefore(log, 'prepare', 'pm2 startOrReload ecosystem.config.js --only agents-chat --update-env');
-  assertBefore(log, 'pm2 startOrReload', 'pm2 describe agents-chat');
+  assertBefore(log, 'prepare', 'pm2 reload agents-chat --update-env');
+  assertBefore(log, 'pm2 reload', 'pm2 describe agents-chat');
   assertBefore(log, 'pm2 describe agents-chat', 'curl -fsS');
   assertBefore(log, 'curl -fsS', 'pm2 save');
-  assertBefore(log, 'pm2 save', 'release-lease');
+  assertBefore(log, 'pm2 save', 'release-operation-lease.mjs');
 });
 
 test('rejects an invalid PM2 topology before reload', () => {
@@ -299,7 +335,7 @@ test('rejects an invalid PM2 topology before reload', () => {
   const result = runHarness(harness, 'pm2');
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /exactly one fork/i);
-  assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /pm2 startOrReload/);
+  assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /pm2 (start|reload)/);
 });
 
 test('health failure reports the verified backup and does not save PM2 state', () => {
@@ -324,4 +360,147 @@ test('health failure reports the verified backup and does not save PM2 state', (
   assert.match(result.stderr, /verified backup is available at: .*\/verified/);
   assert.match(result.stderr, /restart.*running/i);
   assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /pm2 save/);
+});
+
+test('releases the lease after npm ci removes native dependencies and fails', () => {
+  const harness = createHarness('dependency-failure-release', {
+    MOCK_NPM_FAIL: '1',
+    MOCK_REAL_RELEASE: '1',
+  });
+  const result = spawnSync(
+    path.join(harness.root, 'scripts', 'deploy.sh'),
+    ['--no-pull', '--wait', '0'],
+    {
+      cwd: harness.root,
+      env: harness.env,
+      encoding: 'utf8',
+    },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DEPENDENCY_INSTALL_FAILED/);
+  assert.equal(
+    readFileSync(harness.log, 'utf8').includes('release-operation-lease.mjs'),
+    true,
+  );
+  assert.equal(
+    require('node:fs').existsSync(
+      path.join(harness.root, '.agents-chat-operation.json'),
+    ),
+    false,
+  );
+});
+
+test('systemd inspects the checkout owner PM2 daemon and fails if inspection is unreliable', () => {
+  const harness = createHarness('systemd-owner-pm2', {
+    MOCK_PM2_FAIL: '1',
+  });
+  const result = runHarness(harness, 'systemd');
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Could not inspect PM2 as checkout owner/);
+  const log = readFileSync(harness.log, 'utf8');
+  assert.match(log, /sudo -u \S+ env HOME=.* PM2_HOME=.*\/pm2 jlist/);
+  assert.doesNotMatch(log, /systemctl restart/);
+});
+
+test('PM2 rejects any same-name app from another checkout', () => {
+  const harness = createHarness('pm2-other-checkout');
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    {
+      name: 'agents-chat',
+      pid: 1357,
+      pm2_env: {
+        status: 'online',
+        pm_cwd: harness.root,
+        exec_mode: 'fork_mode',
+        instances: 1,
+        exec_interpreter: harness.env.MOCK_NODE,
+        node_version: '24.20.0',
+      },
+    },
+    {
+      name: 'agents-chat',
+      pid: 2468,
+      pm2_env: {
+        status: 'stopped',
+        pm_cwd: path.join(workRoot, 'other-checkout'),
+        exec_mode: 'fork_mode',
+        instances: 1,
+      },
+    },
+  ]);
+  const result = runHarness(harness, 'pm2');
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /different checkout/);
+  assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /pm2 (start|reload)/);
+});
+
+test('PM2 first install is explicit and leaves exactly one matching process', () => {
+  const harness = createHarness('pm2-first-install');
+  harness.env.MOCK_PM2_JLIST = '[]';
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([{
+    name: 'agents-chat',
+    pid: 1357,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: harness.root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: harness.env.MOCK_NODE,
+      node_version: '24.20.0',
+    },
+  }]);
+  const result = runHarness(harness, 'pm2');
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    readFileSync(harness.log, 'utf8'),
+    /pm2 start ecosystem\.config\.js --only agents-chat --update-env/,
+  );
+});
+
+test('passes one systemd effective port from machine env to service and health check', () => {
+  const harness = createHarness('systemd-port');
+  writeFileSync(path.join(harness.root, '.env.local'), 'PORT=4010\n');
+  writeFileSync(harness.env.AGENTS_CHAT_SYSTEM_ENV_FILE, 'PORT="4020"\n');
+  const result = runHarness(harness, 'systemd');
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    readFileSync(harness.env.AGENTS_CHAT_UNIT_DEST, 'utf8'),
+    /start-server\.mjs" --port "4020"/,
+  );
+  assert.match(readFileSync(harness.log, 'utf8'), /localhost:4020\/api\/health\/storage/);
+});
+
+test('passes the selected PM2 port to PM2 and the health checker', () => {
+  const harness = createHarness('pm2-port', { PORT: '4030' });
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
+    name: 'agents-chat',
+    pid: 1357,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: harness.root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: harness.env.MOCK_NODE,
+      node_version: '24.20.0',
+    },
+  }]);
+  const result = runHarness(harness, 'pm2');
+
+  assert.equal(result.status, 0, result.stderr);
+  const log = readFileSync(harness.log, 'utf8');
+  assert.match(log, /PM2_ENV PORT=4030 PM2_HOME=/);
+  assert.match(log, /localhost:4030\/api\/health\/storage/);
+});
+
+test('accepts --wait 0 and skips health polling', () => {
+  const harness = createHarness('zero-wait');
+  const result = runHarness(harness, 'systemd', '--wait', '0');
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(readFileSync(harness.log, 'utf8'), /curl /);
 });

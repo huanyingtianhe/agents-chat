@@ -16,8 +16,11 @@ operation_id=
 backup_batch=
 data_state=unchanged
 restart_began=0
+effective_port=
+pm2_action=
 unit_src="$script_dir/agents-chat.service"
 unit_dest="${AGENTS_CHAT_UNIT_DEST:-/etc/systemd/system/agents-chat.service}"
+system_env_file="${AGENTS_CHAT_SYSTEM_ENV_FILE:-/etc/agents-chat.env}"
 
 usage() {
   cat <<'EOF'
@@ -44,8 +47,8 @@ while [[ $# -gt 0 ]]; do
     --no-pull) pull=0; shift ;;
     --no-install) install_dependencies=0; shift ;;
     --wait)
-      [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || {
-        echo "--wait requires a positive integer" >&2
+      [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || {
+        echo "--wait requires a non-negative integer" >&2
         exit 2
       }
       wait_secs="$2"
@@ -74,6 +77,32 @@ node_bin="$("$node_command" -p 'process.execPath')"
   exit 1
 }
 preflight="$script_dir/runtime-preflight.mjs"
+lease_release="$script_dir/release-operation-lease.mjs"
+
+checkout_uid="$(stat -c '%u' "$project_dir")"
+checkout_gid="$(stat -c '%g' "$project_dir")"
+checkout_passwd="$(getent passwd "$checkout_uid" || true)"
+checkout_user="${checkout_passwd%%:*}"
+checkout_home="$(printf '%s' "$checkout_passwd" | awk -F: '{print $6}')"
+[[ -n "$checkout_user" && -n "$checkout_home" ]] || {
+  echo "Could not resolve checkout owner UID $checkout_uid with getent passwd." >&2
+  exit 1
+}
+if [[ "$manager" == systemd ]]; then
+  pm2_home="${AGENTS_CHAT_PM2_HOME:-$checkout_home/.pm2}"
+else
+  pm2_home="${AGENTS_CHAT_PM2_HOME:-${PM2_HOME:-$checkout_home/.pm2}}"
+fi
+pm2_bin="${AGENTS_CHAT_PM2_BIN:-$(command -v pm2 || true)}"
+
+pm2_command() {
+  if [[ "$manager" == systemd ]]; then
+    sudo -u "$checkout_user" env \
+      HOME="$checkout_home" PM2_HOME="$pm2_home" "$@"
+  else
+    env HOME="$checkout_home" PM2_HOME="$pm2_home" "$@"
+  fi
+}
 
 service_state() {
   if [[ "$manager" == systemd ]]; then
@@ -168,7 +197,7 @@ cleanup() {
   local status=$?
   trap - EXIT
   if [[ -n "$operation_id" ]]; then
-    if ! "$node_bin" "$preflight" release-lease \
+    if ! "$node_bin" "$lease_release" \
       --project-root "$project_dir" \
       --operation-id "$operation_id" >/dev/null; then
       if (( status == 0 )); then
@@ -201,18 +230,18 @@ json_field() {
 }
 
 pm2_snapshot() {
-  pm2 jlist | "$node_bin" -e '
+  pm2_command "$pm2_bin" jlist | "$node_bin" -e '
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", chunk => { input += chunk; });
     process.stdin.on("end", () => {
-      const root = process.argv[1];
       for (const app of JSON.parse(input)) {
         const env = app.pm2_env || {};
-        if (app.name !== "agents-chat" || env.pm_cwd !== root) continue;
+        if (app.name !== "agents-chat") continue;
         console.log([
           app.pid || 0,
           env.status || "",
+          env.pm_cwd || "",
           env.exec_mode || "",
           env.instances ?? "",
           env.exec_interpreter || "",
@@ -220,32 +249,57 @@ pm2_snapshot() {
         ].join("\t"));
       }
     });
-  ' "$project_dir"
+  '
+}
+
+pm2_matching_snapshot() {
+  local snapshot="$1"
+  awk -F $'\t' -v root="$project_dir" '$3 == root' <<<"$snapshot"
+}
+
+pm2_has_checkout_collision() {
+  local snapshot="$1"
+  awk -F $'\t' -v root="$project_dir" 'NF && $3 != root { found=1 } END { exit !found }' \
+    <<<"$snapshot"
 }
 
 pm2_topology_valid() {
   local snapshot="$1"
-  [[ -z "$snapshot" ]] && return 0
+  [[ -n "$snapshot" ]] || return 1
   [[ "$(wc -l <<<"$snapshot" | tr -d ' ')" == 1 ]] || return 1
-  local pid status exec_mode instances interpreter node_version
-  IFS=$'\t' read -r pid status exec_mode instances interpreter node_version <<<"$snapshot"
+  local pid status cwd exec_mode instances interpreter node_version
+  IFS=$'\t' read -r pid status cwd exec_mode instances interpreter node_version <<<"$snapshot"
   [[ "$exec_mode" == fork_mode || "$exec_mode" == fork ]] || return 1
   [[ "$instances" == 1 ]] || return 1
 }
 
 detect_manager_conflict() {
   if [[ "$manager" == systemd ]]; then
-    command -v pm2 >/dev/null 2>&1 || return 0
+    if [[ -z "$pm2_bin" ]]; then
+      if [[ -e "$pm2_home/pm2.pid" || -e "$pm2_home/dump.pm2" ]]; then
+        render_failure SERVICE_START_FAILED manager-check \
+          "PM2 state exists at $pm2_home, but PM2 is not available to inspect it. Install PM2 or set AGENTS_CHAT_PM2_HOME correctly."
+        return 1
+      fi
+      return 0
+    fi
     local snapshot
     if ! snapshot="$(pm2_snapshot 2>/dev/null)"; then
-      render_failure UNEXPECTED_ERROR manager-check \
-        "PM2 is installed, but its process list could not be inspected."
+      render_failure SERVICE_START_FAILED manager-check \
+        "Could not inspect PM2 as checkout owner $checkout_user with PM2_HOME=$pm2_home. Verify sudo access, PM2_HOME, and PM2 installation."
+      return 1
+    fi
+    if pm2_has_checkout_collision "$snapshot"; then
+      render_failure \
+        MANAGER_CONFLICT manager-conflict \
+        "The checkout owner's PM2 daemon has an $service app from a different checkout." \
+        "$(service_state)"
       return 1
     fi
     if [[ -n "$snapshot" ]] && grep -q $'\tonline\t' <<<"$snapshot"; then
       render_failure \
         MANAGER_CONFLICT manager-conflict \
-        "PM2 is already running $service from this checkout." \
+        "The checkout owner's PM2 daemon is already running $service from this checkout." \
         "$(service_state)"
       return 1
     fi
@@ -259,22 +313,75 @@ detect_manager_conflict() {
   fi
 }
 
+read_env_port() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  "$node_bin" -e '
+    const fs = require("node:fs");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/);
+    let port = "";
+    for (const line of lines) {
+      const match = line.match(/^\s*(?:export\s+)?PORT\s*=\s*(.*?)\s*$/);
+      if (!match) continue;
+      let value = match[1];
+      if ((value.startsWith("\"") && value.endsWith("\""))
+          || (value.startsWith("'"'"'") && value.endsWith("'"'"'"))) {
+        value = value.slice(1, -1);
+      } else {
+        value = value.replace(/\s+#.*$/, "");
+      }
+      port = value;
+    }
+    process.stdout.write(port);
+  ' "$file"
+}
+
+resolve_effective_port() {
+  local port=3010 configured=
+  if [[ "$manager" == systemd ]]; then
+    configured="$(read_env_port "$project_dir/.env.local")"
+    [[ -z "$configured" ]] || port="$configured"
+    configured="$(read_env_port "$system_env_file")"
+    [[ -z "$configured" ]] || port="$configured"
+  else
+    configured="$(read_env_port "$project_dir/.env.local")"
+    [[ -z "$configured" ]] || port="$configured"
+    [[ -z "${PORT:-}" ]] || port="$PORT"
+  fi
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || {
+    render_failure UNEXPECTED_ERROR port-resolution \
+      "The selected PORT value '$port' is not a valid TCP port."
+    return 1
+  }
+  effective_port="$port"
+}
+
 render_systemd_unit() {
   [[ -f "$unit_src" ]] || {
     render_failure UNEXPECTED_ERROR unit-render "Missing unit template: $unit_src"
     return 1
   }
 
-  local user group rendered
-  user="$(id -un)"
-  group="$(id -gn)"
-  rendered="$(sed \
-    -e "s|__USER__|$user|g" \
-    -e "s|__GROUP__|$group|g" \
-    -e "s|__PROJECT_DIR__|$project_dir|g" \
-    -e "s|__NODE__|$node_bin|g" \
-    -e "s|__NODE_BIN_DIR__|$(dirname "$node_bin")|g" \
-    "$unit_src")"
+  local rendered
+  rendered="$("$node_bin" -e '
+    const fs = require("node:fs");
+    const [source, ...values] = process.argv.slice(1);
+    const keys = [
+      "__USER__",
+      "__GROUP__",
+      "__PROJECT_DIR__",
+      "__NODE__",
+      "__NODE_BIN_DIR__",
+      "__PORT__",
+      "__SYSTEM_ENV_FILE__",
+    ];
+    let unit = fs.readFileSync(source, "utf8");
+    for (let index = 0; index < keys.length; index += 1) {
+      unit = unit.replaceAll(keys[index], values[index]);
+    }
+    process.stdout.write(unit);
+  ' "$unit_src" "$checkout_uid" "$checkout_gid" "$project_dir" "$node_bin" \
+    "$(dirname "$node_bin")" "$effective_port" "$system_env_file")"
 
   if ! printf '%s\n' "$rendered" | install -m 0644 /dev/stdin "$unit_dest"; then
     render_failure UNEXPECTED_ERROR unit-render "The systemd unit could not be installed."
@@ -288,21 +395,12 @@ render_systemd_unit() {
 
 health_check() {
   (( wait_secs > 0 )) || return 0
-  local port="${PORT:-3010}"
-  if [[ -z "${PORT:-}" && -f .env.local ]]; then
-    local configured_port
-    configured_port="$(awk -F= '/^[[:space:]]*PORT[[:space:]]*=/ {
-      gsub(/[ \t"'"'"']/, "", $2); print $2
-    }' .env.local | tail -n1)"
-    [[ -z "$configured_port" ]] || port="$configured_port"
-  fi
-
-  local url="http://localhost:${port}/api/health/storage"
+  local url="http://localhost:${effective_port}/api/health/storage"
   local deadline=$(( $(date +%s) + wait_secs ))
   echo "→ waiting up to ${wait_secs}s for $url"
   while (( $(date +%s) <= deadline )); do
     if curl -fsS -o /dev/null --max-time 3 "$url"; then
-      echo "✓ storage health passed on :$port"
+      echo "✓ storage health passed on :$effective_port"
       return 0
     fi
     sleep "${AGENTS_CHAT_HEALTH_INTERVAL:-2}"
@@ -329,10 +427,16 @@ operation_id="$(printf '%s' "$acquire_output" | json_field 'value.lease.operatio
   exit 1
 }
 
+resolve_effective_port
 detect_manager_conflict
 
 if [[ "$manager" == pm2 ]]; then
-  command -v pm2 >/dev/null 2>&1 || {
+  [[ "$(id -u)" == "$checkout_uid" ]] || {
+    render_failure SERVICE_START_FAILED manager-check \
+      "Run the PM2 flow as checkout owner $checkout_user (UID $checkout_uid)."
+    exit 1
+  }
+  [[ -n "$pm2_bin" ]] || {
     render_failure SERVICE_START_FAILED manager-check "PM2 is not installed or not in PATH."
     exit 1
   }
@@ -341,10 +445,21 @@ if [[ "$manager" == pm2 ]]; then
       "PM2's process list could not be inspected."
     exit 1
   fi
-  if ! pm2_topology_valid "$current_pm2"; then
+  if pm2_has_checkout_collision "$current_pm2"; then
     render_failure \
       MANAGER_CONFLICT manager-topology \
-      "PM2 must manage exactly one fork-mode $service instance for this checkout."
+      "PM2 already has an $service app from a different checkout; no process was changed."
+    exit 1
+  fi
+  matching_pm2="$(pm2_matching_snapshot "$current_pm2")"
+  if [[ -z "$matching_pm2" ]]; then
+    pm2_action=start
+  elif pm2_topology_valid "$matching_pm2"; then
+    pm2_action=reload
+  else
+    render_failure \
+      MANAGER_CONFLICT manager-topology \
+      "PM2 reload requires exactly one fork-mode $service instance for this checkout."
     exit 1
   fi
 fi
@@ -408,29 +523,47 @@ if [[ "$manager" == systemd ]]; then
   fi
 else
   restart_began=1
-  echo "→ pm2 startOrReload ecosystem.config.js --only agents-chat --update-env"
-  if ! pm2 startOrReload ecosystem.config.js --only agents-chat --update-env; then
+  if [[ "$pm2_action" == start ]]; then
+    echo "→ pm2 start ecosystem.config.js --only agents-chat --update-env"
+    if ! PORT="$effective_port" pm2_command "$pm2_bin" start \
+      ecosystem.config.js --only agents-chat --update-env; then
+      render_failure SERVICE_START_FAILED service-start \
+        "PM2 could not perform the safe first install for $service."
+      exit 1
+    fi
+  else
+    echo "→ pm2 reload agents-chat --update-env"
+    if ! PORT="$effective_port" pm2_command "$pm2_bin" reload \
+      agents-chat --update-env; then
+      render_failure SERVICE_START_FAILED service-restart \
+        "PM2 could not reload $service."
+      exit 1
+    fi
+  fi
+
+  if ! pm2_command "$pm2_bin" describe "$service" >/dev/null; then
     render_failure SERVICE_START_FAILED service-restart "PM2 could not start or reload $service."
     exit 1
   fi
 
-  if ! pm2 describe "$service" >/dev/null; then
-    render_failure SERVICE_START_FAILED runtime-verification \
-      "PM2 could not describe the restarted $service process."
-    exit 1
-  fi
   if ! current_pm2="$(pm2_snapshot 2>/dev/null)"; then
     render_failure SERVICE_START_FAILED runtime-verification \
       "PM2's restarted process metadata could not be inspected."
     exit 1
   fi
-  if ! pm2_topology_valid "$current_pm2"; then
+  if pm2_has_checkout_collision "$current_pm2"; then
+    render_failure SERVICE_START_FAILED runtime-verification \
+      "PM2 contains an $service process from a different checkout after restart."
+    exit 1
+  fi
+  matching_pm2="$(pm2_matching_snapshot "$current_pm2")"
+  if ! pm2_topology_valid "$matching_pm2"; then
     render_failure SERVICE_START_FAILED runtime-verification \
       "PM2 did not leave exactly one fork-mode $service process."
     exit 1
   fi
-  IFS=$'\t' read -r pm2_pid pm2_status pm2_mode pm2_instances \
-    pm2_interpreter pm2_node_version <<<"$current_pm2"
+  IFS=$'\t' read -r pm2_pid pm2_status pm2_cwd pm2_mode pm2_instances \
+    pm2_interpreter pm2_node_version <<<"$matching_pm2"
   if [[ "$pm2_status" != online \
     || "$pm2_interpreter" != "$node_bin" \
     || "$pm2_node_version" != 24.* ]]; then
@@ -448,7 +581,7 @@ fi
 
 if [[ "$manager" == pm2 ]]; then
   echo "→ pm2 save"
-  if ! pm2 save; then
+  if ! pm2_command "$pm2_bin" save; then
     render_failure SERVICE_START_FAILED manager-persist \
       "PM2 could not persist the verified process list."
     exit 1

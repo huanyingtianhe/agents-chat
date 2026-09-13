@@ -16,14 +16,14 @@ WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=-__PROJECT_DIR__/.env.local
 
 # Optional machine-level overrides (takes precedence over .env.local)
-EnvironmentFile=-/etc/agents-chat.env
+EnvironmentFile=-__SYSTEM_ENV_FILE__
 
 Environment=NODE_ENV=production
 Environment="PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # The preflight and server use the same validated absolute Node executable.
 ExecStartPre="__NODE__" "__PROJECT_DIR__/scripts/runtime-preflight.mjs" check-only --project-root "__PROJECT_DIR__"
-ExecStart="__NODE__" "__PROJECT_DIR__/scripts/start-server.mjs"
+ExecStart="__NODE__" "__PROJECT_DIR__/scripts/start-server.mjs" --port "__PORT__"
 
 Restart=on-failure
 RestartSec=10

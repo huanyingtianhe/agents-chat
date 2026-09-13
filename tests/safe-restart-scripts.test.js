@@ -581,6 +581,35 @@ test('pack.ps1 packages verified database snapshots and always releases its leas
   assert.match(pack, /SetAccessRuleProtection|icacls/);
 });
 
+test('pack.ps1 cleans staging and fails without success output when lease release fails', () => {
+  const pack = readFileSync(path.join(projectRoot, 'scripts', 'pack.ps1'), 'utf8');
+
+  assert.match(pack, /\$PrimaryError = \$null/);
+  assert.match(pack, /\$LeaseReleaseError = \$null/);
+  assert.match(pack, /\$CleanupError = \$null/);
+  assert.match(pack, /catch \{\s*\$PrimaryError = \$_\s*\}/);
+  assert.match(
+    pack,
+    /if \(\$LASTEXITCODE -ne 0\) \{\s*throw "Failed to release packaging lease \$OperationId"/,
+  );
+  assert.match(pack, /catch \{\s*\$LeaseReleaseError = \$_\s*\}/);
+  assert.match(
+    pack,
+    /finally \{[\s\S]*release-operation-lease\.mjs[\s\S]*Remove-Item -LiteralPath \$StagingDir -Recurse -Force/,
+  );
+  assertBefore(pack, 'if ($PrimaryError)', 'Write-Host "Created:');
+  assertBefore(pack, 'if ($LeaseReleaseError)', 'Write-Host "Created:');
+  assertBefore(pack, 'if ($CleanupError)', 'Write-Host "Created:');
+  assert.match(
+    pack,
+    /if \(\$PrimaryError\) \{[\s\S]*Write-Warning[\s\S]*throw \$PrimaryError/,
+  );
+  assert.match(
+    pack,
+    /if \(\$LeaseReleaseError\) \{[\s\S]*?throw \$LeaseReleaseError\s*\}/,
+  );
+});
+
 test('PowerShell scripts parse when PowerShell is available', (t) => {
   const shell = ['pwsh', 'powershell'].find((candidate) =>
     spawnSync(candidate, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], {
@@ -597,6 +626,7 @@ test('PowerShell scripts parse when PowerShell is available', (t) => {
     'start.ps1',
     'service-watchdog.ps1',
     'install-scheduled-task.ps1',
+    'pack.ps1',
   ].map((name) => path.join(projectRoot, 'scripts', name));
   const command = [
     '$failed = $false',

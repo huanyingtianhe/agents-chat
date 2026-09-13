@@ -72,6 +72,14 @@ function bundleDigest(root) {
   return hash.digest('hex');
 }
 
+function assertBefore(source, first, second) {
+  const firstIndex = source.indexOf(first);
+  const secondIndex = source.indexOf(second);
+  assert.notEqual(firstIndex, -1, `missing ${first}`);
+  assert.notEqual(secondIndex, -1, `missing ${second}`);
+  assert.ok(firstIndex < secondIndex, `${first} must precede ${second}`);
+}
+
 function findFreePort() {
   const script = [
     "const net=require('node:net');",
@@ -180,16 +188,23 @@ test('release contents are deterministic, minimal, and contain no local state', 
   assert.match(shellLauncher, /Node\.js 24/);
   assert.match(shellLauncher, /runtime-preflight\.mjs.*check-only/);
   assert.match(shellLauncher, /AGENTS_CHAT_STDOUT_LOGGING=1/);
-  assert.ok(
-    shellLauncher.indexOf('check-only') < shellLauncher.indexOf('server.js'),
-    'preflight must run before server.js',
-  );
+  assert.match(shellLauncher, /export PORT="\$port"/);
+  assert.doesNotMatch(shellLauncher, /server\.js --port/);
+  assertBefore(shellLauncher, 'check-only', 'server.js');
+  assertBefore(shellLauncher, 'export PORT="$port"', 'server.js');
   assert.match(powerShellLauncher, /Node\.js 24/);
   assert.match(powerShellLauncher, /runtime-preflight\.mjs.*check-only/);
-  assert.ok(
-    powerShellLauncher.indexOf('check-only') < powerShellLauncher.indexOf('server.js'),
-    'PowerShell preflight must run before server.js',
+  assert.match(powerShellLauncher, /\$PSBoundParameters\.ContainsKey\('Port'\)/);
+  assert.match(powerShellLauncher, /elseif \(\$env:PORT\)/);
+  assert.match(powerShellLauncher, /\$env:PORT = "\$ResolvedPort"/);
+  assert.doesNotMatch(powerShellLauncher, /server\.js --port/);
+  assertBefore(
+    powerShellLauncher,
+    "if ($PSBoundParameters.ContainsKey('Port'))",
+    'elseif ($env:PORT)',
   );
+  assertBefore(powerShellLauncher, 'check-only', 'server.js');
+  assertBefore(powerShellLauncher, '$env:PORT = "$ResolvedPort"', 'server.js');
 });
 
 test('release workflow inspects and smoke-tests both OS archives', () => {
@@ -204,7 +219,17 @@ test('release workflow inspects and smoke-tests both OS archives', () => {
   assert.match(workflow, /runtime-preflight\.mjs" check-only/);
   assert.match(workflow, /api\/health\/storage/);
   assert.match(workflow, /kill "\$server_pid"/);
-  assert.match(workflow, /Stop-Process -Id \$server\.Id/);
+  assert.match(workflow, /\$env:PORT = "\$port"/);
+  assert.match(workflow, /\$serverId = \$server\.Id/);
+  assert.match(workflow, /Stop-Process -Id \$serverId/);
+  assert.doesNotMatch(workflow, /Stop-Process -Id \$server\.Id/);
+  assertBefore(workflow, '$env:PORT = "$port"', 'Start-Process node');
+  assertBefore(workflow, '$serverId = $server.Id', 'Stop-Process -Id $serverId');
+  const windowsPoll = workflow.slice(workflow.indexOf('Smoke test archived release (Windows)'));
+  assert.match(
+    windowsPoll,
+    /for \(\$attempt = 0; \$attempt -lt 60; \$attempt\+\+\) \{[\s\S]*?try \{[\s\S]*?\} catch \{[\s\S]*?\}[\s\S]*?Start-Sleep -Milliseconds 500[\s\S]*?\}/,
+  );
   assert.match(workflow, /agents-chat-\(storage\|operation\)/);
   assert.match(workflow, /restore-recovery/);
 });

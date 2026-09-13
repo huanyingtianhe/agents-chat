@@ -137,16 +137,18 @@ jobs:
           $listener.Stop()
           $env:NEXTAUTH_SECRET = 'release-smoke-only'
           $env:AGENTS_CHAT_STDOUT_LOGGING = '1'
+          $env:PORT = "$port"
           $token = & node -e "const { encode } = require('next-auth/jwt'); encode({ token: { sub: 'release-smoke' }, secret: process.env.NEXTAUTH_SECRET }).then(console.log)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $serverLog = Join-Path $smokeRoot 'server.log'
           $server = Start-Process node `
-            -ArgumentList @('server.js', '--port', "$port") `
+            -ArgumentList @('server.js') `
             -WorkingDirectory $bundle `
             -RedirectStandardOutput $serverLog `
             -RedirectStandardError (Join-Path $smokeRoot 'server-error.log') `
             -PassThru `
             -WindowStyle Hidden
+          $serverId = $server.Id
           try {
             $healthy = $false
             for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -154,6 +156,7 @@ jobs:
                 Get-Content $serverLog -ErrorAction SilentlyContinue
                 throw 'Release server exited before health check'
               }
+              $health = $null
               try {
                 $healthPath = Join-Path $smokeRoot 'health.json'
                 $status = & curl.exe -sS `
@@ -169,13 +172,14 @@ jobs:
                   break
                 }
               } catch {
-                Start-Sleep -Milliseconds 500
+                $health = $null
               }
+              Start-Sleep -Milliseconds 500
             }
             if (-not $healthy) { throw 'Release storage health check timed out' }
           } finally {
             if (-not $server.HasExited) {
-              Stop-Process -Id $server.Id
+              Stop-Process -Id $serverId
               $server.WaitForExit()
             }
           }

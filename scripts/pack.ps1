@@ -8,6 +8,9 @@ $ProjectDir = Split-Path -Parent $PSScriptRoot
 $ZipPath = Join-Path $ProjectDir 'acp-chat.zip'
 $StagingDir = Join-Path $ProjectDir ".pack-staging-$PID"
 $OperationId = $null
+$PrimaryError = $null
+$LeaseReleaseError = $null
+$CleanupError = $null
 
 function Invoke-NodeJson {
     param([string[]]$Arguments)
@@ -114,19 +117,48 @@ try {
 
     Compress-Archive -Path (Join-Path $StagingDir '*') -DestinationPath $ZipPath -Force
     Protect-PathAcl -Path $ZipPath
+} catch {
+    $PrimaryError = $_
 } finally {
     if ($OperationId) {
-        & node `
-            (Join-Path $PSScriptRoot 'release-operation-lease.mjs') `
-            --project-root $ProjectDir `
-            --operation-id $OperationId
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Failed to release packaging lease $OperationId"
+        try {
+            & node `
+                (Join-Path $PSScriptRoot 'release-operation-lease.mjs') `
+                --project-root $ProjectDir `
+                --operation-id $OperationId
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to release packaging lease $OperationId"
+            }
+        } catch {
+            $LeaseReleaseError = $_
         }
     }
-    if (Test-Path -LiteralPath $StagingDir) {
-        Remove-Item -LiteralPath $StagingDir -Recurse -Force
+    try {
+        if (Test-Path -LiteralPath $StagingDir) {
+            Remove-Item -LiteralPath $StagingDir -Recurse -Force
+        }
+    } catch {
+        $CleanupError = $_
     }
+}
+
+if ($PrimaryError) {
+    if ($LeaseReleaseError) {
+        Write-Warning "Packaging also failed to release lease $OperationId`: $($LeaseReleaseError.Exception.Message)"
+    }
+    if ($CleanupError) {
+        Write-Warning "Packaging also failed to clean staging: $($CleanupError.Exception.Message)"
+    }
+    throw $PrimaryError
+}
+if ($LeaseReleaseError) {
+    if ($CleanupError) {
+        Write-Warning "Packaging also failed to clean staging: $($CleanupError.Exception.Message)"
+    }
+    throw $LeaseReleaseError
+}
+if ($CleanupError) {
+    throw $CleanupError
 }
 
 $size = [math]::Round((Get-Item -LiteralPath $ZipPath).Length / 1MB, 1)

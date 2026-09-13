@@ -6,7 +6,7 @@ A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. Dir
 
 ## Prerequisites
 
-- **Node.js** >= 20
+- **Node.js** 24.x
 - **npm** >= 10
 - At least one ACP-compatible agent installed (GitHub Copilot CLI, Claude Code, etc.)
 

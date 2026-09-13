@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import {
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { after, before, test } from 'node:test';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -183,7 +186,7 @@ test('validates generated release roots only when release mode is enabled', () =
     'release',
   );
 
-  const lease = acquireOperationLease(projectRoot, 'release-operation');
+  const lease = acquireOperationLease(projectRoot, 'release-operation', process.pid);
   assert.equal(
     assertOperationLease(projectRoot, lease.operationId).operationId,
     lease.operationId,
@@ -240,14 +243,14 @@ test('accepts Node 24 runtime metadata and rejects other majors', () => {
 
 test('acquires, validates, and releases an owned operation lease', () => {
   const projectRoot = createRoot();
-  const lease = acquireOperationLease(projectRoot, 'test-owner');
+  const lease = acquireOperationLease(projectRoot, 'test-owner', process.pid);
 
   assert.match(lease.operationId, /^[0-9a-f-]{36}$/i);
   assert.equal(lease.pid, process.pid);
   assert.equal(lease.owner, 'test-owner');
   assert.equal(assertOperationLease(projectRoot, lease.operationId).owner, 'test-owner');
   assert.throws(
-    () => acquireOperationLease(projectRoot, 'second-owner'),
+    () => acquireOperationLease(projectRoot, 'second-owner', process.pid),
     /OPERATION_IN_PROGRESS/,
   );
 
@@ -260,7 +263,7 @@ test('acquires, validates, and releases an owned operation lease', () => {
 
 test('does not release or validate a lease for a mismatched operation ID', () => {
   const projectRoot = createRoot();
-  const lease = acquireOperationLease(projectRoot, 'test-owner');
+  const lease = acquireOperationLease(projectRoot, 'test-owner', process.pid);
 
   assert.throws(
     () => assertOperationLease(projectRoot, randomUUID()),
@@ -280,6 +283,17 @@ test('does not release or validate a lease for a mismatched operation ID', () =>
   releaseOperationLease(projectRoot, lease.operationId);
 });
 
+test('requires a positive integer owner PID', () => {
+  const projectRoot = createRoot();
+
+  for (const ownerPid of [undefined, 0, -1, 1.5, '123']) {
+    assert.throws(
+      () => acquireOperationLease(projectRoot, 'test-owner', ownerPid),
+      /ownerPid must be a positive integer/,
+    );
+  }
+});
+
 test('never reclaims a lease owned by a live PID even when it is old', () => {
   const projectRoot = createRoot();
   writeLease(projectRoot, {
@@ -290,9 +304,49 @@ test('never reclaims a lease owned by a live PID even when it is old', () => {
   });
 
   assert.throws(
-    () => acquireOperationLease(projectRoot, 'new-owner'),
+    () => acquireOperationLease(projectRoot, 'new-owner', process.pid),
     /OPERATION_IN_PROGRESS/,
   );
+});
+
+test('uses the supplied long-lived owner PID for stale detection', async () => {
+  const projectRoot = createRoot();
+  const wrapper = spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { stdio: 'ignore' },
+  );
+  await once(wrapper, 'spawn');
+
+  try {
+    const lease = acquireOperationLease(projectRoot, 'wrapper-owner', wrapper.pid);
+    assert.equal(lease.pid, wrapper.pid);
+    writeLease(projectRoot, {
+      ...lease,
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    });
+
+    assert.throws(
+      () => acquireOperationLease(projectRoot, 'contender', process.pid),
+      /OPERATION_IN_PROGRESS/,
+    );
+
+    wrapper.kill();
+    await once(wrapper, 'exit');
+
+    const replacement = acquireOperationLease(
+      projectRoot,
+      'replacement',
+      process.pid,
+    );
+    assert.notEqual(replacement.operationId, lease.operationId);
+    releaseOperationLease(projectRoot, replacement.operationId);
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) {
+      wrapper.kill();
+      await once(wrapper, 'exit');
+    }
+  }
 });
 
 test('does not reclaim a recent lease whose PID is absent', () => {
@@ -305,7 +359,7 @@ test('does not reclaim a recent lease whose PID is absent', () => {
   });
 
   assert.throws(
-    () => acquireOperationLease(projectRoot, 'new-owner'),
+    () => acquireOperationLease(projectRoot, 'new-owner', process.pid),
     /OPERATION_IN_PROGRESS/,
   );
 });
@@ -320,9 +374,86 @@ test('reclaims a stale lease only when its PID is absent and it is older than th
     startedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
   });
 
-  const lease = acquireOperationLease(projectRoot, 'replacement-owner');
+  const lease = acquireOperationLease(
+    projectRoot,
+    'replacement-owner',
+    process.pid,
+  );
 
   assert.notEqual(lease.operationId, previousOperationId);
   assert.equal(lease.owner, 'replacement-owner');
+  releaseOperationLease(projectRoot, lease.operationId);
+});
+
+test('serializes stale reclamation so two contenders cannot own the lease', () => {
+  const projectRoot = createRoot();
+  writeLease(projectRoot, {
+    operationId: randomUUID(),
+    pid: 2_000_000_000,
+    owner: 'stale-dead-owner',
+    startedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+  });
+
+  let secondLease;
+  let secondError;
+  const firstLease = acquireOperationLease(
+    projectRoot,
+    'first-contender',
+    process.pid,
+    {
+      writeLeaseContents(descriptor, contents, encoding) {
+        try {
+          secondLease = acquireOperationLease(
+            projectRoot,
+            'second-contender',
+            process.pid,
+          );
+        } catch (error) {
+          secondError = error;
+        }
+        writeFileSync(descriptor, contents, encoding);
+      },
+    },
+  );
+
+  assert.equal(secondLease, undefined);
+  assert.match(String(secondError), /OPERATION_IN_PROGRESS/);
+  assert.equal(
+    JSON.parse(
+      readFileSync(path.join(projectRoot, OPERATION_LEASE_FILENAME), 'utf8'),
+    ).operationId,
+    firstLease.operationId,
+  );
+  releaseOperationLease(projectRoot, firstLease.operationId);
+});
+
+test('removes a partial lease when writing its JSON fails', () => {
+  const projectRoot = createRoot();
+  const leasePath = path.join(projectRoot, OPERATION_LEASE_FILENAME);
+
+  assert.throws(
+    () => acquireOperationLease(
+      projectRoot,
+      'failing-owner',
+      process.pid,
+      {
+        writeLeaseContents(descriptor) {
+          writeFileSync(descriptor, '{', 'utf8');
+          throw new Error('injected lease write failure');
+        },
+      },
+    ),
+    /injected lease write failure/,
+  );
+  assert.doesNotMatch(
+    readdirSync(projectRoot).join('\n'),
+    /^\.agents-chat-operation\.json/m,
+  );
+
+  const lease = acquireOperationLease(projectRoot, 'next-owner', process.pid);
+  assert.equal(
+    JSON.parse(readFileSync(leasePath, 'utf8')).operationId,
+    lease.operationId,
+  );
   releaseOperationLease(projectRoot, lease.operationId);
 });

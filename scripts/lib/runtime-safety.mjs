@@ -14,6 +14,7 @@ import { safetyError } from './safety-errors.mjs';
 
 export const OPERATION_LEASE_FILENAME = '.agents-chat-operation.json';
 export const OPERATION_LEASE_STALE_MS = 30 * 60 * 1000;
+const OPERATION_LEASE_RECLAIM_FILENAME = `${OPERATION_LEASE_FILENAME}.reclaim`;
 
 function invalidProjectRoot(projectRoot) {
   return safetyError('INVALID_PROJECT_ROOT', {
@@ -113,6 +114,10 @@ function leasePath(projectRoot) {
   return path.join(projectRoot, OPERATION_LEASE_FILENAME);
 }
 
+function leaseReclaimPath(projectRoot) {
+  return path.join(projectRoot, OPERATION_LEASE_RECLAIM_FILENAME);
+}
+
 function readLease(projectRoot) {
   const filePath = leasePath(projectRoot);
   let lease;
@@ -179,15 +184,36 @@ function isDeadAndStale(lease, now = Date.now()) {
   );
 }
 
-function writeNewLease(filePath, lease) {
+function writeNewLease(filePath, lease, writeLeaseContents = writeFileSync) {
   let descriptor;
+  let created = false;
   try {
     descriptor = openSync(
       filePath,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
       0o600,
     );
-    writeFileSync(descriptor, `${JSON.stringify(lease)}\n`, 'utf8');
+    created = true;
+    writeLeaseContents(descriptor, `${JSON.stringify(lease)}\n`, 'utf8');
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Preserve the original creation or write error.
+      }
+      descriptor = undefined;
+    }
+    if (created) {
+      try {
+        unlinkSync(filePath);
+      } catch (unlinkError) {
+        if (unlinkError?.code !== 'ENOENT') {
+          throw unlinkError;
+        }
+      }
+    }
+    throw error;
   } finally {
     if (descriptor !== undefined) {
       closeSync(descriptor);
@@ -195,23 +221,67 @@ function writeNewLease(filePath, lease) {
   }
 }
 
-export function acquireOperationLease(projectRoot, owner) {
+function withLeaseReclaimLock(projectRoot, callback) {
+  const filePath = leaseReclaimPath(projectRoot);
+  let descriptor;
+  try {
+    descriptor = openSync(
+      filePath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      0o600,
+    );
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw operationInProgress(readLease(projectRoot), 'lease-reclaim-in-progress');
+    }
+    throw error;
+  }
+
+  try {
+    return callback();
+  } finally {
+    try {
+      closeSync(descriptor);
+    } finally {
+      try {
+        unlinkSync(filePath);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+  }
+}
+
+export function acquireOperationLease(
+  projectRoot,
+  owner,
+  ownerPid,
+  { writeLeaseContents = writeFileSync } = {},
+) {
   const validated = validateProjectRoot(projectRoot, { release: true });
   if (typeof owner !== 'string' || owner.trim() === '') {
     throw new TypeError('owner is required');
+  }
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) {
+    throw new TypeError('ownerPid must be a positive integer');
+  }
+  if (typeof writeLeaseContents !== 'function') {
+    throw new TypeError('writeLeaseContents must be a function');
   }
 
   const filePath = leasePath(validated.projectRoot);
   const lease = Object.freeze({
     operationId: randomUUID(),
-    pid: process.pid,
+    pid: ownerPid,
     owner: owner.trim(),
     startedAt: new Date().toISOString(),
   });
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  return withLeaseReclaimLock(validated.projectRoot, () => {
     try {
-      writeNewLease(filePath, lease);
+      writeNewLease(filePath, lease, writeLeaseContents);
       return lease;
     } catch (error) {
       if (error?.code !== 'EEXIST') {
@@ -219,7 +289,7 @@ export function acquireOperationLease(projectRoot, owner) {
       }
 
       const existingLease = readLease(validated.projectRoot);
-      if (!isDeadAndStale(existingLease) || attempt > 0) {
+      if (!isDeadAndStale(existingLease)) {
         throw operationInProgress(
           existingLease,
           existingLease ? 'lease-active' : 'lease-unreadable',
@@ -238,10 +308,18 @@ export function acquireOperationLease(projectRoot, owner) {
           throw operationInProgress(existingLease, 'stale-lease-remove-failed');
         }
       }
-    }
-  }
 
-  throw operationInProgress(readLease(validated.projectRoot), 'lease-race');
+      try {
+        writeNewLease(filePath, lease, writeLeaseContents);
+        return lease;
+      } catch (writeError) {
+        if (writeError?.code === 'EEXIST') {
+          throw operationInProgress(readLease(validated.projectRoot), 'lease-race');
+        }
+        throw writeError;
+      }
+    }
+  });
 }
 
 export function assertOperationLease(projectRoot, operationId) {

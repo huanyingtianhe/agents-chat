@@ -566,6 +566,72 @@ test('declares the guarded Windows deployment and restart contracts', () => {
   assert.doesNotMatch(installer, /Remove-Item\s+\(Join-Path\s+\$ProjectDir\s+'\.service-stop'\)/);
 });
 
+test('README documents the complete safe restart and recovery runbook', () => {
+  const readme = readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
+  const stableFailureCodes = [
+    'NODE_VERSION_MISMATCH',
+    'NATIVE_ADDON_INCOMPATIBLE',
+    'INVALID_PROJECT_ROOT',
+    'OPERATION_IN_PROGRESS',
+    'DATABASE_MISSING',
+    'DATABASE_INTEGRITY_FAILED',
+    'DATABASE_BUSY',
+    'BACKUP_NO_SPACE',
+    'BACKUP_PERMISSION_DENIED',
+    'BACKUP_VALIDATION_FAILED',
+    'DEPENDENCY_INSTALL_FAILED',
+    'BUILD_FAILED',
+    'MANAGER_CONFLICT',
+    'PORT_IN_USE',
+    'SERVICE_START_FAILED',
+    'STORAGE_HEALTH_FAILED',
+    'RESTORE_PRECONDITION_FAILED',
+    'UNEXPECTED_ERROR',
+  ];
+
+  assert.match(readme, /Node\.js 24/);
+  assert.match(readme, /sudo \.\/scripts\/deploy\.sh/);
+  assert.match(readme, /sudo \.\/scripts\/safe-restart\.sh systemd/);
+  assert.match(readme, /\.\/scripts\/safe-restart\.sh pm2/);
+  assert.match(readme, /\.\\scripts\\deploy\.ps1/);
+  assert.match(readme, /\.\\scripts\\safe-restart\.ps1/);
+  assert.match(readme, /direct manager commands/i);
+  assert.match(readme, /without a guaranteed pre-stop backup/i);
+  assert.match(readme, /default.*3010/is);
+  assert.match(readme, /\.env\.local.*\/etc\/agents-chat\.env/is);
+  assert.match(readme, /\.env\.local.*process environment/is);
+  assert.match(readme, /\.env\.local.*3000/is);
+  assert.match(readme, /\.data\/backups/);
+  assert.match(readme, /latest 10 complete verified batches/i);
+  assert.match(readme, /0700/);
+  assert.match(readme, /0600/);
+  assert.match(readme, /sensitive configuration/i);
+  assert.match(readme, /off-host/i);
+  assert.match(readme, /npm run diagnose -- --project-root "\$PWD" --manager systemd/);
+  assert.match(readme, /Get-ChildItem \.\\\.data\\backups/);
+  assert.match(readme, /runtime-preflight\.mjs acquire-lease/);
+  assert.match(readme, /restore-databases\.mjs/);
+  assert.match(readme, /--service-stopped/);
+  assert.match(readme, /runtime-preflight\.mjs release-lease/);
+  assert.match(readme, /systemctl stop agents-chat/);
+  assert.match(readme, /systemctl start agents-chat/);
+  assert.match(readme, /pm2 stop agents-chat/);
+  assert.match(readme, /pm2 start agents-chat/);
+  assert.match(readme, /\.\\scripts\\safe-restart\.ps1 -RemoveTask/);
+  assert.match(readme, /\.\\scripts\\deploy\.ps1 -SkipGitPull/);
+  assert.match(readme, /journalctl -u agents-chat/);
+  assert.match(readme, /pm2 logs agents-chat/);
+  assert.match(readme, /service-watchdog\.log/);
+  assert.match(readme, /start-service-child\.err\.log/);
+  assert.match(readme, /storage_unavailable/);
+  assert.match(readme, /do not delete or recreate `?\.data`?/i);
+  assert.match(readme, /do not copy a live `?\.db`?/i);
+  assert.match(readme, /do not restore.*until.*service.*stopped/is);
+  for (const code of stableFailureCodes) {
+    assert.match(readme, new RegExp(`\\| \`${code}\` \\|`), `missing ${code}`);
+  }
+});
+
 test('pack.ps1 packages verified database snapshots and always releases its lease', () => {
   const pack = readFileSync(path.join(projectRoot, 'scripts', 'pack.ps1'), 'utf8');
 

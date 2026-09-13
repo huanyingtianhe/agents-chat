@@ -4,6 +4,7 @@ import AzureADProvider from 'next-auth/providers/azure-ad';
 import GitHubProvider from 'next-auth/providers/github';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { type NextRequest } from 'next/server';
+import { getGitHubAllowedEmails, isGitHubEmailAllowed } from '@/lib/auth';
 
 /** Constant-time string comparison to prevent timing attacks. */
 function safeEqual(a: string, b: string): boolean {
@@ -143,6 +144,39 @@ export const authOptions: AuthOptions = {
     },
   },
   callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider !== 'github') return true;
+
+      const allowedEmails = getGitHubAllowedEmails(
+        process.env.GITHUB_ALLOWED_EMAILS,
+        process.env.ADMIN_EMAILS,
+      );
+      if (allowedEmails.length === 0) {
+        return '/login?error=GitHubAllowlistNotConfigured';
+      }
+
+      let email = typeof profile?.email === 'string' ? profile.email : '';
+      if (!email && account.access_token) {
+        try {
+          const res = await fetch('https://api.github.com/user/emails', {
+            headers: {
+              Authorization: `Bearer ${account.access_token}`,
+              Accept: 'application/vnd.github+json',
+            },
+          });
+          if (res.ok) {
+            const emails = (await res.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+            const verified = emails.find((entry) => entry.primary && entry.verified)
+              || emails.find((entry) => entry.verified);
+            email = verified?.email || '';
+          }
+        } catch {
+          return false;
+        }
+      }
+
+      return isGitHubEmailAllowed(email || user.email || undefined, allowedEmails);
+    },
     async jwt({ token, user, account }) {
       // For GitHub OAuth: fetch the verified primary email if it wasn't
       // included in the profile (users with private email settings).

@@ -33,7 +33,13 @@ function LoginContent() {
 
         {(error || loginError) && (
           <div style={styles.error}>
-            {loginError || (error === 'CredentialsSignin' ? 'Invalid username or password' : 'Sign in failed. Please try again.')}
+            {loginError || (
+              error === 'GitHubAllowlistNotConfigured'
+                ? 'GitHub login is not configured. Set GITHUB_ALLOWED_EMAILS or ADMIN_EMAILS in the environment configuration, then restart the service.'
+                : error === 'CredentialsSignin'
+                  ? 'Invalid username or password'
+                  : 'Sign in failed. Please try again.'
+            )}
           </div>
         )}
 

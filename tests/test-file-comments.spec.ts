@@ -2552,6 +2552,8 @@ test.describe('File Comments UI', () => {
     });
     await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
 
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await page.click('button.leftSidebarTab:has-text("Files")');
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: 'close.md' }).click();
@@ -2594,6 +2596,8 @@ test.describe('File Comments UI', () => {
     });
     await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
 
+    await page.reload();
+    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
     await page.click('button.leftSidebarTab:has-text("Files")');
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: 'typography.md' }).click();

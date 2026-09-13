@@ -65,6 +65,8 @@ export function ChatPageClient() {
   const getSelectedModelIdRef = useRef<(agentId: string) => string>(() => '');
   const getSelectedModelIdForAgent = useCallback((agentId: string) => getSelectedModelIdRef.current(agentId), []);
   const chatContainerRef = useRef<HTMLElement | null>(null);
+  const chatScrollPositionsRef = useRef(new Map<string, number>());
+  const pendingChatScrollRestoreRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const lastChatScrollTopRef = useRef(0);
   const fileCommentsControllerRef = useRef<Pick<UseFileCommentsResult, 'resetForFileOpen'> | null>(null);
@@ -115,9 +117,19 @@ export function ChatPageClient() {
   };
   panelCallbacksRef.current = { setSelectedAgentFilter: registry.setSelectedAgentFilter, setShowChatsPanel, setShowAgentsPanel, setOpenChatMenuId, setRenamingChatId, setRenameValue };
 
-  const fileWorkspace = useFileWorkspaceState({ agents, agentsLoading, mounted, schedulerAgentId: SCHEDULER_AGENT_ID, onFileOpened: ({ agentId, filePath, restoreScrollTop }) => fileCommentsControllerRef.current?.resetForFileOpen(agentId, filePath, restoreScrollTop) });
+  const handleBeforeFileTabChange = useCallback((tab: 'chats' | 'files') => {
+    if (tab === 'files') {
+      if (currentChatId && chatContainerRef.current) {
+        chatScrollPositionsRef.current.set(currentChatId, chatContainerRef.current.scrollTop);
+      }
+      shouldStickToBottomRef.current = false;
+    } else {
+      pendingChatScrollRestoreRef.current = currentChatId || null;
+    }
+  }, [currentChatId]);
+  const fileWorkspace = useFileWorkspaceState({ agents, agentsLoading, mounted, schedulerAgentId: SCHEDULER_AGENT_ID, onBeforeTabChange: handleBeforeFileTabChange, onFileOpened: ({ agentId, filePath, restoreScrollTop }) => fileCommentsControllerRef.current?.resetForFileOpen(agentId, filePath, restoreScrollTop) });
   const fileCommentsController = useFileComments(fileWorkspace, {
-    mounted, onOpenReviewChat: async (chatId) => { fileWorkspace.setLeftSidebarTab('chats'); await runtimeLoadChat(chatId); },
+    mounted, onOpenReviewChat: async (chatId) => { switchLeftSidebarTab('chats'); await runtimeLoadChat(chatId); },
     onLoadChatIntoCache: loadChatIntoCache, onDispatchToAgent: dispatchToAgent, onInterruptAgent: (agentId, chatId) => acp({ action: 'interrupt', agentId, chatId }),
     onGetActiveRun: (reviewChatId, commentId) => {
       const activeRun = Object.entries(sessionRunsRef.current).find(([, run]) => run.chatId === reviewChatId && run.commentId === commentId);
@@ -182,6 +194,25 @@ export function ChatPageClient() {
   useEffect(() => { if (chatFilterAgents.length && registry.selectedAgentFilter && !chatFilterAgents.some((agent) => agent.id === registry.selectedAgentFilter)) registry.setSelectedAgentFilter(null); }, [registry.selectedAgentFilter, chatFilterAgents]);
   useEffect(() => { if (!mounted || !currentChatId) return; for (const agentId of composerTargetAgentIds) if ((agents.find((agent) => agent.id === agentId)?.models || []).length === 0 && !registry.ensuringAgentModels[agentId]) void registry.ensureAgentModels(agentId, { currentChatId, currentAgentSessionsRef, setChatHistory }); }, [mounted, currentChatId, composerTargetAgentIds.join('|'), agents]);
   useEffect(() => { const el = chatContainerRef.current; if (el && shouldStickToBottomRef.current) { el.scrollTop = el.scrollHeight; lastChatScrollTopRef.current = el.scrollTop; } }, [messages]);
+  useEffect(() => {
+    if (leftSidebarTab !== 'chats') return;
+    const chatId = pendingChatScrollRestoreRef.current;
+    const savedScrollTop = chatId ? chatScrollPositionsRef.current.get(chatId) : undefined;
+    if (savedScrollTop === undefined) {
+      pendingChatScrollRestoreRef.current = null;
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const container = chatContainerRef.current;
+      if (!container) return;
+      container.scrollTop = Math.max(0, Math.min(savedScrollTop, container.scrollHeight - container.clientHeight));
+      lastChatScrollTopRef.current = container.scrollTop;
+      shouldStickToBottomRef.current = false;
+      setShowScrollToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 4);
+      pendingChatScrollRestoreRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [leftSidebarTab, currentChatId]);
   useEffect(() => { const el = chatContainerRef.current; if (!el) return; const onScroll = () => updateChatStickiness(el); onScroll(); el.addEventListener('scroll', onScroll, { passive: true }); return () => el.removeEventListener('scroll', onScroll); }, []);
 
   function updateChatStickiness(container: HTMLElement) {
@@ -203,7 +234,7 @@ export function ChatPageClient() {
   async function loadChat(chatId: string) { if (chatId === currentChatId) { setOpenChatMenuId(null); setShowChatsPanel(false); return; } setOpenChatMenuId(null); shouldStickToBottomRef.current = true; setShowScrollToBottom(false); await runtimeLoadChat(chatId); requestAnimationFrame(() => { const el = chatContainerRef.current; if (el) el.scrollTop = el.scrollHeight; }); }
   async function createNewChat() { setOpenChatMenuId(null); await runtimeCreateNewChat(registry.selectedAgentFilter); }
   async function renameChatById(chatId: string, newName: string) { await runtimeRenameChatById(chatId, newName, () => { setRenamingChatId(null); setRenameValue(''); }); }
-  async function deleteChatById(chatId: string) { await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }
+  async function deleteChatById(chatId: string) { chatScrollPositionsRef.current.delete(chatId); await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }
   async function handleSend() { let text = (inputRef.current || composerRef.current?.value || '').trim(); const sendAttachments = attachments; if ((!text && sendAttachments.length === 0) || agents.length === 0) return; if (pastedLinksRef.current.length > 0) { for (const { text: linkText, href } of pastedLinksRef.current) { const idx = text.indexOf(linkText); if (idx !== -1) { text = text.substring(0, idx) + `[${linkText}](${href})` + text.substring(idx + linkText.length); } } pastedLinksRef.current = []; } shouldStickToBottomRef.current = true; clearAttachments(); await runtimeHandleSend(text, sendAttachments, inputHistoryIndexRef, inputDraftRef); }
   function selectMention(agentId: string) { const currentInput = inputRef.current, atIndex = currentInput.lastIndexOf('@'); setInputProgrammatic(`${currentInput.slice(0, atIndex)}@${agentId} `); setMentionSelectedIndex(0); }
   function insertSlashCommand(command: { name: string }) { setInputProgrammatic(`/${command.name} `); setSlashSelectedIndex(0); composerRef.current?.focus(); }

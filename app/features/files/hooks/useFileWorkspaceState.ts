@@ -23,9 +23,10 @@ export function useFileWorkspaceState({
   agentsLoading,
   mounted,
   schedulerAgentId,
+  onBeforeTabChange,
   onFileOpened,
 }: UseFileWorkspaceStateDeps): UseFileWorkspaceStateResult {
-  const [leftSidebarTab, setLeftSidebarTab] = useState<LeftSidebarTab>('chats');
+  const [leftSidebarTab, setLeftSidebarTabState] = useState<LeftSidebarTab>('chats');
   const [mdFilesList, setMdFilesList] = useState<MarkdownFileEntry[]>([]);
   const [mdFilesLoading, setMdFilesLoading] = useState(false);
   const [mdFilesError, setMdFilesError] = useState<string | null>(null);
@@ -123,7 +124,7 @@ export function useFileWorkspaceState({
     const savedFileWorkspace = parseFileWorkspaceState(window.localStorage.getItem(STORAGE_FILE_WORKSPACE));
     if (!savedFileWorkspace) return;
     fileWorkspaceRestoreRef.current = savedFileWorkspace;
-    setLeftSidebarTab(savedFileWorkspace.tab);
+    setLeftSidebarTabState(savedFileWorkspace.tab);
     setMdDiffOnly(savedFileWorkspace.diffOnly);
     setMdEditorMode(savedFileWorkspace.editorMode);
   }, [mounted]);
@@ -136,7 +137,7 @@ export function useFileWorkspaceState({
       return;
     }
 
-    setLeftSidebarTab(workspace.tab);
+    setLeftSidebarTabState(workspace.tab);
     setMdDiffOnly(workspace.diffOnly);
     setMdEditorMode(normalizeFileEditorMode(workspace.editorMode, workspace.filePath));
     fileWorkspaceRestoredRef.current = true;
@@ -205,9 +206,17 @@ export function useFileWorkspaceState({
   }, [mdEditContent, mdEditorMode, mdFileContent]);
 
   const switchLeftSidebarTab = useCallback((tab: LeftSidebarTab) => {
+    if (tab === leftSidebarTab) return;
+    onBeforeTabChange?.(tab);
     if (tab !== 'files') syncLiveToMarkdown();
-    setLeftSidebarTab(tab);
-  }, [syncLiveToMarkdown]);
+    setLeftSidebarTabState(tab);
+  }, [leftSidebarTab, onBeforeTabChange, syncLiveToMarkdown]);
+
+  const setLeftSidebarTab = useCallback((tab: LeftSidebarTab) => {
+    if (tab === leftSidebarTab) return;
+    onBeforeTabChange?.(tab);
+    setLeftSidebarTabState(tab);
+  }, [leftSidebarTab, onBeforeTabChange]);
 
   const saveMdFile = useCallback(async (contentOverride?: string, mtimeOverride?: string | null) => {
     if (!mdSelectedAgentId || !mdSelectedFile) return;

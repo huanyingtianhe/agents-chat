@@ -2480,6 +2480,137 @@ test.describe('File Comments UI', () => {
     await expect(page.locator('.mdEditorLive')).toBeVisible();
   });
 
+  test('preserves chat scroll position when switching between Chats and Files', async ({ page }) => {
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({ json: { ok: true, agents: [{ id: 'scroll-agent', name: 'Scroll Agent', cwd: 'Q:\\Repos\\Agents-Chat' }] } });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+    await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
+
+    await page.evaluate(async () => {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat: {
+            id: 'scroll-preservation-chat',
+            name: 'Scroll Preservation Chat',
+            ts: Date.now(),
+            messages: Array.from({ length: 30 }, (_, index) => ({
+              id: `scroll-message-${index}`,
+              type: 'user',
+              content: `Message ${index}`,
+              ts: Date.now() + index,
+            })),
+            agentSessions: {},
+          },
+        }),
+      });
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-last-chat', chatId: 'scroll-preservation-chat' }),
+      });
+    });
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+
+    const savedScrollTop = await page.locator('.chatContainer').evaluate((element) => {
+      const container = element as HTMLElement;
+      container.scrollTop = Math.min(240, Math.max(40, container.scrollHeight - container.clientHeight - 40));
+      return container.scrollTop;
+    });
+    await page.click('button.leftSidebarTab:has-text("Files")');
+    await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
+    await page.click('button.leftSidebarTab:has-text("Chats")');
+
+    const restoredScrollTop = await page.locator('.chatContainer').evaluate((element) => (element as HTMLElement).scrollTop);
+    expect(Math.abs(restoredScrollTop - savedScrollTop)).toBeLessThanOrEqual(2);
+  });
+
+  test('only confirms closing Markdown when it has unsaved changes', async ({ page }) => {
+    const agentId = 'close-confirm-agent';
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({ json: { ok: true, agents: [{ id: agentId, name: 'Close Confirm Agent', cwd: 'Q:\\Repos\\Agents-Chat' }] } });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+    await page.route('**/api/markdown?**', async route => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('path')) {
+        await route.fulfill({ json: { path: 'close.md', content: '# Close test\n\nOriginal text.', kind: 'markdown', mtime: new Date().toISOString() } });
+        return;
+      }
+      await route.fulfill({ json: { files: [{ path: 'close.md', name: 'close.md', mtime: new Date().toISOString() }] } });
+    });
+    await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
+
+    await page.click('button.leftSidebarTab:has-text("Files")');
+    await selectFilesAgent(page, agentId);
+    await page.locator('.mdTreeFile', { hasText: 'close.md' }).click();
+    await expect(page.locator('.mdEditorFilePath')).toContainText('close.md');
+
+    let dialogCount = 0;
+    page.on('dialog', async dialog => {
+      dialogCount += 1;
+      await dialog.dismiss();
+    });
+    await page.click('button:has-text("✕ Close")');
+    await expect(page.locator('.mdEditorFilePath')).toHaveCount(0);
+    expect(dialogCount).toBe(0);
+
+    await page.locator('.mdTreeFile', { hasText: 'close.md' }).click();
+    await page.locator('.mdLiveEditable').fill('# Close test\n\nChanged text.');
+    await expect(page.locator('.mdDirtyBadge')).toBeVisible();
+    await page.click('button:has-text("✕ Close")');
+    await expect(page.locator('.mdEditorFilePath')).toBeVisible();
+    expect(dialogCount).toBe(1);
+  });
+
+  test('uses chat-sized typography in the Markdown viewer', async ({ page }) => {
+    const agentId = 'markdown-typography-agent';
+    await page.route('**/api/acp', async route => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      if (body?.action === 'list-agents') {
+        await route.fulfill({ json: { ok: true, agents: [{ id: agentId, name: 'Typography Agent', cwd: 'Q:\\Repos\\Agents-Chat' }] } });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+    });
+    await page.route('**/api/markdown?**', async route => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('path')) {
+        await route.fulfill({ json: { path: 'typography.md', content: '# Main heading\n\nBody text.', kind: 'markdown', mtime: new Date().toISOString() } });
+        return;
+      }
+      await route.fulfill({ json: { files: [{ path: 'typography.md', name: 'typography.md', mtime: new Date().toISOString() }] } });
+    });
+    await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
+
+    await page.click('button.leftSidebarTab:has-text("Files")');
+    await selectFilesAgent(page, agentId);
+    await page.locator('.mdTreeFile', { hasText: 'typography.md' }).click();
+    const typography = await page.locator('.mdLiveEditable').evaluate(element => {
+      const body = element.querySelector('p')!;
+      const heading = element.querySelector('h1')!;
+      return {
+        bodyFontSize: getComputedStyle(body).fontSize,
+        bodyLineHeight: getComputedStyle(body).lineHeight,
+        headingFontSize: getComputedStyle(heading).fontSize,
+      };
+    });
+    expect(typography.bodyFontSize).toBe('13.5px');
+    expect(typography.bodyLineHeight).toBe('20.25px');
+    expect(Number.parseFloat(typography.headingFontSize)).toBeGreaterThan(Number.parseFloat(typography.bodyFontSize));
+  });
+
   test('file editor toolbar buttons match Files tab styling', async ({ page }) => {
     const agentId = 'toolbar-style-agent';
     const filePath = 'toolbar-style.md';

@@ -192,10 +192,7 @@ export function FileEditorPanel({ workspace, comments, selection }: FileEditorPa
             {workspace.mdSaving ? 'Saving…' : '💾 Save'}
           </button>
           <button className="mdEditorBtn secondary" onClick={() => {
-            if (isMarkdownFile(filePath) && workspace.mdEditorMode === 'live') {
-              const md = workspace.syncLiveToMarkdown();
-              if (md !== workspace.mdFileContent && !confirm('Discard changes?')) return;
-            } else if (workspace.mdDirty && !confirm('Discard changes?')) return;
+            if (workspace.mdDirty && !confirm('Discard changes?')) return;
             selection.clearLiveSelectionDraft();
             workspace.closeMdEditor();
           }}>

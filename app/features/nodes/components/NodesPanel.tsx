@@ -5,11 +5,12 @@ import { useNodePanelState } from '../hooks/useNodePanelState';
 
 export interface NodesPanelProps {
   panelState: ReturnType<typeof useNodePanelState>;
+  onClose?: () => void;
 }
 
 type Launcher = 'copilot' | 'agency';
 
-export function NodesPanel({ panelState }: NodesPanelProps) {
+export function NodesPanel({ panelState, onClose }: NodesPanelProps) {
   const {
     showNodesPanel,
     setShowNodesPanel,
@@ -49,7 +50,7 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
     <>
       {/* ── Right sidebar: nodes ── */}
       {showNodesPanel && (
-        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`}>
+        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="nodes" tabIndex={-1}>
           <div className="agentsSidebarHeader">
             <span>Nodes</span>
             <div style={{ display: 'flex', gap: '4px' }}>
@@ -57,7 +58,7 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
               <div style={{ position: 'relative' }}>
                 <button className="sidebarToggle" onClick={() => { setShowSetupScript(true); }} title="Add node">+</button>
               </div>
-              <button className="sidebarToggle" onClick={() => setShowNodesPanel(false)}>→</button>
+              <button className="sidebarToggle" onClick={onClose ?? (() => setShowNodesPanel(false))} aria-label="Close nodes" data-mobile-overlay-initial-focus>→</button>
             </div>
           </div>
           <div className="agentsSidebarSection">

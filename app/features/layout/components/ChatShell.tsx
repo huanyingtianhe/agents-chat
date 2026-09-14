@@ -71,6 +71,28 @@ export function ChatShell({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isMobileLayout || mobileOverlay === null) return;
+
+    let retryFrame = 0;
+    const focusOverlay = () => {
+      const surfaceSelector = mobileOverlay === 'navigation'
+        ? '.participantsSidebar'
+        : `[data-mobile-overlay-surface="${mobileOverlay}"]`;
+      const surface = pageRef.current?.querySelector<HTMLElement>(surfaceSelector);
+      const target = surface?.querySelector<HTMLElement>('[data-mobile-overlay-initial-focus]')
+        ?? surface?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        ?? surface;
+      if (target) target.focus();
+      else retryFrame = window.requestAnimationFrame(focusOverlay);
+    };
+    const frame = window.requestAnimationFrame(focusOverlay);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(retryFrame);
+    };
+  }, [isMobileLayout, mobileOverlay]);
+
   return (
     <main
       ref={pageRef}

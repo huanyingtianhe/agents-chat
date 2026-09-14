@@ -312,6 +312,16 @@ test('desktop header keeps inline feature controls', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
   await expect(page.locator('.userNameButton')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeHidden();
+
+  for (const panel of ['agents', 'nodes', 'schedules'] as const) {
+    const label = panel[0].toUpperCase() + panel.slice(1);
+    await page.locator(`button[title="${label}"]`).click();
+    await expect(page.getByRole('button', { name: `Close ${panel}` })).toBeVisible();
+    await page.getByRole('button', { name: `Close ${panel}` }).click();
+    await expect(page.getByRole('button', { name: `Close ${panel}` })).toHaveCount(0);
+    await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  }
 });
 
 test('settings persist the remembered agent scope per chat', async ({ page }) => {

@@ -77,7 +77,7 @@ export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps)
 
   return (
     <>
-      <aside className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`}>
+      <aside className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="schedules" tabIndex={-1}>
         <div className="agentsSidebarHeader">
           <span>Schedules</span>
           <div style={{ display: 'flex', gap: '4px' }}>
@@ -88,7 +88,7 @@ export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps)
             >
               +
             </button>
-            <button className="sidebarToggle" onClick={onClose}>
+            <button className="sidebarToggle" onClick={onClose} aria-label="Close schedules" data-mobile-overlay-initial-focus>
               →
             </button>
           </div>

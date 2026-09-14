@@ -64,6 +64,7 @@ export function PageHeader({
   const [showSettings, setShowSettings] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const headerOverflowRef = useRef<HTMLDivElement | null>(null);
+  const headerOverflowButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const accountRef = useRef<HTMLDivElement | null>(null);
   const currentThemeId = normalizeThemeId(normalizedThemeId || activeThemeId);
@@ -182,6 +183,7 @@ export function PageHeader({
 
         <div className="headerOverflowWrap" ref={headerOverflowRef}>
           <button
+            ref={headerOverflowButtonRef}
             type="button"
             className={`ghostButton headerOverflowBtn ${overflowOpen ? 'activeGhost' : ''}`}
             onClick={(event) => {
@@ -196,14 +198,14 @@ export function PageHeader({
             <span aria-hidden="true">⋯</span>
           </button>
           {overflowOpen && (
-            <div className="headerOverflowMenu" role="menu" aria-label="Header actions">
+            <div className="headerOverflowMenu" role="menu" aria-label="Header actions" data-mobile-overlay-surface={isMobileLayout ? 'more' : undefined}>
               {isMobileLayout ? (
                 <>
-                  <button type="button" role="menuitem" className="headerOverflowItem" onClick={(event) => onMobileOverlayOpen('theme', event.currentTarget)}><span className="headerOverflowEmoji">🎨</span><span>Theme</span></button>
-                  <button type="button" role="menuitem" className={`headerOverflowItem ${showAgentsPanel ? 'active' : ''}`} onClick={(event) => onToggleAgents(event.currentTarget)}><span className="headerOverflowEmoji">🤖</span><span>Agents</span></button>
-                  <button type="button" role="menuitem" className={`headerOverflowItem ${showNodesPanel ? 'active' : ''}`} onClick={(event) => onToggleNodes(event.currentTarget)}><span className="headerOverflowEmoji">🖥️</span><span>Nodes</span></button>
-                  <button type="button" role="menuitem" className={`headerOverflowItem ${showSchedulesPanel ? 'active' : ''}`} onClick={(event) => onToggleSchedules(event.currentTarget)}><span className="headerOverflowEmoji">⏰</span><span>Schedules</span></button>
-                  <button type="button" role="menuitem" className="headerOverflowItem" onClick={(event) => onMobileOverlayOpen('settings', event.currentTarget)}><span className="headerOverflowEmoji">⚙️</span><span>Settings</span></button>
+                  <button type="button" role="menuitem" className="headerOverflowItem" data-mobile-overlay-initial-focus onClick={() => onMobileOverlayOpen('theme', headerOverflowButtonRef.current ?? undefined)}><span className="headerOverflowEmoji">🎨</span><span>Theme</span></button>
+                  <button type="button" role="menuitem" className={`headerOverflowItem ${showAgentsPanel ? 'active' : ''}`} onClick={() => onToggleAgents(headerOverflowButtonRef.current ?? undefined)}><span className="headerOverflowEmoji">🤖</span><span>Agents</span></button>
+                  <button type="button" role="menuitem" className={`headerOverflowItem ${showNodesPanel ? 'active' : ''}`} onClick={() => onToggleNodes(headerOverflowButtonRef.current ?? undefined)}><span className="headerOverflowEmoji">🖥️</span><span>Nodes</span></button>
+                  <button type="button" role="menuitem" className={`headerOverflowItem ${showSchedulesPanel ? 'active' : ''}`} onClick={() => onToggleSchedules(headerOverflowButtonRef.current ?? undefined)}><span className="headerOverflowEmoji">⏰</span><span>Schedules</span></button>
+                  <button type="button" role="menuitem" className="headerOverflowItem" onClick={() => onMobileOverlayOpen('settings', headerOverflowButtonRef.current ?? undefined)}><span className="headerOverflowEmoji">⚙️</span><span>Settings</span></button>
                 </>
               ) : (
                 <>
@@ -222,15 +224,15 @@ export function PageHeader({
             </div>
           )}
           {isMobileLayout && mobileOverlay === 'theme' ? (
-            <div className="headerOverflowMenu mobileHeaderSubmenu" role="menu" aria-label="Theme">
-              <button type="button" role="menuitem" className="headerOverflowItem" onClick={() => onMobileOverlayOpen('more')}><span className="headerOverflowEmoji">←</span><span>Back</span></button>
+            <div className="headerOverflowMenu mobileHeaderSubmenu" role="menu" aria-label="Theme" data-mobile-overlay-surface="theme">
+              <button type="button" role="menuitem" className="headerOverflowItem" data-mobile-overlay-initial-focus onClick={() => onMobileOverlayOpen('more')}><span className="headerOverflowEmoji">←</span><span>Back</span></button>
               <div className="headerOverflowSeparator" />
               {themeItems}
             </div>
           ) : null}
           {isMobileLayout && mobileOverlay === 'settings' ? (
-            <div className="headerOverflowMenu mobileHeaderSubmenu" role="menu" aria-label="Settings">
-              <button type="button" role="menuitem" className="headerOverflowItem" onClick={() => onMobileOverlayOpen('more')}><span className="headerOverflowEmoji">←</span><span>Back</span></button>
+            <div className="headerOverflowMenu mobileHeaderSubmenu" role="menu" aria-label="Settings" data-mobile-overlay-surface="settings">
+              <button type="button" role="menuitem" className="headerOverflowItem" data-mobile-overlay-initial-focus onClick={() => onMobileOverlayOpen('more')}><span className="headerOverflowEmoji">←</span><span>Back</span></button>
               <div className="headerOverflowSeparator" />
               {settingsItems}
             </div>
@@ -255,7 +257,7 @@ export function PageHeader({
               {authLabel}{isAdmin ? ' ★' : ''}
             </button>
             {accountOpen && (
-              <div className="accountMenu" role="dialog" aria-label="Account details">
+              <div className="accountMenu" role="dialog" aria-label="Account details" data-mobile-overlay-surface={isMobileLayout ? 'account' : undefined}>
                 <div className="accountMenuHeader">
                   {userImage ? <img className="accountMenuAvatar" src={userImage} alt="" /> : <span className="accountMenuAvatar accountMenuAvatarFallback">{(authLabel || '?')[0].toUpperCase()}</span>}
                   <div className="accountMenuIdentity"><span className="accountMenuName">{authLabel}</span><span className={`accountMenuRole ${isAdmin ? 'isAdmin' : ''}`}>{isAdmin ? '★ Administrator' : 'User'}</span></div>
@@ -264,7 +266,7 @@ export function PageHeader({
                 <div className="accountMenuRow"><span className="accountMenuLabel">Email</span><span className="accountMenuValue">{userEmail || '—'}</span></div>
                 <div className="accountMenuRow"><span className="accountMenuLabel">Role</span><span className="accountMenuValue">{isAdmin ? 'Administrator' : 'User'}</span></div>
                 <div className="accountMenuSeparator" />
-                <button type="button" className="accountMenuSignOut" onClick={() => { if (isMobileLayout) onMobileOverlayClose(); else setShowAccount(false); onSignOut(); }}>Sign out</button>
+                <button type="button" className="accountMenuSignOut" data-mobile-overlay-initial-focus={isMobileLayout ? true : undefined} onClick={() => { if (isMobileLayout) onMobileOverlayClose(); else setShowAccount(false); onSignOut(); }}>Sign out</button>
               </div>
             )}
           </div>

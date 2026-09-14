@@ -183,6 +183,45 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
+  test('keeps Markdown tables in the desktop table layout', async ({ page }) => {
+    const chat = {
+      id: `desktop-markdown-table-${Date.now()}`,
+      name: 'Desktop Markdown table',
+      ts: Date.now(),
+      messages: [{
+        id: 'desktop-table-message',
+        type: 'user',
+        content: '| Name | Value |\n| --- | --- |\n| Alpha | Beta |',
+        ts: Date.now() + 1,
+      }],
+      agentSessions: {},
+    };
+    const request = page.context().request;
+    const createResponse = await request.post(`${BASE}/api/chats`, { data: { chat } });
+    expect(createResponse.ok()).toBeTruthy();
+    const selectResponse = await request.post(`${BASE}/api/chats`, {
+      data: { action: 'set-last-chat', chatId: chat.id },
+    });
+    expect(selectResponse.ok()).toBeTruthy();
+
+    await page.reload();
+    const markdown = page.locator('.message.user .markdownBody');
+    const table = markdown.locator('table');
+    await expect(table).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeGreaterThan(900);
+    await expect(table).toHaveCSS('display', 'table');
+    await expect(table).toHaveCSS('overflow-x', 'visible');
+    await expect.poll(async () => {
+      const [tableBox, markdownBox] = await Promise.all([
+        table.boundingBox(),
+        markdown.boundingBox(),
+      ]);
+      return tableBox !== null && markdownBox !== null
+        ? Math.abs(tableBox.width - markdownBox.width)
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+  });
+
   test('keeps the header stationary while messages scroll in either direction', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 800 });
     await ensureActiveChat(page);

@@ -6,11 +6,12 @@ import { useNodePanelState } from '../hooks/useNodePanelState';
 export interface NodesPanelProps {
   panelState: ReturnType<typeof useNodePanelState>;
   onClose?: () => void;
+  mobileModal?: boolean;
 }
 
 type Launcher = 'copilot' | 'agency';
 
-export function NodesPanel({ panelState, onClose }: NodesPanelProps) {
+export function NodesPanel({ panelState, onClose, mobileModal = false }: NodesPanelProps) {
   const {
     showNodesPanel,
     setShowNodesPanel,
@@ -50,7 +51,7 @@ export function NodesPanel({ panelState, onClose }: NodesPanelProps) {
     <>
       {/* ── Right sidebar: nodes ── */}
       {showNodesPanel && (
-        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="nodes" tabIndex={-1}>
+        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="nodes" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Nodes' : undefined}>
           <div className="agentsSidebarHeader">
             <span>Nodes</span>
             <div style={{ display: 'flex', gap: '4px' }}>

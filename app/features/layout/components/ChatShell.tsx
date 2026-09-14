@@ -45,6 +45,7 @@ export function ChatShell({
   onSidebarResizeStart,
 }: ChatShellProps) {
   const pageRef = useRef<HTMLElement | null>(null);
+  const hasModalMobileOverlay = isMobileLayout && mobileOverlay !== null;
 
   useEffect(() => {
     const page = pageRef.current;
@@ -119,7 +120,7 @@ export function ChatShell({
         {!sidebarCollapsed && (
           <div className="sidebarResizeHandle" onMouseDown={onSidebarResizeStart} />
         )}
-        <div className="chatMain">
+        <div className="chatMain" aria-hidden={hasModalMobileOverlay || undefined}>
           {messages}
           {composer}
         </div>

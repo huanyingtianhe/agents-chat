@@ -83,3 +83,101 @@ test('close arrows clear panel state, backdrop, body lock, and restore More focu
     await expect(more).toBeFocused();
   }
 });
+
+test('preserves composer and current chat state while opening and closing navigation', async ({ page }) => {
+  const composer = page.locator('textarea.composerTextarea');
+  await composer.fill('unsent mobile draft');
+  await expect(page.getByText('Existing mobile message')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+  await page.getByRole('button', { name: 'Close active panel' }).click();
+
+  await expect(composer).toHaveValue('unsent mobile draft');
+  await expect(page.getByText('Existing mobile message')).toBeVisible();
+  await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
+});
+
+test('closes navigation only after a successful chat selection', async ({ page }) => {
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Second mobile chat' }).click();
+
+  await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByText('Second chat message')).toBeVisible();
+});
+
+test('keeps navigation open after a failed chat selection', async ({ page }) => {
+  await page.route('**/api/chats**', async (route) => {
+    const id = new URL(route.request().url()).searchParams.get('id');
+    if (id === 'second-mobile-chat') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: false, error: 'Chat unavailable' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Second mobile chat' }).click();
+  await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
+});
+
+test('closes the drawer after selecting a file and keeps the viewer in main content', async ({ page }) => {
+  await page.locator('textarea.composerTextarea').fill('draft retained behind file');
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files agent' }).click();
+  await page.getByRole('option', { name: 'Alpha Agent' }).click();
+  await page.getByRole('button', { name: 'README.md' }).click();
+
+  await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(page.locator('.mdEditorInline')).toBeVisible();
+  await expect(page.getByTitle('Toggle comments')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Save/ })).toHaveCount(0);
+  await expect(page.getByText('Use the desktop interface to edit files.')).toBeVisible();
+  await expect(page.locator('textarea.composerTextarea')).toHaveCount(0);
+
+  await page.getByRole('button', { name: /Close/ }).click();
+  await expect(page.locator('textarea.composerTextarea')).toHaveValue('draft retained behind file');
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+});
+
+test('keeps navigation open and reports a failed file preview', async ({ page }) => {
+  await page.route('**/api/markdown**', async (route) => {
+    const path = new URL(route.request().url()).searchParams.get('path');
+    if (path === 'broken.md') {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Preview unavailable' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files agent' }).click();
+  await page.getByRole('option', { name: 'Alpha Agent' }).click();
+  await page.getByRole('button', { name: 'broken.md' }).click();
+
+  await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByRole('alert')).toContainText('Preview unavailable');
+});
+
+test('Escape and browser back close the active overlay and restore trigger focus', async ({ page }) => {
+  const trigger = page.getByRole('button', { name: 'Open navigation' });
+  await trigger.click();
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await page.goBack();
+  await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(trigger).toBeFocused();
+  await expect(page).toHaveURL(/\/$/);
+});

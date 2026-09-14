@@ -22,6 +22,7 @@ function getAgentLocationTitle(agent: Agent): string | undefined {
 export interface AgentsPanelProps {
   panelState: ReturnType<typeof useAgentPanelState>;
   onClose?: () => void;
+  mobileModal?: boolean;
   agents: (Agent & { running?: boolean })[];
   agentsLoading: boolean;
   isAdmin: boolean;
@@ -36,6 +37,7 @@ export interface AgentsPanelProps {
 export function AgentsPanel({
   panelState,
   onClose,
+  mobileModal = false,
   agents,
   agentsLoading,
   isAdmin,
@@ -89,7 +91,7 @@ export function AgentsPanel({
     <>
       {/* ── Right sidebar: agents ── */}
       {showAgentsPanel && (
-        <aside className={`agentsSidebar ${showAgentsPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="agents" tabIndex={-1}>
+        <aside className={`agentsSidebar ${showAgentsPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="agents" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Agents' : undefined}>
           <div className="agentsSidebarHeader">
             <span>Agents</span>
             <div style={{ display: 'flex', gap: '4px' }}>

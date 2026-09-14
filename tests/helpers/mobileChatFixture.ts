@@ -37,14 +37,29 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     messages: [{ id: 'welcome', type: 'user', content: 'Existing mobile message', ts: 1_001 }],
     agentSessions: {},
   };
+  const secondChat = {
+    id: 'second-mobile-chat',
+    name: 'Second mobile chat',
+    ts: 900,
+    messages: [{ id: 'second-message', type: 'user', content: 'Second chat message', ts: 901 }],
+    agentSessions: {},
+  };
 
   await page.route('**/api/chats**', async (route) => {
     const id = new URL(route.request().url()).searchParams.get('id');
+    const selectedChat = id === secondChat.id ? secondChat : chat;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(id
-        ? { ok: true, chat }
-        : { ok: true, chats: [{ id: chat.id, name: chat.name, ts: chat.ts }], lastChatId: chat.id }),
+        ? { ok: true, chat: selectedChat }
+        : {
+          ok: true,
+          chats: [
+            { id: chat.id, name: chat.name, ts: chat.ts },
+            { id: secondChat.id, name: secondChat.name, ts: secondChat.ts },
+          ],
+          lastChatId: chat.id,
+        }),
     });
   });
   await page.route('**/api/orchestrations**', (route) =>
@@ -141,6 +156,26 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
       }),
     });
   });
+  await page.route('**/api/markdown**', async (route) => {
+    const path = new URL(route.request().url()).searchParams.get('path');
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(path
+        ? { path, content: '# Mobile file\n\nComment-ready content.', kind: 'markdown', mtime: '2026-09-14T00:00:00.000Z' }
+        : {
+          files: [
+            { path: 'README.md', name: 'README.md', mtime: '2026-09-14T00:00:00.000Z' },
+            { path: 'broken.md', name: 'broken.md', mtime: '2026-09-14T00:00:00.000Z' },
+          ],
+        }),
+    });
+  });
+  await page.route('**/api/comments**', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, comments: [] }),
+    }),
+  );
   return {
     agents,
     access,

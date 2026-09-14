@@ -22,19 +22,28 @@ export function useMobileOverlayState() {
   const [activeOverlay, setActiveOverlay] = useState<MobileOverlay>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const historyEntryRef = useRef(false);
+  const historyClosePendingRef = useRef(false);
+  const pendingOpenRef = useRef<{ overlay: ActiveMobileOverlay; trigger?: HTMLElement } | null>(null);
 
   const close = useCallback((fromHistory = false) => {
     setActiveOverlay(null);
+    if (!fromHistory) {
+      if (historyEntryRef.current && !historyClosePendingRef.current) {
+        historyClosePendingRef.current = true;
+        window.history.back();
+      }
+      if (historyClosePendingRef.current) return;
+    }
     const trigger = triggerRef.current;
     triggerRef.current = null;
     queueMicrotask(() => trigger?.isConnected && trigger.focus());
-    if (historyEntryRef.current && !fromHistory) {
-      historyEntryRef.current = false;
-      window.history.back();
-    }
   }, []);
 
   const open = useCallback((overlay: ActiveMobileOverlay, trigger?: HTMLElement) => {
+    if (historyClosePendingRef.current) {
+      pendingOpenRef.current = { overlay, trigger };
+      return;
+    }
     if (trigger) triggerRef.current = trigger;
     if (!historyEntryRef.current) {
       window.history.pushState({ agentsChatMobileOverlay: true }, '');
@@ -68,18 +77,28 @@ export function useMobileOverlayState() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close();
     };
-    const onPopState = () => {
-      historyEntryRef.current = false;
-      close(true);
-    };
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('popstate', onPopState);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('popstate', onPopState);
     };
   }, [activeOverlay, close, isMobileLayout]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (!historyEntryRef.current && !historyClosePendingRef.current) return;
+      const pendingOpen = pendingOpenRef.current;
+      pendingOpenRef.current = null;
+      historyEntryRef.current = false;
+      historyClosePendingRef.current = false;
+      close(true);
+      if (pendingOpen) queueMicrotask(() => open(pendingOpen.overlay, pendingOpen.trigger));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [close, open]);
 
   return { activeOverlay, isMobileLayout, open, toggle, close };
 }

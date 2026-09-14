@@ -27,6 +27,7 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   setMdFilesList: (files: MarkdownFileEntry[]) => void;
   mdFilesLoading: boolean;
   mdFilesError: string | null;
+  mdFileError: string | null;
   mdSelectedAgentId: string | null;
   setMdSelectedAgentId: (agentId: string | null) => void;
   mdSelectedFile: string | null;

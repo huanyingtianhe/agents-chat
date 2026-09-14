@@ -9,6 +9,7 @@ export interface SchedulesPanelProps {
   agents: Array<{ id: string; name: string }>;
   isOpen: boolean;
   onClose: () => void;
+  mobileModal?: boolean;
 }
 
 function summarizeSpec(spec: ScheduleSpec): string {
@@ -32,7 +33,7 @@ function summarizeSpec(spec: ScheduleSpec): string {
   }
 }
 
-export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps) {
+export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false }: SchedulesPanelProps) {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [editingJobId, setEditingJobId] = useState<string | null | 'new'>(null);
   const [viewingRunsJobId, setViewingRunsJobId] = useState<string | null>(null);
@@ -77,7 +78,7 @@ export function SchedulesPanel({ agents, isOpen, onClose }: SchedulesPanelProps)
 
   return (
     <>
-      <aside className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="schedules" tabIndex={-1}>
+      <aside className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="schedules" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Schedules' : undefined}>
         <div className="agentsSidebarHeader">
           <span>Schedules</span>
           <div style={{ display: 'flex', gap: '4px' }}>

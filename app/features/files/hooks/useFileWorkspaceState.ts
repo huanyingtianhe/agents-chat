@@ -30,6 +30,7 @@ export function useFileWorkspaceState({
   const [mdFilesList, setMdFilesList] = useState<MarkdownFileEntry[]>([]);
   const [mdFilesLoading, setMdFilesLoading] = useState(false);
   const [mdFilesError, setMdFilesError] = useState<string | null>(null);
+  const [mdFileError, setMdFileError] = useState<string | null>(null);
   const [mdSelectedAgentId, setMdSelectedAgentId] = useState<string | null>(null);
   const [mdSelectedFile, setMdSelectedFile] = useState<string | null>(null);
   const [mdFileContent, setMdFileContent] = useState('');
@@ -94,10 +95,13 @@ export function useFileWorkspaceState({
     if (!options?.skipDirtyConfirm && mdDirty) {
       if (!confirm('You have unsaved changes. Discard?')) return;
     }
+    setMdFileError(null);
     try {
       const res = await fetch(`/api/markdown?agentId=${encodeURIComponent(agentId)}&path=${encodeURIComponent(filePath)}`);
       const data = await res.json();
-      if (data.content === undefined) return;
+      if (!res.ok || data.content === undefined) {
+        throw new Error(data.error || `Unable to preview ${filePath}`);
+      }
       const restoreScrollTop = options?.restoreScrollTop ?? 0;
       setMdSelectedFile(filePath);
       setMdFileContent(data.content);
@@ -109,7 +113,8 @@ export function useFileWorkspaceState({
       setMdEditorOpen(true);
       await onFileOpened?.({ agentId, filePath, restoreScrollTop });
     } catch (err) {
-      console.error('Failed to read markdown file', err);
+      const message = err instanceof Error ? err.message : String(err);
+      setMdFileError(message);
     }
   }, [mdDirty, onFileOpened]);
 
@@ -182,6 +187,7 @@ export function useFileWorkspaceState({
   }, []);
 
   const selectMdAgent = useCallback((agentId: string | null) => {
+    setMdFileError(null);
     setMdSelectedAgentId(agentId);
     if (agentId) void loadMdFiles(agentId, mdDiffOnly);
     else setMdFilesList([]);
@@ -326,6 +332,7 @@ export function useFileWorkspaceState({
     setMdFilesList,
     mdFilesLoading,
     mdFilesError,
+    mdFileError,
     mdSelectedAgentId,
     setMdSelectedAgentId,
     mdSelectedFile,

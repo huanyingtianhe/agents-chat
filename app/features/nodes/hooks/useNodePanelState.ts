@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ChatMessage } from '../../chat/chatTypes';
+import { nodesApi } from '../nodesApi';
 import type { NodeData } from '../nodeTypes';
 
 export type { NodeData };
@@ -13,19 +14,6 @@ export type UseNodePanelStateParams = {
   loadAgents: () => Promise<void>;
   addMessage: (msg: Omit<ChatMessage, 'id' | 'ts'> & { id?: string; ts?: number }) => void;
 };
-
-async function nodesApi(body: Record<string, unknown>) {
-  const response = await fetch('/api/nodes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await response.json();
-  if (!response.ok || data.ok === false) {
-    throw new Error(data.error || `Nodes request failed (${response.status})`);
-  }
-  return data;
-}
 
 export function useNodePanelState({
   acp,
@@ -115,7 +103,7 @@ export function useNodePanelState({
         online: res.online,
         checkedAt: res.checkedAt,
         connectionError: res.connectionError,
-        platform: res.platform ?? n.platform,
+        platform: res.platform,
       } : n));
       setNodesError(null);
       setFailedNodeName(null);

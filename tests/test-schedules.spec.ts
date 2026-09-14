@@ -169,6 +169,12 @@ test.describe('Schedules', () => {
       data: updatePayload,
     });
     expect(patchRes.status()).toBe(200);
+    const patchBody = await patchRes.json();
+    expect(patchBody.job).toMatchObject({
+      id: scheduleId,
+      enabled: true,
+      name: 'pw-test-patched',
+    });
 
     // Fetch the updated schedule
     const getRes = await page.request.get(`${BASE}/api/schedules/${scheduleId}`);

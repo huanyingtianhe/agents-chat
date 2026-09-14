@@ -427,10 +427,10 @@ test('mobile Nodes exposes status and refresh but defers complex setup', async (
   const nodes = page.getByRole('dialog', { name: 'Nodes' });
 
   await expect(nodes.getByText('Mobile Node')).toBeVisible();
-  await expect(nodes.getByText('Linux')).toBeVisible();
+  await expect(nodes.getByText('Platform unavailable')).toHaveCount(2);
   await expect(nodes.getByText('Online', { exact: true })).toBeVisible();
   await expect(nodes.getByText('Offline', { exact: true })).toBeVisible();
-  await expect(nodes.getByText('Relay listener is unavailable')).toBeVisible();
+  await expect(nodes.getByText('Relay connection closed before opening')).toBeVisible();
   await expect(nodes.getByTitle('Refresh all')).toBeVisible();
   await expect(nodes.getByTitle('Add node')).toHaveCount(0);
   await expect(nodes.getByTitle('Add agent on this node')).toHaveCount(0);
@@ -447,9 +447,13 @@ test('mobile Nodes reports load and check failures with retry in the panel', asy
     if (body.action === 'list-nodes' && listAttempts++ === 0) {
       await route.fulfill({
         status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({ ok: false, error: 'Nodes unavailable' }),
+        contentType: 'text/plain',
+        body: 'Nodes unavailable as text',
       });
+      return;
+    }
+    if (body.action === 'list-nodes' && listAttempts === 3) {
+      await route.fulfill({ status: 504, body: '' });
       return;
     }
     if (body.action === 'check-node' && failCheck) {
@@ -467,7 +471,8 @@ test('mobile Nodes reports load and check failures with retry in the panel', asy
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Nodes' }).click();
   const panel = page.getByRole('dialog', { name: 'Nodes' });
-  await expect(panel.getByRole('alert')).toContainText('Nodes unavailable');
+  await expect(panel.getByRole('alert')).toContainText('Nodes unavailable as text');
+  await expect(panel.getByText('No nodes configured')).toHaveCount(0);
   await panel.getByRole('button', { name: 'Retry' }).click();
   await expect(panel.getByText('Mobile Node')).toBeVisible();
 
@@ -475,6 +480,10 @@ test('mobile Nodes reports load and check failures with retry in the panel', asy
   await expect(panel.getByRole('alert')).toContainText('Node check unavailable');
   await panel.getByRole('button', { name: 'Retry' }).click();
   await expect(panel.getByRole('alert')).toHaveCount(0);
+
+  await panel.getByRole('button', { name: 'Refresh all nodes' }).click();
+  await expect(panel.getByRole('alert')).toContainText('Nodes request failed (504)');
+  await expect(panel.getByText('No nodes configured')).toHaveCount(0);
 });
 
 test('mobile Schedules supports status, guarded enablement, and run history without editing', async ({ page }) => {
@@ -507,9 +516,30 @@ test('mobile Schedules supports status, guarded enablement, and run history with
   await schedules.getByTitle('View run history').click();
   const history = page.getByRole('dialog', { name: 'Daily report runs' });
   await expectExactlyOneActiveModal(page);
+  await expect(history).toBeFocused();
   await history.locator('summary').click();
   await expect(history.getByText('Report complete')).toBeVisible();
   await expect(history.getByRole('button', { name: /Run now/i })).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(history).toHaveCount(0);
+  const historyOpener = schedules.getByTitle('View run history');
+  await expect(historyOpener).toBeFocused();
+  await expect(schedules).toBeVisible();
+
+  await historyOpener.click();
+  const reopenedHistory = page.getByRole('dialog', { name: 'Daily report runs' });
+  await page.locator('.modalOverlay').filter({ has: reopenedHistory }).click({ position: { x: 1, y: 1 } });
+  await expect(reopenedHistory).toHaveCount(0);
+  await expect(historyOpener).toBeFocused();
+
+  await historyOpener.click();
+  await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toBeVisible();
+  await schedules.locator('[aria-label="Close schedules"]').click({ force: true });
+  await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toHaveCount(0);
 });
 
 test('mobile Schedules reports load failures and retries in the panel', async ({ page }) => {
@@ -531,6 +561,7 @@ test('mobile Schedules reports load failures and retries in the panel', async ({
   await page.getByRole('menuitem', { name: 'Schedules' }).click();
   const panel = page.getByRole('dialog', { name: 'Schedules' });
   await expect(panel.getByRole('alert')).toContainText('Schedules unavailable');
+  await expect(panel.getByText('No schedules configured')).toHaveCount(0);
   await panel.getByRole('button', { name: 'Retry' }).click();
   await expect(panel.getByText('Daily report')).toBeVisible();
 });
@@ -570,4 +601,17 @@ test('mobile Schedules reports action failures without duplicating the update', 
   await panel.getByRole('button', { name: 'Retry' }).click();
   await expect(panel.getByRole('alert')).toHaveCount(0);
   await expect(enableSwitch).toBeEnabled();
+});
+
+test('mobile Schedules keeps the authoritative PATCH state when reconciliation fails', async ({ page }) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  const panel = page.getByRole('dialog', { name: 'Schedules' });
+  fixture.failNextScheduleRefresh();
+
+  await panel.getByRole('switch', { name: 'Enable Daily report' }).click();
+
+  await expect(panel.getByRole('switch', { name: 'Disable Daily report' })).toBeEnabled();
+  await expect(panel.getByText('Enabled', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('alert')).toContainText('Schedule reconciliation unavailable');
 });

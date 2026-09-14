@@ -44,6 +44,7 @@ export type MobileFixture = {
   holdNextAgentUpdate: () => () => void;
   holdAgentSettings: (agentId: string) => () => void;
   holdNextScheduleUpdate: () => () => void;
+  failNextScheduleRefresh: () => void;
 };
 
 export async function installMobileChatFixture(page: Page): Promise<MobileFixture> {
@@ -57,13 +58,15 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   let rejectNextAgentUpdate = false;
   let pendingAgentUpdate: Promise<void> | null = null;
   let pendingScheduleUpdate: Promise<void> | null = null;
+  let rejectNextScheduleRefresh = false;
   const pendingAgentSettings = new Map<string, Promise<void>>();
   const nodes = [{
     name: 'mobile-node',
     label: 'Mobile Node',
     online: true,
     checkedAt: 1_000,
-    platform: 'Linux',
+    platform: null,
+    connectionError: null,
     manual: true,
     owner: 'admin@local',
     canModify: true,
@@ -72,8 +75,8 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     label: 'Offline Node',
     online: false,
     checkedAt: 1_000,
-    platform: 'Windows',
-    connectionError: 'Relay listener is unavailable',
+    platform: null,
+    connectionError: 'Relay connection closed before opening',
     manual: true,
     owner: 'admin@local',
     canModify: true,
@@ -230,6 +233,20 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     }
     if (request.method() === 'PATCH') {
       schedule.enabled = Boolean(body?.enabled);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ job: schedule }),
+      });
+      return;
+    }
+    if (request.method() === 'GET' && path === '/api/schedules' && rejectNextScheduleRefresh) {
+      rejectNextScheduleRefresh = false;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Schedule reconciliation unavailable' }),
+      });
+      return;
     }
     if (request.method() === 'GET' && path === '/api/schedules/schedule-1') {
       await route.fulfill({
@@ -316,6 +333,9 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
         release = resolve;
       });
       return release;
+    },
+    failNextScheduleRefresh: () => {
+      rejectNextScheduleRefresh = true;
     },
   };
 }

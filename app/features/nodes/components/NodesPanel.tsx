@@ -122,7 +122,7 @@ export function NodesPanel({ panelState, onClose, mobileModal = false, mobileRes
                 )}
               </button>
             ))}
-            {nodesData.length === 0 && (
+            {nodesData.length === 0 && !nodesError && (
               <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
                 {nodesLoading ? 'Checking nodes...' : 'No nodes configured'}
               </div>

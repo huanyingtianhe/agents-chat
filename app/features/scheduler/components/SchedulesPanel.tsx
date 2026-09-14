@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CronJob, ScheduleSpec } from '../scheduleTypes';
 import { useSchedules } from '../hooks/useSchedules';
 import { ScheduleEditor } from './ScheduleEditor';
@@ -42,6 +42,14 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
   const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const updateInFlightRef = useRef(false);
+  const runHistoryOpenerRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) return;
+    setEditingJobId(null);
+    setViewingRunsJobId(null);
+    setActionError(null);
+  }, [isOpen]);
 
   const handleSaved = async () => {
     setEditingJobId(null);
@@ -66,6 +74,13 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
   async function retry() {
     setActionError(null);
     await refresh();
+  }
+
+  function closePanel() {
+    setEditingJobId(null);
+    setViewingRunsJobId(null);
+    setActionError(null);
+    onClose();
   }
 
   if (!isOpen) return null;
@@ -94,7 +109,7 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
                 +
               </button>
             )}
-            <button className="sidebarToggle" onClick={onClose} aria-label="Close schedules" data-mobile-overlay-initial-focus>
+            <button className="sidebarToggle" onClick={closePanel} aria-label="Close schedules" data-mobile-overlay-initial-focus>
               →
             </button>
           </div>
@@ -145,7 +160,10 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
               <button
                 type="button"
                 className="sidebarToggle"
-                onClick={() => setViewingRunsJobId(job.id)}
+                onClick={(event) => {
+                  setViewingRunsJobId(job.id);
+                  runHistoryOpenerRef.current = event.currentTarget;
+                }}
                 title="View run history"
                 style={{ marginLeft: '4px', flexShrink: 0 }}
               >
@@ -153,7 +171,7 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
               </button>
             </div>
           ))}
-          {jobs.length === 0 && (
+          {jobs.length === 0 && !error && !actionError && (
             <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
               {loading ? 'Loading...' : 'No schedules configured'}
             </div>
@@ -172,7 +190,11 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, m
       )}
 
       {viewingRunsJobId !== null && (
-        <RunHistory jobId={viewingRunsJobId} onClose={() => setViewingRunsJobId(null)} />
+        <RunHistory
+          jobId={viewingRunsJobId}
+          opener={runHistoryOpenerRef.current}
+          onClose={() => setViewingRunsJobId(null)}
+        />
       )}
     </>
   );

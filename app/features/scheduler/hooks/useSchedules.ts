@@ -47,7 +47,14 @@ export function useSchedules(enabled = true) {
   const update = useCallback(async (id: string, patch: Partial<{ name: string; prompt: string; enabled: boolean; scheduleSpec: ScheduleSpec; timeoutMinutes: number }>) => {
     const r = await fetch(`/api/schedules/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
     if (!r.ok) throw await responseError(r);
+    const data = await r.json() as { job: CronJob };
+    setJobs((current) => {
+      const index = current.findIndex((job) => job.id === data.job.id);
+      if (index === -1) return [...current, data.job];
+      return current.map((job) => job.id === data.job.id ? data.job : job);
+    });
     await refresh();
+    return data.job;
   }, [refresh]);
 
   const remove = useCallback(async (id: string) => {

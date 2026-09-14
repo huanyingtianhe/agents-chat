@@ -14,6 +14,20 @@ export const TEST_AGENT = {
   defaultModelId: 'gpt-5.4',
 };
 
+const WIDE_MESSAGE_CONTENT = `Existing mobile message
+
+${'unbrokenmobiletoken'.repeat(50)}
+
+\`\`\`text
+${'widecodecolumn'.repeat(50)}
+\`\`\`
+
+![Wide mobile fixture](/wide-mobile-fixture.svg)
+
+| Column one | Column two | Column three | Column four | Column five | Column six |
+| --- | --- | --- | --- | --- | --- |
+| Alpha value | Beta value | Gamma value | Delta value | Epsilon value | Zeta value |`;
+
 export type MobileFixture = {
   agents: Map<string, Record<string, unknown>>;
   access: Map<string, string[]>;
@@ -34,7 +48,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     id: 'mobile-chat',
     name: 'Mobile coverage',
     ts: 1_000,
-    messages: [{ id: 'welcome', type: 'user', content: 'Existing mobile message', ts: 1_001 }],
+    messages: [{ id: 'welcome', type: 'user', content: WIDE_MESSAGE_CONTENT, ts: 1_001 }],
     agentSessions: {},
   };
   const secondChat = {
@@ -174,6 +188,12 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, comments: [] }),
+    }),
+  );
+  await page.route('**/wide-mobile-fixture.svg', (route) =>
+    route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120"><rect width="1200" height="120" fill="#45d7ff"/></svg>',
     }),
   );
   return {

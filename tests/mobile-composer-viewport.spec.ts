@@ -88,6 +88,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await page.route('**/api/orchestrations**', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, items: [] }) }),
   );
+  let generationActive = false;
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON();
     if (body?.action === 'list-agents') {
@@ -95,9 +96,9 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
         contentType: 'application/json',
         body: JSON.stringify({
           ok: true,
-          agents: [{
-            id: 'alpha',
-            name: 'Alpha Agent',
+          agents: ['alpha', 'beta', 'gamma', 'delta'].map((id) => ({
+            id,
+            name: `${id[0].toUpperCase()}${id.slice(1)} Agent`,
             command: 'mock',
             args: [],
             cwd: '/tmp',
@@ -110,10 +111,42 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
               { modelId: 'gpt-5.4', name: 'GPT-5.4' },
             ],
             defaultModelId: 'claude-sonnet-4.6',
-          }],
+          })),
         }),
       });
       return;
+    }
+    if (body?.action === 'send') {
+      generationActive = true;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          sessionId: 'mobile-viewport-session',
+          turn: { id: 'mobile-viewport-turn' },
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'poll' && generationActive) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          activeTurn: {
+            id: 'mobile-viewport-turn',
+            fullText: '',
+            done: false,
+            phase: 'thinking',
+            statusText: 'Thinking',
+            events: [],
+          },
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'interrupt') {
+      generationActive = false;
     }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
@@ -126,7 +159,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await page.locator('button.emptyHomepageNewChat').click();
   const textarea = page.locator('textarea.composerTextarea');
   await expect(textarea).toBeVisible({ timeout: 10000 });
-  await textarea.fill('@alpha mobile viewport');
+  await textarea.fill('@alpha @beta @gamma @delta mobile viewport');
 
   await page.evaluate(() => {
     (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
@@ -141,8 +174,18 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
 
   const sendButton = page.getByRole('button', { name: 'Send message' });
   const modelButton = page.getByRole('button', { name: 'Model for alpha' });
+  const targetPills = page.locator('.targetPills');
   await expect(sendButton).toBeVisible();
   await expect(modelButton).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start voice input' })).toHaveCount(0);
+  await expect(targetPills).toHaveCSS('overflow-x', 'auto');
+  await expect.poll(() => targetPills.evaluate(
+    (element) => element.scrollWidth > element.clientWidth,
+  )).toBe(true);
+  await expect.poll(() => targetPills.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    return element.scrollLeft;
+  })).toBeGreaterThan(0);
 
   for (const locator of [page.locator('.chatInputDock'), sendButton, modelButton]) {
     const [controlBox, appBox] = await Promise.all([locator.boundingBox(), app.boundingBox()]);
@@ -150,6 +193,18 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
     expect(appBox).not.toBeNull();
     expect(controlBox!.y + controlBox!.height).toBeLessThanOrEqual(appBox!.y + appBox!.height + 1);
   }
+
+  await textarea.fill('@alpha mobile viewport');
+  await sendButton.click();
+  const stopButton = page.getByRole('button', { name: 'Stop generation' });
+  await expect(stopButton).toBeVisible();
+  const [stopBox, compressedAppBox] = await Promise.all([stopButton.boundingBox(), app.boundingBox()]);
+  expect(stopBox).not.toBeNull();
+  expect(compressedAppBox).not.toBeNull();
+  expect(stopBox!.x + stopBox!.width).toBeLessThanOrEqual(compressedAppBox!.x + compressedAppBox!.width + 1);
+  expect(stopBox!.y + stopBox!.height).toBeLessThanOrEqual(compressedAppBox!.y + compressedAppBox!.height + 1);
+  await stopButton.click();
+  await expect(sendButton).toBeVisible();
 
   await modelButton.click();
   const modelMenu = page.getByRole('listbox', { name: 'Model for alpha' });

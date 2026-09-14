@@ -379,6 +379,13 @@
 
 .composerToolbarActions {
   align-self: center;
+  flex: 0 0 auto;
+}
+
+.composerOptionalActions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
 .targetPill {
@@ -601,6 +608,7 @@
   .targetPills {
     flex: 1 1 auto;
     min-width: 0;
+    max-width: 100%;
     flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
@@ -632,5 +640,9 @@
 
   .composerActions {
     justify-content: flex-end;
+  }
+
+  .composerToolbarActions {
+    flex: 0 0 auto;
   }
 }

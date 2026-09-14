@@ -98,6 +98,46 @@ test('preserves composer and current chat state while opening and closing naviga
   await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
 });
 
+test('keeps wide message content inside the viewport and hides unavailable voice input', async ({ page }) => {
+  await expect(page.getByRole('button', { name: 'Start voice input' })).toHaveCount(0);
+
+  const chatContainer = page.locator('.chatContainer');
+  const message = page.locator('.message.user').first();
+  const markdown = message.locator('.markdownBody');
+  const codeBlock = markdown.locator('pre');
+  const table = markdown.locator('table');
+  const image = markdown.getByRole('img', { name: 'Wide mobile fixture' });
+
+  await expect(image).toBeVisible();
+  await expect.poll(async () => {
+    const [messageBox, viewportWidth] = await Promise.all([
+      message.boundingBox(),
+      page.evaluate(() => window.innerWidth),
+    ]);
+    return messageBox !== null && messageBox.x >= 0
+      && messageBox.x + messageBox.width <= viewportWidth;
+  }).toBe(true);
+
+  await expect.poll(() => chatContainer.evaluate(
+    (element) => element.scrollWidth <= element.clientWidth,
+  )).toBe(true);
+  await expect.poll(() => codeBlock.evaluate(
+    (element) => element.scrollWidth > element.clientWidth,
+  )).toBe(true);
+  await expect.poll(() => table.evaluate(
+    (element) => element.scrollWidth > element.clientWidth,
+  )).toBe(true);
+  await expect.poll(async () => {
+    const [imageBox, markdownBox] = await Promise.all([
+      image.boundingBox(),
+      markdown.boundingBox(),
+    ]);
+    return imageBox !== null && markdownBox !== null
+      && imageBox.width <= markdownBox.width
+      && imageBox.x + imageBox.width <= markdownBox.x + markdownBox.width;
+  }).toBe(true);
+});
+
 test('closes navigation only after a successful chat selection', async ({ page }) => {
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Second mobile chat' }).click();

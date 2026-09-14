@@ -65,6 +65,7 @@ export function AgentsPanel({
     newRemoteAgentForm,
     setNewRemoteAgentForm,
     openAddRemoteAgent,
+    closeAddRemoteAgent,
     createRemoteAgent,
     showAgentSettings,
     settingsAgentId,
@@ -73,6 +74,7 @@ export function AgentsPanel({
     settingsEnvText,
     setSettingsEnvText,
     agentSettingsLoading,
+    agentAccessLoading,
     agentAccessList,
     newAccessEmail,
     setNewAccessEmail,
@@ -85,6 +87,7 @@ export function AgentsPanel({
     openModelMenuAgentId,
     setOpenModelMenuAgentId,
     modelMenuRefs,
+    formError,
   } = panelState;
 
   return (
@@ -170,38 +173,41 @@ export function AgentsPanel({
       {/* ── Add remote agent modal ── */}
       {showAddRemoteAgent && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal">
+          <div className="modal agentSettingsModal agentMobileSheet" role="dialog" aria-modal="true" aria-label="Add Agent from Remote Node">
             <h2>🌐 Add Agent from Remote Node</h2>
-            <label>
-              <span>Agent ID</span>
-              <input value={newRemoteAgentForm.id} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, id: e.target.value }))} placeholder="unique-agent-id" />
-              <span className="fieldHint">Unique identifier, lowercase with hyphens</span>
-            </label>
-            <label>
-              <span>Agent Name</span>
-              <input value={newRemoteAgentForm.name} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, name: e.target.value }))} placeholder="My Remote Agent" />
-              <span className="fieldHint">Display name for the agent</span>
-            </label>
-            <label>
-              <span>Node</span>
-              <select value={newRemoteAgentForm.nodeName} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, nodeName: e.target.value }))} className="remoteAgentSelect">
-                <option value="">— Select a node —</option>
-                {nodesData.map(n => (
-                  <option key={n.name} value={n.name}>{n.label} ({n.name}){n.online ? '' : ' · offline'}</option>
-                ))}
-              </select>
-              <span className="fieldHint">The remote node to run the agent on</span>
-            </label>
-            <label>
-              <span>Working Directory (on the remote node)</span>
-              <input value={newRemoteAgentForm.cwd} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, cwd: e.target.value }))} placeholder="/home/user/project or C:\Repos\MyProject" />
-              <span className="fieldHint">The cwd the copilot agent runs in on that node</span>
-            </label>
-            <div className="modalActions">
+            <div className="agentSheetBody">
+              <label>
+                <span>Agent ID</span>
+                <input value={newRemoteAgentForm.id} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, id: e.target.value }))} placeholder="unique-agent-id" />
+                <span className="fieldHint">Unique identifier, lowercase with hyphens</span>
+              </label>
+              <label>
+                <span>Agent Name</span>
+                <input value={newRemoteAgentForm.name} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, name: e.target.value }))} placeholder="My Remote Agent" />
+                <span className="fieldHint">Display name for the agent</span>
+              </label>
+              <label>
+                <span>Node</span>
+                <select value={newRemoteAgentForm.nodeName} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, nodeName: e.target.value }))} className="remoteAgentSelect">
+                  <option value="">— Select a node —</option>
+                  {nodesData.map(n => (
+                    <option key={n.name} value={n.name}>{n.label} ({n.name}){n.online ? '' : ' · offline'}</option>
+                  ))}
+                </select>
+                <span className="fieldHint">The remote node to run the agent on</span>
+              </label>
+              <label>
+                <span>Working Directory (on the remote node)</span>
+                <input value={newRemoteAgentForm.cwd} onChange={(e) => setNewRemoteAgentForm(f => ({ ...f, cwd: e.target.value }))} placeholder="/home/user/project or C:\Repos\MyProject" />
+                <span className="fieldHint">The cwd the copilot agent runs in on that node</span>
+              </label>
+            </div>
+            {formError ? <div className="agentFormError" role="alert">{formError}</div> : null}
+            <div className="modalActions agentSheetActions">
               <button className="primary" onClick={() => void createRemoteAgent()} disabled={addAgentLoading || !newRemoteAgentForm.id.trim() || !newRemoteAgentForm.nodeName}>
                 {addAgentLoading ? 'Creating...' : 'Create Remote Agent'}
               </button>
-              <button className="secondary" onClick={() => setShowAddRemoteAgent(false)}>Cancel</button>
+              <button className="secondary" onClick={closeAddRemoteAgent}>Cancel</button>
             </div>
           </div>
         </div>
@@ -210,17 +216,18 @@ export function AgentsPanel({
       {/* ── Agent settings modal (admin or owner) ── */}
       {showAgentSettings && settingsAgentConfig && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal agentConfigurationModal">
+          <div className="modal agentSettingsModal agentConfigurationModal agentMobileSheet" role="dialog" aria-modal="true" aria-label={`${settingsAgentConfig.name} settings`}>
             <h2>⚙️ {settingsAgentConfig.name}</h2>
-            <label>
+            <div className="agentSheetBody">
+              <label>
               <span>Agent ID</span>
               <input value={settingsAgentConfig.id} disabled style={{ opacity: 0.6 }} />
               <span className="fieldHint">Unique identifier (read-only)</span>
-            </label>
-            <label>
+              </label>
+              <label>
               <span>Name</span>
               <input value={settingsAgentConfig.name} onChange={(e) => setSettingsAgentConfig((c) => c ? { ...c, name: e.target.value } : c)} />
-            </label>
+              </label>
             {settingsAgentConfig.relay ? (
               <>
                 <label>
@@ -288,7 +295,7 @@ export function AgentsPanel({
               {!settingsAgentConfig.public && (
                 <>
                   <p style={{ fontSize: '12px', color: '#666', margin: '0 0 8px' }}>Only listed users (and admins) can talk to this agent.</p>
-                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                  <div className="agentAccessGrantRow">
                     <input
                       value={newAccessEmail}
                       onChange={(e) => setNewAccessEmail(e.target.value)}
@@ -296,14 +303,14 @@ export function AgentsPanel({
                       style={{ flex: 1 }}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addAccess(); } }}
                     />
-                    <button className="primary inlinePrimary" onClick={() => void addAccess()} disabled={!newAccessEmail.trim()}>Grant</button>
+                    <button className="primary inlinePrimary" onClick={() => void addAccess()} disabled={agentSettingsLoading || agentAccessLoading || !newAccessEmail.trim()}>Grant</button>
                   </div>
                   {agentAccessList.length > 0 ? (
                     <div style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '12px' }}>
                       {(agentAccessList as AccessEntry[]).map((entry) => (
                         <div key={entry.email} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                           <span>{entry.email}</span>
-                          <button onClick={() => void removeAccess(entry.email)} style={{ fontSize: '11px', padding: '2px 6px', background: 'transparent', color: '#e55', border: '1px solid #e55', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                          <button onClick={() => void removeAccess(entry.email)} disabled={agentSettingsLoading || agentAccessLoading} aria-label={`Revoke access for ${entry.email}`} style={{ fontSize: '11px', padding: '2px 6px', background: 'transparent', color: '#e55', border: '1px solid #e55', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
                         </div>
                       ))}
                     </div>
@@ -313,10 +320,12 @@ export function AgentsPanel({
                 </>
               )}
             </div>
-            <div className="modalActions">
-              <button className="primary" onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
+            </div>
+            {formError ? <div className="agentFormError" role="alert">{formError}</div> : null}
+            <div className="modalActions agentSheetActions">
+              <button className="primary" onClick={() => void saveAgentSettings()} disabled={agentSettingsLoading || agentAccessLoading}>{agentSettingsLoading ? 'Saving...' : 'Save'}</button>
               <button className="secondary" onClick={closeAgentSettings}>Cancel</button>
-              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading}>Delete</button>
+              <button className="danger" style={{ marginLeft: 'auto' }} onClick={() => settingsAgentId && void deleteAgent(settingsAgentId, settingsAgentConfig.name)} disabled={agentSettingsLoading || agentAccessLoading}>Delete</button>
             </div>
           </div>
         </div>
@@ -324,8 +333,21 @@ export function AgentsPanel({
 
       {showAgentSettings && !settingsAgentConfig && agentSettingsLoading && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal">
+          <div className="modal agentSettingsModal agentMobileSheet" role="dialog" aria-modal="true" aria-label="Agent settings">
             <div style={{ textAlign: 'center', padding: '20px', color: '#8a90a2' }}>Loading...</div>
+          </div>
+        </div>
+      )}
+
+      {showAgentSettings && !settingsAgentConfig && !agentSettingsLoading && formError && (
+        <div className="modalOverlay">
+          <div className="modal agentSettingsModal agentMobileSheet" role="dialog" aria-modal="true" aria-label="Agent settings">
+            <div className="agentSheetBody">
+              <div className="agentFormError" role="alert">{formError}</div>
+            </div>
+            <div className="modalActions agentSheetActions">
+              <button className="secondary" onClick={closeAgentSettings}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -333,36 +355,37 @@ export function AgentsPanel({
       {/* ── Add agent modal ── */}
       {showAddAgent && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal">
+          <div className="modal agentSettingsModal agentMobileSheet" role="dialog" aria-modal="true" aria-label="Add New Agent">
             <h2>➕ Add New Agent</h2>
-            <label>
+            <div className="agentSheetBody">
+              <label>
               <span>Agent ID</span>
               <input value={newAgentForm.id} onChange={(e) => setNewAgentForm((f) => ({ ...f, id: e.target.value }))} placeholder="unique-agent-id" />
               <span className="fieldHint">Unique identifier, lowercase with hyphens</span>
-            </label>
-            <label>
+              </label>
+              <label>
               <span>Display Name</span>
               <input value={newAgentForm.name} onChange={(e) => setNewAgentForm((f) => ({ ...f, name: e.target.value }))} placeholder="My Agent" />
-            </label>
-            <label>
+              </label>
+              <label>
               <span>Command</span>
               <input value={newAgentForm.command} onChange={(e) => setNewAgentForm((f) => ({ ...f, command: e.target.value }))} placeholder="copilot.exe" />
               <span className="fieldHint">Path to the ACP executable</span>
-            </label>
-            <label>
+              </label>
+              <label>
               <span>Arguments</span>
               <input value={newAgentForm.args} onChange={(e) => setNewAgentForm((f) => ({ ...f, args: e.target.value }))} placeholder="--acp" />
               <span className="fieldHint">Space-separated args</span>
-            </label>
-            <label>
+              </label>
+              <label>
               <span>Working Directory</span>
               <input value={newAgentForm.cwd} onChange={(e) => setNewAgentForm((f) => ({ ...f, cwd: e.target.value }))} placeholder="C:\path\to\project" />
-            </label>
-            <label className="checkboxLabel">
+              </label>
+              <label className="checkboxLabel">
               <input type="checkbox" checked={newAgentForm.yolo} onChange={(e) => setNewAgentForm((f) => ({ ...f, yolo: e.target.checked }))} />
               <span>YOLO mode (auto-approve)</span>
-            </label>
-            <label>
+              </label>
+              <label>
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 Environment Variables
                 <button
@@ -383,8 +406,10 @@ export function AgentsPanel({
                 style={{ fontFamily: 'monospace', fontSize: '12px' }}
               />
               <span className="fieldHint">One per line: KEY=VALUE. Used for API keys and agent config.</span>
-            </label>
-            <div className="modalActions">
+              </label>
+            </div>
+            {formError ? <div className="agentFormError" role="alert">{formError}</div> : null}
+            <div className="modalActions agentSheetActions">
               <button className="primary" onClick={() => void createAgent()} disabled={addAgentLoading || !newAgentForm.id.trim()}>
                 {addAgentLoading ? 'Creating...' : 'Create Agent'}
               </button>

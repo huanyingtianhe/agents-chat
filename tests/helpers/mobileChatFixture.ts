@@ -34,6 +34,7 @@ export type MobileFixture = {
   acpRequests: Record<string, unknown>[];
   scheduleRequests: Array<{ method: string; path: string; body?: Record<string, unknown> }>;
   failNextAgentUpdate: () => void;
+  holdNextAgentUpdate: () => () => void;
 };
 
 export async function installMobileChatFixture(page: Page): Promise<MobileFixture> {
@@ -44,6 +45,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   const acpRequests: Record<string, unknown>[] = [];
   const scheduleRequests: MobileFixture['scheduleRequests'] = [];
   let rejectNextAgentUpdate = false;
+  let pendingAgentUpdate: Promise<void> | null = null;
   const chat = {
     id: 'mobile-chat',
     name: 'Mobile coverage',
@@ -82,6 +84,11 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     acpRequests.push(body);
+    if (body.action === 'update-agent-config' && pendingAgentUpdate) {
+      const updateGate = pendingAgentUpdate;
+      pendingAgentUpdate = null;
+      await updateGate;
+    }
     if (body.action === 'update-agent-config' && rejectNextAgentUpdate) {
       rejectNextAgentUpdate = false;
       await route.fulfill({
@@ -203,6 +210,13 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     scheduleRequests,
     failNextAgentUpdate: () => {
       rejectNextAgentUpdate = true;
+    },
+    holdNextAgentUpdate: () => {
+      let release = () => {};
+      pendingAgentUpdate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
     },
   };
 }

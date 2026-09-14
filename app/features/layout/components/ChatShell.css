@@ -1275,7 +1275,7 @@
     padding: 12px;
   }
   .chatPageRoot .modal,
-  .chatPageRoot .agentSettingsModal {
+  .chatPageRoot .agentSettingsModal:not(.agentMobileSheet) {
     width: 100%;
     max-height: calc(100vh - 24px);
     overflow-y: auto;

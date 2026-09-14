@@ -1,13 +1,35 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import {
   installMobileChatFixture,
   loginMobileFixture,
+  type MobileFixture,
 } from './helpers/mobileChatFixture';
 
+let fixture: MobileFixture;
+
 test.beforeEach(async ({ page }) => {
-  await installMobileChatFixture(page);
+  fixture = await installMobileChatFixture(page);
   await loginMobileFixture(page);
 });
+
+function settingsField(dialog: Locator, name: string) {
+  return dialog.locator('label').filter({ hasText: new RegExp(`^${name}`) }).locator('input').first();
+}
+
+async function expectDialogFitsVisualViewport(dialog: Locator) {
+  await expect.poll(() => dialog.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    const width = viewport?.width ?? window.innerWidth;
+    const height = viewport?.height ?? window.innerHeight;
+    return rect.left >= left - 1
+      && rect.right <= left + width + 1
+      && rect.top >= top - 1
+      && rect.bottom <= top + height + 1;
+  })).toBe(true);
+}
 
 test('separates left navigation from management actions', async ({ page }) => {
   const navigation = page.getByRole('button', { name: 'Open navigation' });
@@ -251,4 +273,100 @@ test('Escape and browser back close the active overlay and restore trigger focus
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
   await expect(trigger).toBeFocused();
   await expect(page).toHaveURL(/\/$/);
+});
+
+test('mobile Agent management keeps full CRUD and access controls reachable', async ({ page }) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Agents' }).click();
+  const panel = page.locator('.agentsSidebar').filter({ hasText: 'Agents' });
+
+  await panel.getByTitle('Add agent').click();
+  await page.getByRole('button', { name: /Add Agent from Remote Node/ }).click();
+  const remoteCreate = page.getByRole('dialog', { name: 'Add Agent from Remote Node' });
+  await expectDialogFitsVisualViewport(remoteCreate);
+  await remoteCreate.getByPlaceholder('unique-agent-id').fill('mobile-remote');
+  await remoteCreate.getByPlaceholder('My Remote Agent').fill('Mobile Remote');
+  await remoteCreate.locator('select').selectOption('mobile-node');
+  await remoteCreate.getByPlaceholder(/home\/user\/project/).fill('/srv/mobile');
+  await remoteCreate.getByRole('button', { name: 'Create Remote Agent' }).click();
+  await expect(panel.getByText('Mobile Remote')).toBeVisible();
+  expect(fixture.agents.get('mobile-remote')).toMatchObject({
+    relay: true,
+    relayConnectionName: 'mobile-node',
+    cwd: '/srv/mobile',
+  });
+
+  await panel.getByTitle('Add agent').click();
+  await page.getByRole('button', { name: /Add Agent in Server/ }).click();
+  const create = page.getByRole('dialog', { name: 'Add New Agent' });
+  await expectDialogFitsVisualViewport(create);
+  await create.getByPlaceholder('unique-agent-id').fill('mobile-managed');
+  await create.getByPlaceholder('My Agent').fill('Mobile Managed');
+  await create.getByPlaceholder('copilot.exe').fill('mock-agent');
+  await create.getByPlaceholder('--acp').fill('--acp --mobile');
+  await create.getByPlaceholder('C:\\path\\to\\project').fill('/workspace/mobile');
+  await create.locator('textarea').fill('TOKEN=mobile');
+  await create.getByRole('button', { name: 'Create Agent' }).click();
+  await expect(panel.getByText('Mobile Managed')).toBeVisible();
+
+  await panel.getByText('Mobile Managed').click();
+  const settings = page.getByRole('dialog', { name: /Mobile Managed settings/ });
+  await expectDialogFitsVisualViewport(settings);
+  await settingsField(settings, 'Name').fill('Mobile Managed Updated');
+  await settingsField(settings, 'Command').fill('mock-agent-v2');
+  await settingsField(settings, 'Arguments').fill('--acp --updated');
+  await settingsField(settings, 'Working Directory').fill('/workspace/updated');
+  await settings.locator('textarea').fill('TOKEN=updated\nMODE=mobile');
+  await settings.getByRole('checkbox', { name: /Public/ }).uncheck();
+  await settings.getByPlaceholder('user@email.com').fill('mobile@example.com');
+  await settings.getByRole('button', { name: 'Grant' }).click();
+  await expect(settings.getByText('mobile@example.com', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Revoke access for mobile@example.com' }).click();
+  await expect(settings.getByText('mobile@example.com', { exact: true })).toHaveCount(0);
+
+  await settings.locator('textarea').focus();
+  for (const name of ['Save', 'Cancel', 'Delete']) {
+    await expect(settings.getByRole('button', { name })).toBeVisible();
+  }
+  await expectDialogFitsVisualViewport(settings);
+
+  const releaseUpdate = fixture.holdNextAgentUpdate();
+  const save = settings.locator('.agentSheetActions button.primary');
+  await save.click();
+  await expect(save).toBeDisabled();
+  expect(fixture.acpRequests.filter((request) => request.action === 'update-agent-config')).toHaveLength(1);
+  releaseUpdate();
+  await expect(settings).toBeHidden();
+
+  expect(fixture.agents.get('mobile-managed')).toMatchObject({
+    name: 'Mobile Managed Updated',
+    command: 'mock-agent-v2',
+    args: ['--acp', '--updated'],
+    cwd: '/workspace/updated',
+    public: false,
+    env: { TOKEN: 'updated', MODE: 'mobile' },
+  });
+
+  await panel.getByText('Mobile Managed Updated').click();
+  const updatedSettings = page.getByRole('dialog', { name: /Mobile Managed Updated settings/ });
+  page.once('dialog', (dialog) => dialog.accept());
+  await updatedSettings.getByRole('button', { name: 'Delete' }).click();
+  await expect(panel.getByText('Mobile Managed Updated')).toHaveCount(0);
+  expect(fixture.agents.has('mobile-managed')).toBe(false);
+});
+
+test('mobile Agent settings retains values and reports a failed save', async ({ page }) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Agents' }).click();
+  await page.getByText('Alpha Agent', { exact: true }).click();
+  const settings = page.getByRole('dialog', { name: /Alpha Agent settings/ });
+  await settingsField(settings, 'Name').fill('Unsaved Mobile Name');
+  await settings.locator('textarea').fill('TOKEN=still-present');
+  fixture.failNextAgentUpdate();
+  await settings.getByRole('button', { name: 'Save' }).click();
+  await expect(settings.getByRole('alert')).toContainText('Agent update rejected');
+  await expect(settingsField(settings, 'Name')).toHaveValue('Unsaved Mobile Name');
+  await expect(settings.locator('textarea')).toHaveValue('TOKEN=still-present');
+  await expect(settings).toBeVisible();
+  await expectDialogFitsVisualViewport(settings);
 });

@@ -27,7 +27,6 @@ export function useMobileOverlayState() {
 
   const close = useCallback((fromHistory = false) => {
     setActiveOverlay(null);
-    document.body.style.overflow = '';
     if (!fromHistory) {
       if (historyEntryRef.current && !historyClosePendingRef.current) {
         historyClosePendingRef.current = true;
@@ -72,18 +71,17 @@ export function useMobileOverlayState() {
   }, [activeOverlay, close, isMobileLayout]);
 
   useEffect(() => {
-    if (!isMobileLayout) return;
-    if (activeOverlay === null) {
-      document.body.style.overflow = '';
-      return;
-    }
+    if (!isMobileLayout || activeOverlay === null) return;
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
-      document.body.style.overflow = '';
+      if (document.body.style.overflow === 'hidden') {
+        document.body.style.overflow = previousOverflow;
+      }
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [activeOverlay, close, isMobileLayout]);

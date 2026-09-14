@@ -67,6 +67,38 @@ test('keeps only one mobile overlay active', async ({ page }) => {
   await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(1);
 });
 
+test('account replaces every persistent-header mobile overlay', async ({ page }) => {
+  const account = page.locator('.userNameButton');
+  const overlays = [
+    {
+      open: async () => page.getByRole('button', { name: 'Open navigation' }).click(),
+      surface: page.locator('.participantsSidebar.mobilePanelVisible'),
+    },
+    ...(['Agents', 'Nodes', 'Schedules'] as const).map((name) => ({
+      open: async () => {
+        await page.getByRole('button', { name: 'More actions' }).click();
+        await page.getByRole('menu', { name: 'Header actions' }).getByRole('menuitem', { name }).click();
+      },
+      surface: page.locator(`[data-mobile-overlay-surface="${name.toLowerCase()}"]`),
+    })),
+  ];
+
+  for (const overlay of overlays) {
+    await overlay.open();
+    await expect(overlay.surface).toBeVisible();
+
+    await account.click();
+
+    await expect(overlay.surface).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Account details' })).toBeVisible();
+    await expect(page.locator('[data-mobile-overlay-surface]')).toHaveCount(1);
+    await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Close active panel' }).click();
+    await expect(account).toBeFocused();
+  }
+});
+
 test('moves focus into overlays and restores persistent top-level openers', async ({ page }) => {
   const navigation = page.getByRole('button', { name: 'Open navigation' });
   await navigation.click();
@@ -127,6 +159,18 @@ test('preserves composer and current chat state while opening and closing naviga
   await expect(composer).toHaveValue('unsent mobile draft');
   await expect(page.getByText('Existing mobile message')).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+});
+
+test('restores the inline body overflow that existed before mobile scroll lock', async ({ page }) => {
+  await page.evaluate(() => {
+    document.body.style.overflow = 'clip';
+  });
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+
+  await page.getByRole('button', { name: 'Close navigation' }).click();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('clip');
 });
 
 test('keeps wide message content inside the viewport and hides unavailable voice input', async ({ page }) => {

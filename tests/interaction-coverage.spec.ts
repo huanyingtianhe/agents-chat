@@ -272,7 +272,7 @@ test('fullscreen control reflects browser fullscreen state', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Enter full screen' })).toHaveAttribute('aria-pressed', 'false');
 });
 
-test('mobile header exposes primary panels through the overflow menu', async ({ page }) => {
+test('mobile header separates navigation from management actions', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON() as any;
@@ -281,14 +281,37 @@ test('mobile header exposes primary panels through the overflow menu', async ({ 
   });
 
   await login(page);
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.locator('.participantsSidebar')).toBeVisible();
+  await page.getByRole('button', { name: 'Close navigation' }).click();
   await page.getByRole('button', { name: 'More actions' }).click();
   const menu = page.getByRole('menu', { name: 'Header actions' });
-  await expect(menu.getByRole('menuitem', { name: 'Chats' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Chats' })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: 'Theme' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Agents' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Nodes' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Schedules' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
   await menu.getByRole('menuitem', { name: 'Agents' }).click();
   await expect(page.locator('.agentsSidebar')).toBeVisible();
+});
+
+test('desktop header keeps inline feature controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route('**/api/acp', async (route) => {
+    const body = route.request().postDataJSON() as any;
+    const response = body?.action === 'list-agents' ? { ok: true, agents: [alphaAgent] } : { ok: true };
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(response) });
+  });
+
+  await login(page);
+  await expect(page.locator('button[title="Agents"]')).toBeVisible();
+  await expect(page.locator('button[title="Nodes"]')).toBeVisible();
+  await expect(page.locator('button[title="Schedules"]')).toBeVisible();
+  await expect(page.locator('button[title^="Theme:"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
+  await expect(page.locator('.userNameButton')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open navigation' })).toBeHidden();
 });
 
 test('settings persist the remembered agent scope per chat', async ({ page }) => {

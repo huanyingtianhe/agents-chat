@@ -4,6 +4,7 @@ const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
+  await expect(page.locator('form')).toHaveAttribute('data-hydrated', 'true', { timeout: 30000 });
   await page.locator('input[placeholder="Admin username"]').fill(process.env.ADMIN_USERNAME || 'admin');
   await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
   await page.locator('button[type="submit"]').click();
@@ -12,14 +13,13 @@ async function login(page: Page) {
 }
 
 test('keeps composer controls above iPhone browser chrome and keyboard', async ({ page }) => {
-  await page.setViewportSize({ width: 428, height: 926 });
   await page.addInitScript(() => {
-    let height = 926;
+    let height: number | null = null;
     let offsetTop = 0;
     const listeners = new Map<string, Set<EventListener>>();
     const visualViewport = {
-      get height() { return height; },
-      get width() { return 428; },
+      get height() { return height ?? window.innerHeight; },
+      get width() { return window.innerWidth; },
       get offsetTop() { return offsetTop; },
       get offsetLeft() { return 0; },
       get pageTop() { return offsetTop; },
@@ -169,8 +169,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   }).toBe(true);
 
   await modelButton.click();
-  await page.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('menuitem', { name: 'Chats' }).click();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
   const mobileSidebar = page.locator('.participantsSidebar');
   const backdrop = page.locator('.mobilePanelBackdrop');
   await expect(mobileSidebar).toBeVisible();
@@ -181,7 +180,9 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
       return { top: Math.round(rect.top), height: Math.round(rect.height) };
     })).toEqual({ top: 24, height: 430 });
   }
-  await backdrop.click({ position: { x: 420, y: 200 } });
+  const backdropBox = await backdrop.boundingBox();
+  expect(backdropBox).not.toBeNull();
+  await backdrop.click({ position: { x: backdropBox!.width - 4, y: 200 } });
 
   await page.evaluate(() => {
     (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })

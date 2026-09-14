@@ -92,6 +92,7 @@ export function AgentsPanel({
   } = panelState;
   const hasOpenAgentForm = showAddAgent || showAddRemoteAgent || showAgentSettings;
   const hideMobileSidebarForForm = mobileModal && hasOpenAgentForm;
+  const settingsDialogName = `${agents.find((agent) => agent.id === settingsAgentId)?.name || settingsAgentConfig?.name || 'Agent'} settings`;
 
   useEffect(() => {
     if (!hideMobileSidebarForForm) return;
@@ -250,7 +251,7 @@ export function AgentsPanel({
       {/* ── Agent settings modal (admin or owner) ── */}
       {showAgentSettings && settingsAgentConfig && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal agentConfigurationModal agentMobileSheet" role="dialog" aria-modal="true" aria-label={`${settingsAgentConfig.name} settings`}>
+          <div className="modal agentSettingsModal agentConfigurationModal agentMobileSheet" role="dialog" aria-modal="true" aria-label={settingsDialogName}>
             <h2>⚙️ {settingsAgentConfig.name}</h2>
             <div className="agentSheetBody">
               <label>

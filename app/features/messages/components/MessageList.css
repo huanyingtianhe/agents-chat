@@ -526,12 +526,13 @@
 @media (max-width: 900px) {
   .markdownBody table {
     display: block;
-    width: max-content;
+    width: 100%;
     min-width: 100%;
     max-width: 100%;
     overflow-x: auto;
     overscroll-behavior-inline: contain;
     -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
   }
 }
 @media (max-width: 768px) {

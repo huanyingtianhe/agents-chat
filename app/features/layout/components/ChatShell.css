@@ -1255,7 +1255,29 @@
     display: inline-flex;
   }
   .chatPageRoot .header {
-    z-index: 20;
+    z-index: 23;
+  }
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .header {
+    pointer-events: none;
+  }
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .mobileNavigationButton,
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .headerOverflowWrap {
+    pointer-events: auto;
   }
   .chatPageRoot .mobileNavigationButton {
     flex: 0 0 auto;
@@ -1276,7 +1298,7 @@
     height: var(--app-viewport-height, 100dvh);
     background: rgba(0, 0, 0, 0.42);
     backdrop-filter: blur(3px);
-    z-index: 11;
+    z-index: 21;
   }
   .chatPageRoot .chatLayout,
   .chatPageRoot .chatLayout.agentsSidebarOpen,
@@ -1297,11 +1319,12 @@
     box-sizing: border-box;
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
-    z-index: 12;
+    z-index: 22;
     box-shadow: var(--shadow);
     transition: transform 180ms ease;
   }
   .chatPageRoot .participantsSidebar {
+    display: flex;
     left: 0;
     width: min(84vw, 320px);
     transform: translateX(-105%);

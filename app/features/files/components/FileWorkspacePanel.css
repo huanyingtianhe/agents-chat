@@ -1,7 +1,7 @@
 .mdFilesTab{display:flex;flex-direction:column;gap:4px;min-height:0;flex:1;}
 .fileWorkspaceError{margin:8px;padding:9px 10px;border:1px solid color-mix(in srgb, var(--danger) 55%, var(--border));border-radius:8px;background:color-mix(in srgb, var(--danger) 10%, var(--panel-bg));color:var(--danger);font-size:12px;line-height:1.4;}
 .mdFilesTab .remoteAgentSelect{font-size:12px;padding:8px 10px;}
-.mdFilesList{overflow-y:auto;min-height:0;}
+.mdFilesList{overflow-y:auto;min-height:0;flex:1;}
 .mdTree{font-size:12px;}
 .mdTreeDir, .mdTreeFile{display:flex;align-items:center;gap:4px;width:100%;padding:4px 8px;border:none;background:transparent;color:var(--text);font-size:12px;cursor:pointer;border-radius:6px;text-align:left;white-space:nowrap;}
 .mdTreeLabel{overflow:hidden;text-overflow:ellipsis;min-width:0;}

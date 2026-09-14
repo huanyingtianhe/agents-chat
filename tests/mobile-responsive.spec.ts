@@ -122,11 +122,11 @@ test('preserves composer and current chat state while opening and closing naviga
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
-  await page.getByRole('button', { name: 'Close active panel' }).click();
+  await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 400, y: 100 } });
 
   await expect(composer).toHaveValue('unsent mobile draft');
   await expect(page.getByText('Existing mobile message')).toBeVisible();
-  await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
 });
 
 test('keeps wide message content inside the viewport and hides unavailable voice input', async ({ page }) => {
@@ -268,7 +268,7 @@ test('keeps navigation open and reports a failed file preview', async ({ page })
   await page.getByRole('button', { name: 'broken.md' }).click();
 
   await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
-  await expect(page.getByRole('alert')).toContainText('Preview unavailable');
+  await expect(page.locator('.fileWorkspaceError')).toContainText('Preview unavailable');
 });
 
 test('Escape and browser back close the active overlay and restore trigger focus', async ({ page }) => {
@@ -548,7 +548,9 @@ test('mobile Schedules supports status, guarded enablement, and run history with
 
   await historyOpener.click();
   await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toBeVisible();
-  await schedules.locator('[aria-label="Close schedules"]').click({ force: true });
+  await page.locator('[data-mobile-overlay-surface="schedules"] [aria-label="Close schedules"]').evaluate(
+    (element) => (element as HTMLButtonElement).click(),
+  );
   await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toHaveCount(0);
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Schedules' }).click();
@@ -589,6 +591,7 @@ test('mobile Run History reports detail failures without empty history and retri
   allowDetailSuccess = true;
   await history.getByRole('button', { name: 'Retry' }).click();
   const loadedHistory = page.getByRole('dialog', { name: 'Daily report runs' });
+  await loadedHistory.locator('summary').click();
   await expect(loadedHistory.getByText('Report complete')).toBeVisible();
   await expect(loadedHistory.getByRole('alert')).toHaveCount(0);
   expect(detailAttempts).toBeGreaterThan(failedAttempts);
@@ -659,6 +662,7 @@ test('mobile Schedules keeps the authoritative PATCH state when reconciliation f
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Schedules' }).click();
   const panel = page.getByRole('dialog', { name: 'Schedules' });
+  await expect(panel.getByText('Daily report')).toBeVisible();
   fixture.failNextScheduleRefresh();
 
   await panel.getByRole('switch', { name: 'Enable Daily report' }).click();

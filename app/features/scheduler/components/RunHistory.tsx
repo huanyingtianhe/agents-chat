@@ -46,7 +46,7 @@ export function RunHistory({ jobId, opener, onClose }: RunHistoryProps) {
     if (closedRef.current) return;
     closedRef.current = true;
     onClose();
-    queueMicrotask(() => opener?.isConnected && opener.focus());
+    window.requestAnimationFrame(() => opener?.isConnected && opener.focus());
   }, [onClose, opener]);
 
   useEffect(() => {

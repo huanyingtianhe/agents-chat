@@ -342,17 +342,17 @@ export function useAgentPanelState({
     }
     function handleKey(event: globalThis.KeyboardEvent) {
       if (event.key !== 'Escape') return;
-      if (openModelMenuAgentId) { setOpenModelMenuAgentId(null); return; }
-      if (showAgentSettings) { closeAgentSettings(); return; }
-      if (showAddAgent) { closeAddAgent(); return; }
-      if (showAddRemoteAgent) { closeAddRemoteAgent(); return; }
-      if (showAgentAddMenu) { setShowAgentAddMenu(false); return; }
+      if (openModelMenuAgentId) { event.stopImmediatePropagation(); setOpenModelMenuAgentId(null); return; }
+      if (showAgentSettings) { event.stopImmediatePropagation(); closeAgentSettings(); return; }
+      if (showAddAgent) { event.stopImmediatePropagation(); closeAddAgent(); return; }
+      if (showAddRemoteAgent) { event.stopImmediatePropagation(); closeAddRemoteAgent(); return; }
+      if (showAgentAddMenu) { event.stopImmediatePropagation(); setShowAgentAddMenu(false); return; }
     }
     window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleKey);
+    window.addEventListener('keydown', handleKey, { capture: true });
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('keydown', handleKey, { capture: true });
     };
   }, [openModelMenuAgentId, showAgentSettings, showAddAgent, showAddRemoteAgent, showAgentAddMenu]);
 

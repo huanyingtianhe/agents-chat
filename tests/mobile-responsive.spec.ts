@@ -519,7 +519,20 @@ test('mobile Schedules supports status, guarded enablement, and run history with
   await expect(history).toBeFocused();
   await history.locator('summary').click();
   await expect(history.getByText('Report complete')).toBeVisible();
-  await expect(history.getByRole('button', { name: /Run now/i })).toBeVisible();
+  const runNow = history.getByRole('button', { name: /Run now/i });
+  const closeHistory = history.getByRole('button', { name: 'Close' });
+  await expect(runNow).toBeVisible();
+
+  await closeHistory.focus();
+  await page.keyboard.press('Tab');
+  await expect(runNow).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(closeHistory).toBeFocused();
+
+  await page.getByRole('button', { name: 'Close active panel' }).focus();
+  await expect(runNow).toBeFocused();
+  await page.getByRole('button', { name: 'More actions' }).focus();
+  await expect(runNow).toBeFocused();
 
   await page.keyboard.press('Escape');
   await expect(history).toHaveCount(0);
@@ -540,6 +553,45 @@ test('mobile Schedules supports status, guarded enablement, and run history with
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Schedules' }).click();
   await expect(page.getByRole('dialog', { name: 'Daily report runs' })).toHaveCount(0);
+});
+
+test('mobile Run History reports detail failures without empty history and retries', async ({ page }) => {
+  let detailAttempts = 0;
+  let allowDetailSuccess = false;
+  await page.route('**/api/schedules/schedule-1', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    detailAttempts += 1;
+    if (!allowDetailSuccess) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Run history unavailable' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  const schedules = page.getByRole('dialog', { name: 'Schedules' });
+  await schedules.getByTitle('View run history').click();
+
+  const history = page.getByRole('dialog', { name: 'schedule-1 runs' });
+  await expect(history.getByRole('alert')).toContainText('Run history unavailable');
+  await expect(history.getByText('No runs yet')).toHaveCount(0);
+  await expect(history.getByRole('button', { name: /Run now/i })).toHaveCount(0);
+
+  const failedAttempts = detailAttempts;
+  allowDetailSuccess = true;
+  await history.getByRole('button', { name: 'Retry' }).click();
+  const loadedHistory = page.getByRole('dialog', { name: 'Daily report runs' });
+  await expect(loadedHistory.getByText('Report complete')).toBeVisible();
+  await expect(loadedHistory.getByRole('alert')).toHaveCount(0);
+  expect(detailAttempts).toBeGreaterThan(failedAttempts);
 });
 
 test('mobile Schedules reports load failures and retries in the panel', async ({ page }) => {

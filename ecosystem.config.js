@@ -8,7 +8,7 @@ if (!interpreter || !path.isAbsolute(interpreter)) {
 module.exports = {
   apps: [{
     name: 'agents-chat',
-    script: 'scripts/start-server.mjs',
+    script: 'scripts/start-pm2.mjs',
     interpreter,
     cwd: __dirname,
     exec_mode: 'fork',

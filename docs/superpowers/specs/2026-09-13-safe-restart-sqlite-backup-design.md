@@ -253,11 +253,17 @@ The wrapper:
 1. Rejects a conflicting active systemd deployment.
 2. Requires one fork-mode `agents-chat` instance.
 3. Runs preflight and backup before stopping the process.
-4. Starts or reloads from `ecosystem.config.js`, explicitly using the validated
-   Node 24 executable and a PM2-specific entry point for the managed JavaScript
-   server launcher instead of relying on the `npm` shebang and mutable `PATH`.
-5. Updates environment values, checks actual PM2 interpreter/runtime metadata,
-   verifies storage health, and runs `pm2 save`.
+4. Snapshots PM2's actual `pm_exec_path` and compares it with the
+   checkout-derived absolute adapter path, `$project_dir/scripts/start-pm2.mjs`.
+5. Deletes and recreates an otherwise-valid process when it still uses the
+   legacy `scripts/start-server.mjs` entry, because `startOrReload` preserves
+   the existing `pm_exec_path`; invalid Node runtimes use the same replacement
+   path.
+6. Otherwise starts or reloads from `ecosystem.config.js`, explicitly using the
+   validated Node 24 executable and PM2-specific adapter instead of relying on
+   the `npm` shebang and mutable `PATH`.
+7. Updates environment values, then post-verifies the actual PM2 interpreter,
+   Node runtime, and `pm_exec_path` before storage health and `pm2 save`.
 
 PM2 fork mode loads application modules through its process container rather
 than executing them as the direct `process.argv[1]` entry point. The PM2
@@ -269,6 +275,9 @@ refuses connections.
 The PM2-specific entry point is an internal adapter, not a new operator
 command. Operators continue to use `./scripts/safe-restart.sh pm2` for routine
 restarts and `./scripts/safe-restart.sh pm2 --deploy` for deployment.
+Successful post-start verification requires PM2 to report the absolute adapter
+path for the current checkout; reporting the legacy launcher path fails the
+restart before health verification or process-list persistence.
 
 The managed server launcher runs check-only before loading Next.js, so neither
 `pm2 restart agents-chat --update-env` nor manual `npm start` can bypass the
@@ -540,6 +549,9 @@ Extend existing lightweight script tests to verify:
 - PM2 avoids an indirect npm interpreter and persists updated configuration.
 - PM2's configured entry point explicitly starts the managed launcher when
   loaded through the PM2 fork container.
+- PM2 replaces a legacy `scripts/start-server.mjs` process instead of using
+  `startOrReload`, and rejects any post-start snapshot whose `pm_exec_path`
+  does not equal `$project_dir/scripts/start-pm2.mjs`.
 - Windows deploy uses `npm ci`, backs up before stopping, and does not kill an
   unrelated port owner.
 - Windows `start.ps1` runs check-only before Next.js.

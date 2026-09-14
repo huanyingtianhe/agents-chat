@@ -18,6 +18,7 @@ data_state=unchanged
 restart_began=0
 effective_port=
 pm2_action=
+expected_pm2_exec_path="$project_dir/scripts/start-pm2.mjs"
 unit_src="$script_dir/agents-chat.service"
 unit_dest="${AGENTS_CHAT_UNIT_DEST:-/etc/systemd/system/agents-chat.service}"
 system_env_file="${AGENTS_CHAT_SYSTEM_ENV_FILE:-/etc/agents-chat.env}"
@@ -290,6 +291,7 @@ pm2_snapshot() {
           env.instances ?? "",
           env.exec_interpreter || "",
           env.node_version || "",
+          env.pm_exec_path || "",
         ].join("\t"));
       }
     });
@@ -311,8 +313,9 @@ pm2_topology_valid() {
   local snapshot="$1"
   [[ -n "$snapshot" ]] || return 1
   [[ "$(wc -l <<<"$snapshot" | tr -d ' ')" == 1 ]] || return 1
-  local pid status cwd exec_mode instances interpreter node_version
-  IFS=$'\t' read -r pid status cwd exec_mode instances interpreter node_version <<<"$snapshot"
+  local pid status cwd exec_mode instances interpreter node_version exec_path
+  IFS=$'\t' read -r pid status cwd exec_mode instances interpreter node_version exec_path \
+    <<<"$snapshot"
   [[ "$exec_mode" == fork_mode || "$exec_mode" == fork ]] || return 1
   [[ "$instances" == 1 ]] || return 1
 }
@@ -501,9 +504,11 @@ if [[ "$manager" == pm2 ]]; then
     pm2_action=start
   elif pm2_topology_valid "$matching_pm2"; then
     IFS=$'\t' read -r _ _ _ _ _ current_interpreter current_node_version \
+      current_exec_path \
       <<<"$matching_pm2"
     if [[ "$current_interpreter" == "$node_bin" \
-      && "$current_node_version" == 24.* ]]; then
+      && "$current_node_version" == 24.* \
+      && "$current_exec_path" == "$expected_pm2_exec_path" ]]; then
       pm2_action=apply
     else
       pm2_action=replace
@@ -592,10 +597,10 @@ else
       exit 1
     fi
   elif [[ "$pm2_action" == replace ]]; then
-    echo "→ pm2 delete $service (replacing unvalidated runtime)"
+    echo "→ pm2 delete $service (replacing unvalidated runtime or entry point)"
     if ! pm2_command "$pm2_bin" delete "$service"; then
       render_failure SERVICE_START_FAILED service-replace \
-        "PM2 could not remove the process using the unvalidated runtime."
+        "PM2 could not remove the process using the unvalidated runtime or entry point."
       exit 1
     fi
     echo "→ pm2 start ecosystem.config.js --only agents-chat --update-env"
@@ -640,12 +645,13 @@ else
     exit 1
   fi
   IFS=$'\t' read -r pm2_pid pm2_status pm2_cwd pm2_mode pm2_instances \
-    pm2_interpreter pm2_node_version <<<"$matching_pm2"
+    pm2_interpreter pm2_node_version pm2_exec_path <<<"$matching_pm2"
   if [[ "$pm2_status" != online \
     || "$pm2_interpreter" != "$node_bin" \
-    || "$pm2_node_version" != 24.* ]]; then
+    || "$pm2_node_version" != 24.* \
+    || "$pm2_exec_path" != "$expected_pm2_exec_path" ]]; then
     render_failure SERVICE_START_FAILED runtime-verification \
-      "PM2 runtime metadata does not match the validated Node.js 24 executable."
+      "PM2 runtime metadata does not match the validated Node.js 24 executable and adapter entry point."
     exit 1
   fi
 fi

@@ -150,6 +150,31 @@ test('forwards termination signals and preserves signal exit status', async () =
   assert.equal(processLike.listenerCount('SIGTERM'), 0);
 });
 
+test('PM2 imported entry explicitly starts the managed server', async () => {
+  const entrySource = readFileSync(
+    path.join(projectRoot, 'scripts', 'start-pm2.mjs'),
+    'utf8',
+  );
+  const marker = '__agentsChatPm2EntryCalls';
+  globalThis[marker] = 0;
+  const stubUrl = `data:text/javascript,${encodeURIComponent(`
+    export function runManagedServer() {
+      globalThis.${marker} += 1;
+    }
+  `)}`;
+  const executableEntry = entrySource.replace(
+    './start-server.mjs',
+    stubUrl,
+  );
+
+  try {
+    await import(`data:text/javascript,${encodeURIComponent(executableEntry)}`);
+    assert.equal(globalThis[marker], 1);
+  } finally {
+    delete globalThis[marker];
+  }
+});
+
 test('allows a genuinely fresh install but rejects an established missing database', () => {
   const freshRoot = createProject('fresh');
   const fresh = checkRuntimeAndStorage({
@@ -195,7 +220,7 @@ test('npm start, PM2, and build instrumentation cannot bypass the managed guard'
 
   assert.equal(packageJson.scripts.start, 'node scripts/start-server.mjs');
   assert.equal(packageJson.scripts['start:prod'], 'npm run build && npm start');
-  assert.match(ecosystem, /script:\s*['"]scripts\/start-server\.mjs['"]/);
+  assert.match(ecosystem, /script:\s*['"]scripts\/start-pm2\.mjs['"]/);
   assert.match(ecosystem, /process\.env\.AGENTS_CHAT_NODE/);
   assert.match(ecosystem, /path\.isAbsolute\(interpreter\)/);
   assert.match(ecosystem, /\sinterpreter,/);

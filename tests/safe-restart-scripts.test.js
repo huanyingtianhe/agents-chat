@@ -159,6 +159,23 @@ fi`);
   };
 }
 
+function pm2Process(root, node, pm2Env = {}) {
+  return {
+    name: 'agents-chat',
+    pid: 1357,
+    pm2_env: {
+      status: 'online',
+      pm_cwd: root,
+      exec_mode: 'fork_mode',
+      instances: 1,
+      exec_interpreter: node,
+      node_version: '24.20.0',
+      pm_exec_path: path.join(root, 'scripts', 'start-pm2.mjs'),
+      ...pm2Env,
+    },
+  };
+}
+
 function runHarness(harness, manager, ...args) {
   return spawnSync(
     path.join(harness.root, 'scripts', 'safe-restart.sh'),
@@ -198,6 +215,7 @@ test('declares the deployment ordering and manager contracts', () => {
   assert.match(safeRestart, /pm2_action=replace/);
   assert.match(safeRestart, /pm2 save/);
   assert.match(unit, /start-server\.mjs" --port "__PORT__"/);
+  assert.match(ecosystem, /script:\s*['"]scripts\/start-pm2\.mjs['"]/);
   assert.match(ecosystem, /interpreter/);
   assert.match(ecosystem, /AGENTS_CHAT_NODE/);
   assert.match(ecosystem, /exec_mode:\s*['"]fork['"]/);
@@ -256,18 +274,10 @@ test('failed preflight does not mutate either service manager', () => {
     const harness = createHarness(`preflight-failure-${manager}`, {
       MOCK_PREPARE_FAIL: '1',
       MOCK_PM2_JLIST: manager === 'pm2'
-        ? JSON.stringify([{
-          name: 'agents-chat',
-          pid: 1357,
-          pm2_env: {
-            status: 'online',
-            pm_cwd: path.join(workRoot, `preflight-failure-${manager}`),
-            exec_mode: 'fork_mode',
-            instances: 1,
-            exec_interpreter: path.join(workRoot, `preflight-failure-${manager}`, 'mock-bin', 'node'),
-            node_version: '24.20.0',
-          },
-        }])
+        ? JSON.stringify([pm2Process(
+          path.join(workRoot, `preflight-failure-${manager}`),
+          path.join(workRoot, `preflight-failure-${manager}`, 'mock-bin', 'node'),
+        )])
         : '[]',
     });
 
@@ -347,18 +357,9 @@ test('detects manager conflicts without stopping either manager', () => {
 
 test('PM2 applies one fork with explicit Node and saves only after health', () => {
   const harness = createHarness('pm2-success');
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
   const result = runHarness(harness, 'pm2');
   assert.equal(result.status, 0, result.stderr);
 
@@ -374,30 +375,15 @@ test('PM2 applies one fork with explicit Node and saves only after health', () =
 
 test('PM2 replaces an app on an unvalidated runtime instead of blindly reloading it', () => {
   const harness = createHarness('pm2-old-runtime');
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE, {
       exec_interpreter: '/old/node',
       node_version: '22.0.0',
-    },
-  }]);
-  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 2468,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+    }),
+  ]);
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
 
   const result = runHarness(harness, 'pm2');
   assert.equal(result.status, 0, result.stderr);
@@ -407,22 +393,54 @@ test('PM2 replaces an app on an unvalidated runtime instead of blindly reloading
   assert.doesNotMatch(log, /pm2 reload agents-chat/);
 });
 
+test('PM2 replaces a legacy entry point instead of startOrReloading it', () => {
+  const harness = createHarness('pm2-legacy-entry');
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE, {
+      pm_exec_path: path.join(harness.root, 'scripts', 'start-server.mjs'),
+    }),
+  ]);
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
+
+  const result = runHarness(harness, 'pm2');
+  assert.equal(result.status, 0, result.stderr);
+  const log = readFileSync(harness.log, 'utf8');
+  assertBefore(log, 'prepare', 'pm2 delete agents-chat');
+  assertBefore(log, 'pm2 delete agents-chat', 'pm2 start ecosystem.config.js --only agents-chat --update-env');
+  assert.doesNotMatch(log, /pm2 startOrReload/);
+});
+
+test('PM2 rejects a restarted process that still reports the legacy entry point', () => {
+  const harness = createHarness('pm2-legacy-entry-after-restart');
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE, {
+      pm_exec_path: path.join(harness.root, 'scripts', 'start-server.mjs'),
+    }),
+  ]);
+
+  const result = runHarness(harness, 'pm2');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /adapter entry point/i);
+  const log = readFileSync(harness.log, 'utf8');
+  assert.match(log, /pm2 startOrReload ecosystem\.config\.js/);
+  assert.doesNotMatch(log, /curl -fsS|pm2 save/);
+});
+
 test('PM2 reports the service stopped when validated replacement cannot start', () => {
   const harness = createHarness('pm2-old-runtime-start-failure', {
     MOCK_PM2_START_FAIL: '1',
   });
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE, {
       exec_interpreter: '/old/node',
       node_version: '22.0.0',
-    },
-  }]);
+    }),
+  ]);
 
   const result = runHarness(harness, 'pm2');
   assert.notEqual(result.status, 0);
@@ -462,18 +480,12 @@ test('restart-only rejects a whitespace-only BUILD_ID', () => {
 
 test('rejects an invalid PM2 topology before reload', () => {
   const harness = createHarness('pm2-cluster');
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE, {
       exec_mode: 'cluster_mode',
       instances: 2,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+    }),
+  ]);
   const result = runHarness(harness, 'pm2');
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /exactly one fork/i);
@@ -484,18 +496,9 @@ test('health failure reports the verified backup and does not save PM2 state', (
   const harness = createHarness('pm2-health-failure', {
     MOCK_HEALTH_FAIL: '1',
   });
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
   const result = runHarness(harness, 'pm2');
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /STORAGE_HEALTH_FAILED/);
@@ -549,18 +552,7 @@ test('systemd inspects the checkout owner PM2 daemon and fails if inspection is 
 test('PM2 rejects any same-name app from another checkout', () => {
   const harness = createHarness('pm2-other-checkout');
   harness.env.MOCK_PM2_JLIST = JSON.stringify([
-    {
-      name: 'agents-chat',
-      pid: 1357,
-      pm2_env: {
-        status: 'online',
-        pm_cwd: harness.root,
-        exec_mode: 'fork_mode',
-        instances: 1,
-        exec_interpreter: harness.env.MOCK_NODE,
-        node_version: '24.20.0',
-      },
-    },
+    pm2Process(harness.root, harness.env.MOCK_NODE),
     {
       name: 'agents-chat',
       pid: 2468,
@@ -582,18 +574,9 @@ test('PM2 rejects any same-name app from another checkout', () => {
 test('PM2 first install is explicit and leaves exactly one matching process', () => {
   const harness = createHarness('pm2-first-install');
   harness.env.MOCK_PM2_JLIST = '[]';
-  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+  harness.env.MOCK_PM2_JLIST_AFTER = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
   const result = runHarness(harness, 'pm2');
 
   assert.equal(result.status, 0, result.stderr);
@@ -619,18 +602,9 @@ test('passes one systemd effective port from machine env to service and health c
 
 test('passes the selected PM2 port to PM2 and the health checker', () => {
   const harness = createHarness('pm2-port', { PORT: '4030' });
-  harness.env.MOCK_PM2_JLIST = JSON.stringify([{
-    name: 'agents-chat',
-    pid: 1357,
-    pm2_env: {
-      status: 'online',
-      pm_cwd: harness.root,
-      exec_mode: 'fork_mode',
-      instances: 1,
-      exec_interpreter: harness.env.MOCK_NODE,
-      node_version: '24.20.0',
-    },
-  }]);
+  harness.env.MOCK_PM2_JLIST = JSON.stringify([
+    pm2Process(harness.root, harness.env.MOCK_NODE),
+  ]);
   const result = runHarness(harness, 'pm2');
 
   assert.equal(result.status, 0, result.stderr);

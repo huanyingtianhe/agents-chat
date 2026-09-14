@@ -4,7 +4,7 @@
 
 **Goal:** Make `./scripts/safe-restart.sh pm2` start the real Next.js process instead of leaving an idle PM2 container with nothing listening on port 3010.
 
-**Architecture:** Keep `scripts/start-server.mjs` as the reusable managed launcher and direct/systemd entry point. Add an internal side-effect entry module for PM2, which imports and explicitly invokes the managed launcher, then point the ecosystem configuration at that adapter.
+**Architecture:** Keep `scripts/start-server.mjs` as the reusable managed launcher and direct/systemd entry point. Add an internal side-effect entry module for PM2, point the ecosystem configuration at that adapter, and make safe restart replace legacy PM2 processes whose preserved `pm_exec_path` still targets `scripts/start-server.mjs`. Post-start metadata verification must confirm the checkout-derived absolute adapter path before health checks or `pm2 save`.
 
 **Tech Stack:** Node.js 24 ESM, PM2 fork mode, Next.js 16, Node `node:test`, Bash.
 
@@ -21,7 +21,8 @@
 - `scripts/start-server.mjs` — expose one error-handled `runManagedServer` entry function for direct and PM2 callers.
 - `ecosystem.config.js` — point PM2 at the dedicated adapter while preserving the validated absolute Node interpreter.
 - `tests/managed-start.test.mjs` — execute the adapter as an imported module with a stub launcher and assert that it invokes startup.
-- `tests/safe-restart-scripts.test.js` — require the PM2 ecosystem contract to use the dedicated adapter.
+- `scripts/safe-restart.sh` — snapshot actual PM2 `pm_exec_path`, replace legacy entries, and post-verify the absolute adapter path.
+- `tests/safe-restart-scripts.test.js` — require the PM2 ecosystem contract, model the adapter path in normal fixtures, and cover legacy-entry replacement and post-verification.
 
 ### Task 1: Add PM2 Entry Regression Coverage
 
@@ -191,7 +192,68 @@ git commit -m "fix: start managed server through PM2" \
 
 Expected: one new commit on `feat/safe-restart-sqlite-backups`.
 
-### Task 3: Validate the Real PM2 Restart and Update PR 48
+### Task 3: Replace Legacy PM2 Entry Metadata
+
+**Files:**
+- Modify: `scripts/safe-restart.sh`
+- Modify: `tests/safe-restart-scripts.test.js`
+
+- [ ] **Step 1: Add failing legacy-entry and post-verification tests**
+
+Define normal PM2 fixtures with:
+
+```js
+pm_exec_path: path.join(root, 'scripts', 'start-pm2.mjs'),
+```
+
+Add a regression fixture with a valid Node 24 runtime but:
+
+```js
+pm_exec_path: path.join(harness.root, 'scripts', 'start-server.mjs'),
+```
+
+Assert that safe restart runs `pm2 delete agents-chat` followed by
+`pm2 start ecosystem.config.js`, never `pm2 startOrReload`. Add a second
+post-start fixture that reports the legacy path and assert that restart fails
+before the storage health check and `pm2 save`.
+
+- [ ] **Step 2: Capture and compare the actual PM2 entry path**
+
+Set the home-independent expected value from the checkout:
+
+```bash
+expected_pm2_exec_path="$project_dir/scripts/start-pm2.mjs"
+```
+
+Append `env.pm_exec_path || ""` to `pm2_snapshot`. For an existing valid
+single-fork process, choose `pm2_action=apply` only when the interpreter,
+Node 24 runtime, and actual exec path all match; otherwise choose
+`pm2_action=replace`.
+
+- [ ] **Step 3: Post-verify the adapter path**
+
+After start, replacement, or reload, parse the snapshot's `pm_exec_path` and
+require:
+
+```bash
+[[ "$pm2_exec_path" == "$expected_pm2_exec_path" ]]
+```
+
+Fail runtime verification before health checks and process-list persistence
+when PM2 still reports the legacy launcher.
+
+- [ ] **Step 4: Run the focused regression suite**
+
+Run:
+
+```bash
+node --test tests/managed-start.test.mjs tests/safe-restart-scripts.test.js
+git diff --check
+```
+
+Expected: all Node tests pass and `git diff --check` produces no output.
+
+### Task 4: Validate the Real PM2 Restart and Update PR 48
 
 **Files:**
 - No additional source files.

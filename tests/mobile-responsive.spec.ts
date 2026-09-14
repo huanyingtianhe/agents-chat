@@ -124,12 +124,40 @@ test('keeps navigation open after a failed chat selection', async ({ page }) => 
   await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
 });
 
-test('closes the drawer after selecting a file and keeps the viewer in main content', async ({ page }) => {
+test('closes the drawer after selecting a file and preserves the Files tree when reopening', async ({ page }) => {
+  await page.route('**/api/markdown**', async (route) => {
+    const path = new URL(route.request().url()).searchParams.get('path');
+    if (path) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        files: [
+          { path: 'README.md', name: 'README.md', mtime: '2026-09-14T00:00:00.000Z' },
+          ...Array.from({ length: 60 }, (_, index) => ({
+            path: `notes/note-${String(index).padStart(2, '0')}.md`,
+            name: `note-${String(index).padStart(2, '0')}.md`,
+            mtime: '2026-09-14T00:00:00.000Z',
+          })),
+        ],
+      }),
+    });
+  });
+
   await page.locator('textarea.composerTextarea').fill('draft retained behind file');
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('tab', { name: 'Files' }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
+  await page.getByRole('button', { name: 'notes' }).click();
+  const filesList = page.locator('.mdFilesList');
+  const preservedScrollTop = await filesList.evaluate((element) => {
+    element.scrollTop = 240;
+    return element.scrollTop;
+  });
+  expect(preservedScrollTop).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'README.md' }).click();
 
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
@@ -143,6 +171,7 @@ test('closes the drawer after selecting a file and keeps the viewer in main cont
   await expect(page.locator('textarea.composerTextarea')).toHaveValue('draft retained behind file');
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => filesList.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
 });
 
 test('keeps navigation open and reports a failed file preview', async ({ page }) => {

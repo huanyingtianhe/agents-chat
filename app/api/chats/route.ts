@@ -5,9 +5,30 @@ import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
 import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
 import { getAgentById, getAllAgents, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
 import { createLogger } from '@/lib/logger';
+import { getStorageErrorCode, isStorageError, toStorageErrorResponse } from '@/lib/storage/storageErrors';
 
 export const dynamic = 'force-dynamic';
 const logger = createLogger('api.chats');
+
+function withStorageErrorBoundary(
+  handler: (req: NextRequest) => Promise<NextResponse>,
+): (req: NextRequest) => Promise<NextResponse> {
+  return async (req) => {
+    try {
+      return await handler(req);
+    } catch (error) {
+      const response = toStorageErrorResponse(error);
+      if (!response) throw error;
+      logger.error({
+        code: getStorageErrorCode(error),
+        nodeVersion: process.version,
+        platform: process.platform,
+        architecture: process.arch,
+      }, 'Chat storage request failed');
+      return response;
+    }
+  };
+}
 
 function getUserId(token: any): string { // eslint-disable-line @typescript-eslint/no-explicit-any
   return token?.email || token?.name || token?.sub || 'anonymous';
@@ -87,7 +108,7 @@ function resolveChatGitContextOptions(userId: string, chat: StoredChat) {
   return fallbackOptions;
 }
 
-export async function GET(req: NextRequest) {
+async function handleGet(req: NextRequest) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
   if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
@@ -122,7 +143,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, chats, lastChatId });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePost(req: NextRequest) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
   if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
@@ -194,7 +215,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(req: NextRequest) {
+async function handleDelete(req: NextRequest) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET, cookieName: 'next-auth.session-token' });
   if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
@@ -203,6 +224,14 @@ export async function DELETE(req: NextRequest) {
   if (!chatId) return NextResponse.json({ ok: false, error: 'missing_id' }, { status: 400 });
 
   await deleteChat(userId, chatId);
-  try { deleteOrchestrationsForChat(userId, chatId); } catch { /* ignore */ }
+  try {
+    deleteOrchestrationsForChat(userId, chatId);
+  } catch (error) {
+    if (isStorageError(error)) throw error;
+  }
   return NextResponse.json({ ok: true });
 }
+
+export const GET = withStorageErrorBoundary(handleGet);
+export const POST = withStorageErrorBoundary(handlePost);
+export const DELETE = withStorageErrorBoundary(handleDelete);

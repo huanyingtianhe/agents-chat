@@ -52,8 +52,26 @@ async function deleteAllChats(page: Page) {
 async function ensureActiveChat(page: Page) {
   const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 2000 }).catch(() => false);
   if (isEmpty) {
-    await page.click('button.newChatButton, button.emptyHomepageNewChat');
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    const chat = {
+      id: `test-chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      name: 'New Chat',
+      ts: Date.now(),
+      messages: [],
+      agentSessions: {},
+    };
+    const request = page.context().request;
+    await expect(async () => {
+      const createResponse = await request.post(`${BASE}/api/chats`, { data: { chat } });
+      expect(createResponse.ok()).toBeTruthy();
+    }).toPass();
+    await expect(async () => {
+      const selectResponse = await request.post(`${BASE}/api/chats`, {
+        data: { action: 'set-last-chat', chatId: chat.id },
+      });
+      expect(selectResponse.ok()).toBeTruthy();
+    }).toPass();
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
   }
 }
 
@@ -276,21 +294,83 @@ test.describe('Chat UI', () => {
   test('warms local agents after loading agents without blocking send', async ({ page }) => {
     await page.goto('about:blank');
 
-    const actions: string[] = [];
     const sent: any[] = [];
     let warmupRequested = false;
     let listAgentsFulfilled = false;
     let warmupSawListCompleted = false;
-    let warmupCompleted = false;
-    let releaseWarmup: () => void = () => {};
-    const warmupCanFinish = new Promise<void>((resolve) => {
-      releaseWarmup = resolve;
+    await page.exposeFunction('recordWarmupRequest', () => {
+      warmupRequested = true;
+      warmupSawListCompleted = listAgentsFulfilled;
+    });
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      const testWindow = window as typeof window & {
+        recordWarmupRequest: () => Promise<void>;
+        releaseWarmup?: () => void;
+        warmupCompleted?: boolean;
+        warmupRequestCount?: number;
+        warmupWaiting?: boolean;
+      };
+      testWindow.warmupCompleted = false;
+      testWindow.warmupRequestCount = 0;
+      testWindow.warmupWaiting = false;
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        let body: { action?: string } | null = null;
+        if (url.endsWith('/api/acp') && typeof init?.body === 'string') {
+          try {
+            body = JSON.parse(init.body) as { action?: string };
+          } catch {
+            body = null;
+          }
+        }
+        if (body?.action !== 'warm-local-agents') return originalFetch(input, init);
+
+        testWindow.warmupRequestCount = (testWindow.warmupRequestCount ?? 0) + 1;
+        await testWindow.recordWarmupRequest();
+        await new Promise<void>((resolve) => {
+          testWindow.releaseWarmup = resolve;
+          testWindow.warmupWaiting = true;
+        });
+        testWindow.warmupWaiting = false;
+        testWindow.warmupCompleted = true;
+        return new Response(JSON.stringify({
+          ok: true,
+          warmed: 1,
+          agents: [
+            { agentId: 'alpha', status: 'started' },
+            { agentId: 'remote', status: 'skipped_remote' },
+          ],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+    });
+
+    const warmupChat = {
+      id: 'warmup-test-chat',
+      name: 'Warmup test chat',
+      ts: Date.now(),
+      messages: [],
+      agentSessions: {},
+    };
+    await page.route('**/api/chats**', async (route) => {
+      const request = route.request();
+      if (request.method() === 'GET') {
+        const isDetailRequest = new URL(request.url()).searchParams.has('id');
+        await route.fulfill({
+          json: isDetailRequest
+            ? { ok: true, chat: warmupChat }
+            : { ok: true, chats: [warmupChat], lastChatId: warmupChat.id },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
     });
 
     await page.route('**/api/acp', async (route) => {
       const body = route.request().postDataJSON() as any;
-      actions.push(String(body?.action || ''));
-
       if (body?.action === 'list-agents') {
         await route.fulfill({
           contentType: 'application/json',
@@ -308,25 +388,6 @@ test.describe('Chat UI', () => {
 
       if (body?.action === 'get-model-prefs') {
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, prefs: {} }) });
-        return;
-      }
-
-      if (body?.action === 'warm-local-agents') {
-        warmupRequested = true;
-        warmupSawListCompleted = listAgentsFulfilled;
-        await warmupCanFinish;
-        warmupCompleted = true;
-        await route.fulfill({
-          contentType: 'application/json',
-          body: JSON.stringify({
-            ok: true,
-            warmed: 1,
-            agents: [
-              { agentId: 'alpha', status: 'started' },
-              { agentId: 'remote', status: 'skipped_remote' },
-            ],
-          }),
-        });
         return;
       }
 
@@ -363,20 +424,26 @@ test.describe('Chat UI', () => {
     });
 
     await page.goto(BASE);
-    await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
-    await ensureActiveChat(page);
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
 
     await expect.poll(() => warmupRequested).toBe(true);
     expect(warmupSawListCompleted).toBe(true);
+    await expect.poll(() => page.evaluate(
+      () => (window as typeof window & { warmupWaiting?: boolean }).warmupWaiting,
+    )).toBe(true);
     await page.locator('textarea.composerTextarea').fill('send while warmup pending');
     await expect(page.locator('button[aria-label="Send message"]')).toBeEnabled();
     await page.click('button[aria-label="Send message"]');
     await expect.poll(() => sent.map((request) => request.agentId)).toEqual(['alpha']);
-    expect(warmupCompleted).toBe(false);
+    expect(await page.evaluate(() => (window as typeof window & { warmupCompleted?: boolean }).warmupCompleted)).toBe(false);
 
-    releaseWarmup();
-    await expect.poll(() => warmupCompleted).toBe(true);
-    expect(actions.filter((action) => action === 'warm-local-agents')).toHaveLength(1);
+    await page.evaluate(() => (window as typeof window & { releaseWarmup?: () => void }).releaseWarmup?.());
+    await expect.poll(() => page.evaluate(
+      () => (window as typeof window & { warmupCompleted?: boolean }).warmupCompleted,
+    )).toBe(true);
+    expect(await page.evaluate(
+      () => (window as typeof window & { warmupRequestCount?: number }).warmupRequestCount,
+    )).toBe(1);
   });
 
   test('logs local agent warmup failures returned as JSON', async ({ page }) => {

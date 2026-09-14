@@ -6,7 +6,7 @@ A standalone multi-agent chat UI for **ACP (Agent Client Protocol)** agents. Dir
 
 ## Prerequisites
 
-- **Node.js** >= 20
+- **Node.js** 24.x
 - **npm** >= 10
 - At least one ACP-compatible agent installed (GitHub Copilot CLI, Claude Code, etc.)
 
@@ -28,7 +28,9 @@ Open [https://localhost:3010](https://localhost:3010).
 
 ## Production
 
-For persistent deployment, use one of the platform-specific scripts below. Both handle build + restart + health check in one command.
+Production commands require **Node.js 24**. The guarded scripts validate the
+active Node executable, the `better-sqlite3` native addon, the project/storage
+paths, and the SQLite databases before changing the service.
 
 ### Binary release bundles
 
@@ -58,64 +60,44 @@ Copy-Item .env.example .env.local
 powershell -ExecutionPolicy Bypass -File .\scripts\start-release.ps1
 ```
 
-### Deployment (Windows Scheduled Task)
-
-For persistent deployment on a Windows machine, use `scripts\deploy.ps1` which manages a Scheduled Task that auto-starts the app on login/boot.
-
-```powershell
-# Deploy (pulls latest code, restarts the service, waits for readiness)
-.\scripts\deploy.ps1
-
-# Deploy without git pull
-.\scripts\deploy.ps1 -SkipGitPull
-
-# Deploy with AtStartup trigger (runs even without login)
-.\scripts\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
-
-# Remove the scheduled task entirely
-.\scripts\deploy.ps1 -RemoveTask
-```
-
-The deploy script:
-1. Pulls latest code from git (unless `-SkipGitPull`)
-2. Stops the existing Scheduled Task and cleans up port 3000
-3. Restarts the task so the app rebuilds and serves again
-4. Waits up to 180s for `localhost:3000` to respond
-
-Logs are written to `logs/service-watchdog.log` and `logs/start-service-child.log`.
-
 ### Deployment (Linux systemd)
 
-For persistent deployment on Ubuntu/Debian, use `scripts/deploy.sh` — it installs the systemd unit on first run and updates the deployment on subsequent runs.
+Run these commands from the project root. The checkout owner becomes the
+systemd service user even when the wrapper is invoked with `sudo`.
 
 ```bash
-# First time on a machine (installs the unit, builds, enables auto-start, starts)
+# Deploy/update: git pull, npm ci, verified backup, build, restart, health check
 sudo ./scripts/deploy.sh
 
-# Subsequent updates: git pull + npm ci + build + restart + health check
-sudo ./scripts/deploy.sh
-sudo ./scripts/deploy.sh --no-pull          # rebuild + restart without git pull
-sudo ./scripts/deploy.sh --no-install       # skip npm ci (no dep changes)
-sudo ./scripts/deploy.sh --wait 0           # don't wait for health check (default 120s)
+# Deployment options
+sudo ./scripts/deploy.sh --no-pull
+sudo ./scripts/deploy.sh --no-install
+sudo ./scripts/deploy.sh --wait 180
+
+# Restart only: require the existing build, then back up, restart, and check
+sudo ./scripts/safe-restart.sh systemd
+sudo ./scripts/safe-restart.sh systemd --wait 0  # skip readiness polling
 ```
 
-The service runs as whoever invoked the script — `sudo ./scripts/deploy.sh` means everything (git, npm, the Node process) runs as `root`. If you want a different user, run the script directly as that user (you'll still need a separate path to grant systemctl access, e.g. polkit).
-
-Manage the service:
+The wrapper installs/enables `agents-chat.service`, prevents concurrent guarded
+operations, refuses a conflicting PM2 owner, creates a verified pre-stop
+backup as the checkout/service user, and checks `GET /api/health/storage` after
+restart. Restart-only never builds and requires a non-empty `.next/BUILD_ID`;
+run `sudo ./scripts/deploy.sh` if the build is absent.
 
 ```bash
-sudo systemctl status   agents-chat
-sudo systemctl restart  agents-chat
-sudo systemctl stop     agents-chat
-sudo journalctl -u agents-chat -f          # live log stream
+sudo systemctl status agents-chat --no-pager
+sudo journalctl -u agents-chat -n 100 --no-pager
+sudo journalctl -u agents-chat -f
 ```
 
-Environment variables are loaded from two files (later wins):
+The effective systemd port defaults to `3010`. `PORT` in project
+`.env.local` overrides the default, then `/etc/agents-chat.env` overrides
+`.env.local`. The resolved port is written into the unit and used by the
+post-restart health check.
 
-1. **`.env.local`** in the project root — the same file Next.js reads. systemd loads it into the unit's environment so `npm start` sees `PORT`, `LOG_*`, etc. before Node starts.
-2. **`/etc/agents-chat.env`** (optional) — machine-level overrides that take precedence over `.env.local`.
-
-> systemd's `EnvironmentFile` parser accepts `KEY=value` or `KEY="value"` per line. It does **not** support `export KEY=...`, single quotes, or `${VAR}` interpolation. Keep `.env.local` to plain `KEY=VALUE` lines if you want the unit to read them.
+> systemd `EnvironmentFile` syntax supports `KEY=value` and double-quoted
+> values, but not shell `export` statements or `${VAR}` interpolation.
 
 ```bash
 sudo tee /etc/agents-chat.env > /dev/null <<EOF
@@ -123,8 +105,255 @@ PORT=8080
 LOG_LEVEL=debug
 LOG_DIR=/var/log/agents-chat
 EOF
-sudo systemctl restart agents-chat
+sudo ./scripts/safe-restart.sh systemd
 ```
+
+### Deployment (PM2)
+
+Run PM2 as the checkout owner, not with `sudo`. The safe wrapper supports one
+fork-mode `agents-chat` instance only. It validates the current runtime before
+changing it, applies the ecosystem file with the validated absolute Node.js 24
+executable, explicitly replaces an instance using an old runtime after the
+verified backup, performs the storage health check, and only then runs
+`pm2 save`. Restart-only requires an existing non-empty `.next/BUILD_ID`; use
+the deployment flow to create a new build.
+
+```bash
+# Deploy/update: git pull, npm ci, verified backup, build, restart, health
+./scripts/safe-restart.sh pm2 --deploy
+
+# Restart only: require the existing build, then back up, restart, and check
+./scripts/safe-restart.sh pm2
+./scripts/safe-restart.sh pm2 --wait 180
+./scripts/safe-restart.sh pm2 --wait 0
+
+pm2 status
+pm2 logs agents-chat --lines 100
+```
+
+The effective PM2 port defaults to `3010`. `PORT` in `.env.local` overrides
+the default, and `PORT` in the process environment overrides `.env.local`:
+
+```bash
+PORT=8080 ./scripts/safe-restart.sh pm2
+```
+
+The wrapper refuses cluster/multi-instance layouts, an `agents-chat` process
+from another checkout, or an active systemd service for this checkout.
+
+### Deployment (Windows Scheduled Task)
+
+Use an **elevated Windows PowerShell** session. Deployment pulls source
+(unless skipped), installs locked dependencies, creates a verified backup,
+builds, cooperatively stops the owned watchdog/process tree, installs the
+Scheduled Task, starts it, and checks storage readiness.
+
+```powershell
+# Deploy/update
+.\scripts\deploy.ps1
+.\scripts\deploy.ps1 -SkipGitPull
+.\scripts\deploy.ps1 -TaskTriggerType AtStartup -TaskLogonType S4U
+.\scripts\deploy.ps1 -NoWait
+
+# Restart only: reuse the existing build; no git pull, npm ci, or rebuild
+.\scripts\safe-restart.ps1
+.\scripts\safe-restart.ps1 -WaitSeconds 180
+.\scripts\safe-restart.ps1 -NoWait
+
+# Back up safely, stop, and unregister the task
+.\scripts\deploy.ps1 -RemoveTask
+```
+
+The default task name is `Agents-Chat-Startup`. The effective Windows port
+defaults to `3000`; `.env.local` overrides it, and the current process
+environment `PORT` overrides `.env.local`. The chosen port is stored in the
+task action and used for readiness checks. Restart-only requires an existing
+`.next\BUILD_ID`; run `.\scripts\deploy.ps1` if the build is absent.
+
+```powershell
+Get-ScheduledTask -TaskName "Agents-Chat-Startup" | Get-ScheduledTaskInfo
+Get-Content .\logs\service-watchdog.log -Tail 100
+Get-Content .\logs\start-service-child.log -Tail 100
+Get-Content .\logs\start-service-child.err.log -Tail 100
+```
+
+### Direct-manager fallback limitations
+
+Always prefer `safe-restart.sh`, `safe-restart.ps1`, or the deployment
+wrappers. Direct manager commands such as `systemctl restart`, `pm2 reload`,
+and `Start-ScheduledTask` are emergency fallbacks **without a guaranteed pre-stop backup**
+or the wrapper's manager-conflict and post-start checks.
+The managed launchers still run a non-mutating runtime/storage check, so a
+bad Node/native-addon/storage state should fail closed, but that is not a
+replacement for the verified backup flow.
+
+### Database backups
+
+Each guarded deployment/restart uses SQLite's online backup API, validates the
+copies, and publishes one batch under:
+
+```text
+.data/backups/<UTC timestamp>-<operation UUID>/
+  chats.db
+  config.db
+  manifest.json
+```
+
+Only databases that exist for this installation are included. The latest 10 complete verified batches
+are retained; incomplete `.partial` batches do not count. On Linux, backup
+directories are restricted to mode `0700` and files to `0600`.
+
+Backups can contain chats and sensitive configuration stored in SQLite. Keep
+them private. Sensitive configuration files such as `.env.local` are **not**
+included, so back those up separately with equivalent access controls. These
+local batches are not off-host disaster recovery: disk or machine loss can
+remove both live data and backups. After a batch is complete, securely copy it
+and its `manifest.json` to encrypted off-host storage.
+
+List available batches:
+
+```bash
+find .data/backups -mindepth 1 -maxdepth 1 -type d ! -name '*.partial' -print | sort
+```
+
+```powershell
+Get-ChildItem .\.data\backups -Directory |
+  Where-Object Name -NotLike '*.partial' |
+  Sort-Object Name
+```
+
+### Diagnose storage without changing it
+
+Diagnostics validate Node.js 24, the native addon, project root, registered
+databases, and SQLite integrity. They do not create a backup or restart a
+service.
+
+```bash
+npm run diagnose -- --project-root "$PWD" --manager systemd
+npm run diagnose -- --project-root "$PWD" --manager pm2
+curl -fsS http://localhost:3010/api/health/storage
+```
+
+```powershell
+node .\scripts\runtime-preflight.mjs diagnose --project-root "$PWD" --manager windows
+Invoke-RestMethod http://localhost:3000/api/health/storage
+```
+
+Use the effective port described above instead of `3010`/`3000` when
+configured. A `503` body containing `storage_unavailable` means the application
+could not initialize or query protected storage; preserve `.data`, inspect
+manager logs, and run diagnostics.
+
+### Explicit database restore
+
+Restore is intentionally not automatic. **Do not delete or recreate `.data`,
+do not copy a live `.db`, and do not restore any batch until the owning service
+is stopped and verified stopped.** Select a complete batch directly beneath
+`.data/backups`; the restore command rejects other paths, validates the batch,
+preserves pre-restore files under `.data/restore-recovery`, and requires an
+operation lease plus the explicit `--service-stopped` assertion.
+
+Linux/systemd:
+
+```bash
+sudo systemctl stop agents-chat
+sudo systemctl is-active agents-chat  # must print inactive
+NODE_BIN="$(node -p 'process.execPath')"
+sudo "$NODE_BIN" scripts/runtime-preflight.mjs acquire-lease \
+  --project-root "$PWD" --owner manual-restore --owner-pid "$$" --manager systemd
+# Copy lease.operationId from the JSON output and select a listed batch:
+OPERATION_ID='<operation-id>'
+BATCH="$PWD/.data/backups/<batch-directory>"
+sudo "$NODE_BIN" scripts/restore-databases.mjs --project-root "$PWD" \
+  --operation-id "$OPERATION_ID" --from "$BATCH" --service-stopped --manager systemd
+sudo "$NODE_BIN" scripts/runtime-preflight.mjs release-lease \
+  --project-root "$PWD" --operation-id "$OPERATION_ID"
+# The guarded systemd flow creates root-owned backups; return restored DBs to
+# the checkout owner used by the unit before starting it.
+sudo find .data -maxdepth 1 -type f -name '*.db' -exec chown --reference=. {} +
+sudo systemctl start agents-chat
+curl -fsS "http://localhost:<effective-port>/api/health/storage"
+```
+
+PM2:
+
+```bash
+pm2 stop agents-chat
+pm2 describe agents-chat  # status must be stopped
+node scripts/runtime-preflight.mjs acquire-lease \
+  --project-root "$PWD" --owner manual-restore --owner-pid "$$" --manager pm2
+OPERATION_ID='<operation-id>'
+BATCH="$PWD/.data/backups/<batch-directory>"
+node scripts/restore-databases.mjs --project-root "$PWD" \
+  --operation-id "$OPERATION_ID" --from "$BATCH" --service-stopped --manager pm2
+node scripts/runtime-preflight.mjs release-lease \
+  --project-root "$PWD" --operation-id "$OPERATION_ID"
+pm2 start agents-chat
+curl -fsS "http://localhost:<effective-port>/api/health/storage"
+```
+
+Windows Scheduled Task (elevated PowerShell):
+
+```powershell
+# This creates a verified backup, cooperatively stops owned processes, and
+# unregisters the task. It requires an existing production build.
+.\scripts\safe-restart.ps1 -RemoveTask
+Get-ScheduledTask -TaskName "Agents-Chat-Startup" -ErrorAction SilentlyContinue
+# Confirm no task is returned, then acquire the lease:
+$lease = node .\scripts\runtime-preflight.mjs acquire-lease `
+  --project-root "$PWD" --owner manual-restore --owner-pid $PID --manager windows |
+  ConvertFrom-Json
+$batch = (Resolve-Path .\.data\backups\<batch-directory>).Path
+node .\scripts\restore-databases.mjs --project-root "$PWD" `
+  --operation-id $lease.lease.operationId --from $batch --service-stopped --manager windows
+node .\scripts\runtime-preflight.mjs release-lease `
+  --project-root "$PWD" --operation-id $lease.lease.operationId
+# Reinstall/build/start the task without pulling source:
+.\scripts\deploy.ps1 -SkipGitPull
+Invoke-RestMethod "http://localhost:<effective-port>/api/health/storage"
+```
+
+Release the lease even when restore fails. Do not start the service if restore
+reports `recovery-required`; preserve `.data/restore-recovery` and investigate.
+
+### Safe restart troubleshooting
+
+For pre-stop failures, the old service normally remains running and live data
+is unchanged. After a manager/start/health failure, inspect the reported
+service state; a verified backup path is printed if one was completed.
+
+Use these exact platform commands when a table row calls for status, logs,
+diagnose, stop/start, or retry:
+
+| Action | Linux systemd | PM2 | Windows Scheduled Task (elevated) |
+|---|---|---|---|
+| Status | `sudo systemctl status agents-chat --no-pager` | `pm2 status` | `Get-ScheduledTask -TaskName "Agents-Chat-Startup" \| Get-ScheduledTaskInfo` |
+| Logs | `sudo journalctl -u agents-chat -n 100 --no-pager` | `pm2 logs agents-chat --lines 100` | `Get-Content .\logs\service-watchdog.log -Tail 100; Get-Content .\logs\start-service-child.err.log -Tail 100` |
+| Diagnose | `npm run diagnose -- --project-root "$PWD" --manager systemd` | `npm run diagnose -- --project-root "$PWD" --manager pm2` | `node .\scripts\runtime-preflight.mjs diagnose --project-root "$PWD" --manager windows` |
+| Stop/verify | `sudo systemctl stop agents-chat; sudo systemctl is-active agents-chat` (must be `inactive`) | `pm2 stop agents-chat; pm2 describe agents-chat` (must be `stopped`) | For restore, use `.\scripts\safe-restart.ps1 -RemoveTask`, then confirm `Get-ScheduledTask -TaskName "Agents-Chat-Startup" -ErrorAction SilentlyContinue` returns nothing. |
+| Start after restore | `sudo systemctl start agents-chat` | `pm2 start agents-chat` | `.\scripts\deploy.ps1 -SkipGitPull` |
+| Retry guarded operation | `sudo ./scripts/safe-restart.sh systemd` | `./scripts/safe-restart.sh pm2` | `.\scripts\safe-restart.ps1` |
+
+| Code | Cause and safety state | Exact next action |
+|---|---|---|
+| `NODE_VERSION_MISMATCH` | Command is not using Node.js 24; service/data are unchanged. | Activate Node 24, run `node --version`, `npm ci`, then retry the guarded command. |
+| `NATIVE_ADDON_INCOMPATIBLE` | `better-sqlite3` cannot load under the active Node/ABI; service/data are unchanged. | Activate Node 24, run `npm ci`, then `npm run diagnose -- --project-root "$PWD" --manager <systemd\|pm2>` (Windows: use `node .\scripts\runtime-preflight.mjs diagnose ... --manager windows`). |
+| `INVALID_PROJECT_ROOT` | The resolved directory is not a valid checkout; service/data are unchanged. | `cd` to the project root containing `package.json`, `app`, and `scripts`, then retry. |
+| `OPERATION_IN_PROGRESS` | Another guarded process owns `.agents-chat-operation.json`; nothing was restarted. | Wait; inspect the reported PID with `ps -p <PID> -o pid,etime,command` or Windows `Get-Process -Id <PID>`. Never delete a live lease. |
+| `DATABASE_MISSING` | A database recorded as expected is absent; no replacement is created. | Verify this checkout and `.data`; list verified backups; stop the owning service before using the explicit restore flow. |
+| `DATABASE_INTEGRITY_FAILED` | SQLite `quick_check` or required-schema validation failed; live files are preserved. | Do not migrate/copy files. List backups, stop and verify the service, then explicitly restore a selected verified batch. |
+| `DATABASE_BUSY` | SQLite stayed busy through bounded retries; the manager is not changed. | Wait for active work, inspect logs, then retry the same guarded command. |
+| `BACKUP_NO_SPACE` | Free space is below the database-size safety margin; no restart occurs. | Free space without deleting live databases or recovery files, then retry. |
+| `BACKUP_PERMISSION_DENIED` | `.data/backups` cannot be securely written; no restart occurs. | Linux: `namei -l .data .data/backups`; Windows: `Get-Acl .data; Get-Acl .data\backups`; correct ownership/ACLs and retry. |
+| `BACKUP_VALIDATION_FAILED` | A candidate batch, manifest, copy, or retention operation failed validation; live data is unchanged. | Preserve `.data`, inspect manager logs/disk errors, and retry; never use an incomplete or unverified batch. |
+| `DEPENDENCY_INSTALL_FAILED` | Deployment `npm ci` failed before service stop. | With Node 24 active, correct the npm error and rerun `sudo ./scripts/deploy.sh` or `.\scripts\deploy.ps1`; PM2 users run `npm ci` then the PM2 wrapper. |
+| `BUILD_FAILED` | Production build failed before service stop (Windows restart-only instead reports a missing build). | Fix build output, run `npm run build`, then retry the appropriate guarded deploy/restart command. |
+| `MANAGER_CONFLICT` | systemd and PM2, or another checkout, claims `agents-chat`; the wrapper stops neither. | Inspect `systemctl status agents-chat --no-pager; pm2 status`, identify the unintended owner, and stop only that manager. |
+| `PORT_IN_USE` | Windows found the effective port owned after the tracked task stopped; no unknown PID is killed. | Run `Get-NetTCPConnection -LocalPort <port>` then inspect its PID with `Get-CimInstance Win32_Process -Filter "ProcessId=<PID>"`; stop/reconfigure only the identified process. |
+| `SERVICE_START_FAILED` | The manager could not install/start/reload/persist the service; data is unchanged and a backup usually exists. | systemd: `sudo systemctl status agents-chat --no-pager`; PM2: `pm2 status`; Windows: inspect `Get-ScheduledTask ...`; then read manager logs and retry only after fixing the cause. |
+| `STORAGE_HEALTH_FAILED` | Restart began, but `/api/health/storage` did not become healthy; do not assume the old service is still serving. | Inspect logs, safely stop the manager if storage errors continue, run diagnose, and review—not automatically apply—the printed backup. |
+| `RESTORE_PRECONDITION_FAILED` | Restore lacked a valid batch/lease or explicit stopped-service confirmation; live data should remain unchanged unless `recovery-required` is reported. | Verify the service is stopped, reacquire a lease, validate the chosen batch, and rerun `restore-databases.mjs` with `--service-stopped`. |
+| `UNEXPECTED_ERROR` | An unclassified stage failed; rely on the printed service/data/backup state. | Inspect manager status/logs, run diagnose, preserve `.data`, and retry only after identifying the cause. |
 
 ### Logging
 
@@ -143,7 +372,14 @@ Files written under `$LOG_DIR`:
 
 - `app.<date>.<n>.log` — pino structured JSON (rotated)
 
-On Linux, stdout/stderr are also captured by journald (`journalctl -u agents-chat`).
+Manager logs:
+
+- systemd: `sudo journalctl -u agents-chat -n 100 --no-pager` or
+  `sudo journalctl -u agents-chat -f`
+- PM2: `pm2 logs agents-chat --lines 100`
+- Windows watchdog: `logs/service-watchdog.log`
+- Windows child stdout/stderr: `logs/start-service-child.log` and
+  `logs/start-service-child.err.log`
 
 ## Features
 

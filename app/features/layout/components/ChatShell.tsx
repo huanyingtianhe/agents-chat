@@ -5,6 +5,7 @@ import { useEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode 
 export type ChatShellProps = {
   sidebar: ReactNode;
   header: ReactNode;
+  storageBanner?: ReactNode | null;
   messages: ReactNode;
   composer: ReactNode;
   rightPanel: ReactNode | null;
@@ -25,6 +26,7 @@ export type ChatShellProps = {
 export function ChatShell({
   sidebar,
   header,
+  storageBanner,
   messages,
   composer,
   rightPanel,
@@ -71,6 +73,7 @@ export function ChatShell({
   return (
     <main ref={pageRef} className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
       {header}
+      {storageBanner}
       {mobilePanel !== null && (
         <div className="mobilePanelBackdrop" onClick={() => onMobilePanelChange(null)} />
       )}

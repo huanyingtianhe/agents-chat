@@ -1,108 +1,205 @@
-# Agents-Chat Windows Service Watchdog
-# Runs under Windows Service Control Manager and keeps start.ps1 alive.
+# Scheduled Task watchdog for Agents-Chat.
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$NodePath,
+    [int]$AppPort = 3000
+)
 
 $ErrorActionPreference = 'Continue'
-
 $ProjectDir = Split-Path -Parent $PSScriptRoot
 $StartScript = Join-Path $PSScriptRoot 'start.ps1'
 $LogDir = Join-Path $ProjectDir 'logs'
 $LogFile = Join-Path $LogDir 'service-watchdog.log'
-$StopFile = Join-Path $ProjectDir '.service-stop'
+$ChildLog = Join-Path $LogDir 'start-service-child.log'
+$ChildErr = Join-Path $LogDir 'start-service-child.err.log'
+$StopRequest = Join-Path $ProjectDir '.service-stop-request.json'
+$LegacyStopFile = Join-Path $ProjectDir '.service-stop'
+$WatchdogStateFile = Join-Path $ProjectDir '.service-watchdog-state.json'
+$ChildStateFile = Join-Path $ProjectDir '.service-child-state.json'
 $RestartDelaySeconds = 10
 $MaxBackoffSeconds = 120
+$GraceSeconds = 35
+$Generation = [guid]::NewGuid().ToString('D')
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Write-ServiceLog {
     param([string]$Message)
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    "[$timestamp] $Message" | Tee-Object -FilePath $LogFile -Append
+    "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" |
+        Tee-Object -FilePath $LogFile -Append
 }
 
-function Stop-Port3000Processes {
-    try {
-        $oldPids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique |
-            Where-Object { $_ -and $_ -ne 0 }
-        foreach ($p in $oldPids) {
-            Write-ServiceLog "Stopping leftover process on port 3000: PID $p"
-            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+function Write-JsonFile {
+    param([string]$Path, $Value)
+    $temporary = "$Path.$PID.new"
+    [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Compress))
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+
+function Read-JsonFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try { return (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json } catch { return $null }
+}
+
+function Test-StopRequested {
+    $request = Read-JsonFile -Path $StopRequest
+    return (
+        $request -and [string]$request.Generation -eq $Generation -and
+        [int]$request.WatchdogPid -eq $PID
+    )
+}
+
+function Clear-MatchingStopRequest {
+    $request = Read-JsonFile -Path $StopRequest
+    if ($request -and [string]$request.Generation -eq $Generation -and
+        [int]$request.WatchdogPid -eq $PID) {
+        Remove-Item -LiteralPath $StopRequest -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Clear-OwnedStateFile {
+    param([string]$Path)
+    $state = Read-JsonFile -Path $Path
+    if ($state -and [string]$state.Generation -eq $Generation) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-ForStopRequest {
+    param([int]$Seconds)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-StopRequested) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return (Test-StopRequested)
+}
+
+function Get-OwnedProcessSnapshots {
+    param([int]$RootPid)
+    $result = @()
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$RootPid" -ErrorAction SilentlyContinue)) {
+        $result += @(Get-OwnedProcessSnapshots -RootPid ([int]$child.ProcessId))
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$RootPid" -ErrorAction SilentlyContinue
+    if ($process) {
+        $result += [pscustomobject]@{
+            Pid = [int]$process.ProcessId
+            CreationDate = [string]$process.CreationDate
         }
-    } catch {
-        Write-ServiceLog "Failed to inspect/stop port 3000 processes: $($_.Exception.Message)"
     }
+    return $result
 }
 
-function Stop-ProcessTree {
-    param([int]$Pid)
-    if (-not $Pid) { return }
-    try {
-        $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$Pid" -ErrorAction SilentlyContinue
-        foreach ($child in $children) { Stop-ProcessTree -Pid ([int]$child.ProcessId) }
-        Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
-    } catch {
-        Write-ServiceLog "Failed to stop process tree at PID $Pid`: $($_.Exception.Message)"
-    }
+function Test-ProcessSnapshot {
+    param($Snapshot)
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$Snapshot.Pid)" -ErrorAction SilentlyContinue
+    return ($process -and ([string]$process.CreationDate -eq [string]$Snapshot.CreationDate))
 }
 
-Write-ServiceLog 'Agents-Chat service watchdog starting...'
-Write-ServiceLog "User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
-Write-ServiceLog "ProjectDir: $ProjectDir"
-
-$env:PATH = "C:\Program Files\nodejs;C:\Users\wulei\AppData\Local\Microsoft\WinGet\Links;$env:PATH"
-$env:AGENTS_CHAT_SERVICE = '1'
-
-$restartDelay = $RestartDelaySeconds
-while (-not (Test-Path $StopFile)) {
-    if (-not (Test-Path $ProjectDir)) {
-        Write-ServiceLog "Project directory missing: $ProjectDir. Retrying in $restartDelay seconds."
-        Start-Sleep -Seconds $restartDelay
-        $restartDelay = [Math]::Min($restartDelay * 2, $MaxBackoffSeconds)
-        continue
+function Wait-ForOwnedProcesses {
+    param([object[]]$Snapshots, [datetime]$Deadline)
+    $remaining = @($Snapshots)
+    while ((Get-Date) -lt $Deadline) {
+        $remaining = @($remaining | Where-Object { Test-ProcessSnapshot -Snapshot $_ })
+        if ($remaining.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
     }
-    if (-not (Test-Path $StartScript)) {
-        Write-ServiceLog "start.ps1 missing: $StartScript. Retrying in $restartDelay seconds."
-        Start-Sleep -Seconds $restartDelay
-        $restartDelay = [Math]::Min($restartDelay * 2, $MaxBackoffSeconds)
-        continue
-    }
+    return @($remaining | Where-Object { Test-ProcessSnapshot -Snapshot $_ })
+}
 
-    Stop-Port3000Processes
-    Set-Location $ProjectDir
-    Write-ServiceLog 'Launching start.ps1...'
+function Complete-CooperativeChildStop {
+    param([int]$RootPid)
+    $ownedProcesses = @(Get-OwnedProcessSnapshots -RootPid $RootPid)
+    Write-ServiceLog "Waiting for start.ps1 PID $RootPid and its captured descendants to stop cooperatively."
+    $remaining = @(Wait-ForOwnedProcesses -Snapshots $ownedProcesses -Deadline (Get-Date).AddSeconds($GraceSeconds))
+    if ($remaining.Count -eq 0) { return }
 
-    $childLog = Join-Path $LogDir 'start-service-child.log'
-    $childErr = Join-Path $LogDir 'start-service-child.err.log'
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $StartScript)
-    $proc = Start-Process -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
-        -ArgumentList $args `
-        -WorkingDirectory $ProjectDir `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $childLog `
-        -RedirectStandardError $childErr `
-        -PassThru
-
-    Write-ServiceLog "start.ps1 process launched. PID=$($proc.Id)"
-
-    while (-not $proc.HasExited) {
-        if (Test-Path $StopFile) {
-            Write-ServiceLog 'Stop file detected; stopping child process tree.'
-            Stop-ProcessTree -Pid $proc.Id
-            break
+    Write-ServiceLog "Grace period expired; forcing only remaining owned processes from generation $Generation."
+    foreach ($snapshot in $remaining) {
+        if (Test-ProcessSnapshot -Snapshot $snapshot) {
+            Stop-Process -Id ([int]$snapshot.Pid) -Force -ErrorAction SilentlyContinue
         }
-        Start-Sleep -Seconds 5
-        try { $proc.Refresh() } catch { break }
     }
-
-    $exitCode = $null
-    try { $exitCode = $proc.ExitCode } catch { }
-    Write-ServiceLog "start.ps1 process exited. ExitCode=$exitCode"
-
-    if (Test-Path $StopFile) { break }
-
-    Write-ServiceLog "Watchdog restarting in $restartDelay seconds..."
-    Start-Sleep -Seconds $restartDelay
-    $restartDelay = [Math]::Min($restartDelay * 2, $MaxBackoffSeconds)
+    $remaining = @(Wait-ForOwnedProcesses -Snapshots $remaining -Deadline (Get-Date).AddSeconds(5))
+    if ($remaining.Count -gt 0) {
+        Write-ServiceLog "Owned processes still running after forced shutdown: $((@($remaining | ForEach-Object { $_.Pid })) -join ', ')"
+    }
 }
 
-Write-ServiceLog 'Agents-Chat service watchdog exiting.'
+try {
+    Remove-Item -LiteralPath $LegacyStopFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $StopRequest -Force -ErrorAction SilentlyContinue
+    $watchdogProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+    Write-JsonFile -Path $WatchdogStateFile -Value ([ordered]@{
+        Generation = $Generation
+        Pid = $PID
+        CreationDate = [string]$watchdogProcess.CreationDate
+        StartedAt = (Get-Date).ToUniversalTime().ToString('o')
+    })
+    $env:PATH = "$(Split-Path -Parent $NodePath);$env:PATH"
+    $env:AGENTS_CHAT_SERVICE = '1'
+    Write-ServiceLog "Watchdog starting. Generation=$Generation PID=$PID NodePath=$NodePath AppPort=$AppPort ProjectDir=$ProjectDir"
+
+    $restartDelay = $RestartDelaySeconds
+    while (-not (Test-StopRequested)) {
+        if (-not (Test-Path -LiteralPath $StartScript -PathType Leaf)) {
+            Write-ServiceLog "Missing start script: $StartScript. Retrying in $restartDelay seconds."
+            if (Wait-ForStopRequest -Seconds $restartDelay) { break }
+            $restartDelay = [Math]::Min($restartDelay * 2, $MaxBackoffSeconds)
+            continue
+        }
+
+        $escapedStart = $StartScript.Replace('"', '""')
+        $escapedNode = $NodePath.Replace('"', '""')
+        $escapedStopRequest = $StopRequest.Replace('"', '""')
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$escapedStart`" -NodePath `"$escapedNode`" -AppPort $AppPort -Generation `"$Generation`" -WatchdogPid $PID -StopRequestPath `"$escapedStopRequest`""
+        $proc = Start-Process `
+            -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+            -ArgumentList $arguments `
+            -WorkingDirectory $ProjectDir `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $ChildLog `
+            -RedirectStandardError $ChildErr `
+            -PassThru
+        $childProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
+        $childCreationDate = ''
+        if ($childProcess) { $childCreationDate = [string]$childProcess.CreationDate }
+        Write-JsonFile -Path $ChildStateFile -Value ([ordered]@{
+            Generation = $Generation
+            Pid = $proc.Id
+            CreationDate = $childCreationDate
+            StartedAt = (Get-Date).ToUniversalTime().ToString('o')
+        })
+        Write-ServiceLog "start.ps1 launched. Generation=$Generation PID=$($proc.Id)"
+
+        while (-not $proc.HasExited) {
+            if (Test-StopRequested) {
+                Complete-CooperativeChildStop -RootPid $proc.Id
+                break
+            }
+            Start-Sleep -Milliseconds 500
+            try { $proc.Refresh() } catch { break }
+        }
+
+        $exitCode = $null
+        try { $exitCode = $proc.ExitCode } catch {}
+        Clear-OwnedStateFile -Path $ChildStateFile
+        Write-ServiceLog "start.ps1 exited. ExitCode=$exitCode"
+        if (Test-StopRequested) { break }
+
+        Write-ServiceLog "Restarting in $restartDelay seconds."
+        if (Wait-ForStopRequest -Seconds $restartDelay) { break }
+        $restartDelay = [Math]::Min($restartDelay * 2, $MaxBackoffSeconds)
+    }
+} catch {
+    Write-ServiceLog "Watchdog failure: $($_.Exception.Message)"
+    exit 1
+} finally {
+    Clear-OwnedStateFile -Path $ChildStateFile
+    Clear-OwnedStateFile -Path $WatchdogStateFile
+    Clear-MatchingStopRequest
+    Write-ServiceLog "Watchdog exiting. Generation=$Generation"
+}

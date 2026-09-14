@@ -2,11 +2,18 @@
   "name": "agents-chat",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "next dev --port 3010 --experimental-https",
-    "build": "next build",
-    "start": "next start --port 3010",
-    "start:prod": "next build && next start --port 3010"
+    "build": "node scripts/build-production.mjs",
+    "start": "node scripts/start-server.mjs",
+    "start:prod": "npm run build && npm start",
+    "test:build-leaks": "node --test tests/build-output-leak.test.mjs",
+    "test:safety": "node --test tests/runtime-safety.test.mjs tests/database-backup.test.mjs tests/managed-start.test.mjs",
+    "diagnose": "node scripts/runtime-preflight.mjs diagnose"
   },
   "dependencies": {
     "@types/turndown": "^5.0.6",
@@ -35,6 +42,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/react": "19.0.10",
     "@types/react-dom": "19.0.4",
+    "tsx": "^4.23.13",
     "typescript": "5.8.3"
   }
 }

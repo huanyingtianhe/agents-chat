@@ -1,51 +1,170 @@
-# Pack ACP Chat for transfer to another device
-# Usage: .\pack.ps1              → creates acp-chat.zip
-#        .\pack.ps1 -NoHistory   → excludes chat history (.data/)
+# Pack Agents Chat for transfer to another device.
+# Usage: .\scripts\pack.ps1
+#        .\scripts\pack.ps1 -NoHistory
 param([switch]$NoHistory)
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 $ProjectDir = Split-Path -Parent $PSScriptRoot
-$ZipName = "acp-chat.zip"
-$ZipPath = Join-Path $ProjectDir $ZipName
-$TempDir = Join-Path $env:TEMP "acp-chat-pack-$PID"
+$ZipPath = Join-Path $ProjectDir 'acp-chat.zip'
+$StagingDir = Join-Path $ProjectDir ".pack-staging-$PID"
+$OperationId = $null
+$PrimaryError = $null
+$LeaseReleaseError = $null
+$CleanupError = $null
 
-if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
-if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force }
+function Invoke-NodeJson {
+    param([string[]]$Arguments)
 
-Write-Host "Packing ACP Chat..." -ForegroundColor Cyan
+    $output = & node @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Node command failed: node $($Arguments -join ' ')"
+    }
+    return ($output | Out-String | ConvertFrom-Json)
+}
 
-# Files/folders to include
-$items = @(
-    "app", "lib", "public",
-    "agents.json", ".env.local",
-    "package.json", "package-lock.json",
-    "tsconfig.json", "next.config.ts", "next-env.d.ts",
-    "middleware.ts", "scripts",
-    "globals.css"
-)
-if (-not $NoHistory) { $items += ".data\chats.db" }
+function Protect-PathAcl {
+    param(
+        [string]$Path,
+        [switch]$Container
+    )
 
-# Copy to temp staging dir
-New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-foreach ($item in $items) {
-    $src = Join-Path $ProjectDir $item
-    if (-not (Test-Path $src)) { continue }
-    $dst = Join-Path $TempDir $item
-    if (Test-Path $src -PathType Container) {
-        Copy-Item $src $dst -Recurse
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = if ($Container) {
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     } else {
-        Copy-Item $src $dst
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $identity,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $acl.SetAccessRule($rule)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+if (Test-Path -LiteralPath $ZipPath) {
+    Remove-Item -LiteralPath $ZipPath -Force
+}
+if (Test-Path -LiteralPath $StagingDir) {
+    Remove-Item -LiteralPath $StagingDir -Recurse -Force
+}
+
+Write-Host 'Packing Agents Chat...' -ForegroundColor Cyan
+
+try {
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    Protect-PathAcl -Path $StagingDir -Container
+
+    $items = @(
+        'app', 'lib', 'public',
+        'agents.json', '.env.local',
+        'package.json', 'package-lock.json',
+        'tsconfig.json', 'next.config.ts', 'next-env.d.ts',
+        'middleware.ts', 'scripts',
+        'globals.css'
+    )
+    foreach ($item in $items) {
+        $source = Join-Path $ProjectDir $item
+        if (-not (Test-Path -LiteralPath $source)) {
+            continue
+        }
+        $destination = Join-Path $StagingDir $item
+        if (Test-Path -LiteralPath $source -PathType Container) {
+            Copy-Item -LiteralPath $source -Destination $destination -Recurse
+        } else {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath $source -Destination $destination
+        }
+    }
+
+    if (-not $NoHistory) {
+        $acquired = Invoke-NodeJson -Arguments @(
+            (Join-Path $PSScriptRoot 'runtime-preflight.mjs'),
+            'acquire-lease',
+            '--project-root', $ProjectDir,
+            '--owner', 'pack',
+            '--owner-pid', "$PID"
+        )
+        $OperationId = $acquired.lease.operationId
+
+        $prepared = Invoke-NodeJson -Arguments @(
+            (Join-Path $PSScriptRoot 'runtime-preflight.mjs'),
+            'prepare',
+            '--project-root', $ProjectDir,
+            '--operation-id', $OperationId
+        )
+        $backup = $prepared.backup
+        $dataDestination = Join-Path $StagingDir '.data'
+        New-Item -ItemType Directory -Path $dataDestination -Force | Out-Null
+        Protect-PathAcl -Path $dataDestination -Container
+
+        foreach ($database in @('chats.db', 'config.db')) {
+            $snapshotPath = $backup.paths.PSObject.Properties[$database].Value
+            if ([string]::IsNullOrWhiteSpace($snapshotPath) -or
+                -not (Test-Path -LiteralPath $snapshotPath -PathType Leaf)) {
+                throw "Verified snapshot does not contain required database: $database"
+            }
+            Copy-Item `
+                -LiteralPath $snapshotPath `
+                -Destination (Join-Path $dataDestination $database)
+        }
+    }
+
+    Compress-Archive -Path (Join-Path $StagingDir '*') -DestinationPath $ZipPath -Force
+    Protect-PathAcl -Path $ZipPath
+} catch {
+    $PrimaryError = $_
+} finally {
+    if ($OperationId) {
+        try {
+            & node `
+                (Join-Path $PSScriptRoot 'release-operation-lease.mjs') `
+                --project-root $ProjectDir `
+                --operation-id $OperationId
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to release packaging lease $OperationId"
+            }
+        } catch {
+            $LeaseReleaseError = $_
+        }
+    }
+    try {
+        if (Test-Path -LiteralPath $StagingDir) {
+            Remove-Item -LiteralPath $StagingDir -Recurse -Force
+        }
+    } catch {
+        $CleanupError = $_
     }
 }
 
-# Create zip
-Compress-Archive -Path "$TempDir\*" -DestinationPath $ZipPath -Force
-Remove-Item $TempDir -Recurse -Force
+if ($PrimaryError) {
+    if ($LeaseReleaseError) {
+        Write-Warning "Packaging also failed to release lease $OperationId`: $($LeaseReleaseError.Exception.Message)"
+    }
+    if ($CleanupError) {
+        Write-Warning "Packaging also failed to clean staging: $($CleanupError.Exception.Message)"
+    }
+    throw $PrimaryError
+}
+if ($LeaseReleaseError) {
+    if ($CleanupError) {
+        Write-Warning "Packaging also failed to clean staging: $($CleanupError.Exception.Message)"
+    }
+    throw $LeaseReleaseError
+}
+if ($CleanupError) {
+    throw $CleanupError
+}
 
-$size = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
+$size = [math]::Round((Get-Item -LiteralPath $ZipPath).Length / 1MB, 1)
 Write-Host "Created: $ZipPath ($size MB)" -ForegroundColor Green
-Write-Host ""
-Write-Host "Transfer this zip to the new device, then run:" -ForegroundColor Yellow
-Write-Host "  Expand-Archive acp-chat.zip -DestinationPath agents-chat" -ForegroundColor White
-Write-Host "  cd agents-chat" -ForegroundColor White
-Write-Host "  .\scripts\setup.ps1" -ForegroundColor White
+Write-Host ''
+Write-Host 'Transfer this zip to the new device, then run:' -ForegroundColor Yellow
+Write-Host '  Expand-Archive acp-chat.zip -DestinationPath agents-chat' -ForegroundColor White
+Write-Host '  cd agents-chat' -ForegroundColor White
+Write-Host '  .\scripts\setup.ps1' -ForegroundColor White

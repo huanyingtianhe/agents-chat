@@ -18,17 +18,34 @@ async function login(page: Page) {
   const usernameInput = page.locator('input[placeholder="Admin username"]');
   const passwordInput = page.locator('input[placeholder="Password"]');
   const submitButton = page.locator('button[type="submit"]');
-  await expect(async () => {
-    await usernameInput.fill(ADMIN_USER);
-    await passwordInput.fill(ADMIN_PASS);
-    await expect(submitButton).toBeEnabled({ timeout: 1000 });
-  }).toPass({ timeout: 10000 });
+  await expect(page.locator('form')).toHaveAttribute('data-hydrated', 'true');
+  await usernameInput.fill(ADMIN_USER);
+  await passwordInput.fill(ADMIN_PASS);
+  await expect(submitButton).toBeEnabled();
   await submitButton.click();
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   const isEmpty = await page.locator('.emptyHomepage').isVisible({ timeout: 2000 }).catch(() => false);
   if (isEmpty) {
-    await page.click('button.newChatButton, button.emptyHomepageNewChat');
-    await page.waitForSelector('.chatContainer', { timeout: 10000 });
+    const chat = {
+      id: `file-comments-test-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      name: 'New Chat',
+      ts: Date.now(),
+      messages: [],
+      agentSessions: {},
+    };
+    const request = page.context().request;
+    await expect(async () => {
+      const createResponse = await request.post(`${BASE}/api/chats`, { data: { chat } });
+      expect(createResponse.ok()).toBeTruthy();
+    }).toPass();
+    await expect(async () => {
+      const selectResponse = await request.post(`${BASE}/api/chats`, {
+        data: { action: 'set-last-chat', chatId: chat.id },
+      });
+      expect(selectResponse.ok()).toBeTruthy();
+    }).toPass();
+    await page.reload();
+    await page.waitForSelector('.chatContainer', { timeout: 30000 });
   }
   await page.waitForTimeout(500);
 }

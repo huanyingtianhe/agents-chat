@@ -28,8 +28,11 @@ function parseRetention(value: string | undefined, fallback: number): number {
 }
 
 function buildLogger(): Logger {
-  // Edge runtime cannot use Node transports — fall back to stdout JSON only.
-  if (process.env.NEXT_RUNTIME && process.env.NEXT_RUNTIME !== "nodejs") {
+  // Edge and portable standalone releases cannot safely resolve worker transports.
+  if (
+    process.env.AGENTS_CHAT_STDOUT_LOGGING === "1"
+    || (process.env.NEXT_RUNTIME && process.env.NEXT_RUNTIME !== "nodejs")
+  ) {
     return pino({ level: process.env.LOG_LEVEL || "info" });
   }
 

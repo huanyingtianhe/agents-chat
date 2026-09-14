@@ -1,0 +1,18 @@
+{
+  "databases": [
+    {
+      "file": "chats.db",
+      "requiredTables": {
+        "chats": ["user_id", "chat_id", "messages", "agent_sessions", "git_context"],
+        "user_prefs": ["user_id", "last_chat_id"]
+      }
+    },
+    {
+      "file": "config.db",
+      "requiredTables": {
+        "agents": ["id", "name", "command", "args", "cwd", "models", "owner"],
+        "nodes": ["name", "label", "owner"]
+      }
+    }
+  ]
+}

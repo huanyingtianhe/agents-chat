@@ -10,12 +10,12 @@ function includesAll(...needles) {
 }
 
 assert(
-  includesAll('Health check failed', 'Invoke-WebRequest', '$healthCheckUrl = "http://localhost:$AppPort/api/auth/providers"'),
-  'start.ps1 should continuously health-check the /api/auth/providers endpoint and fail when it is unhealthy'
+  includesAll('Health check failed', 'Invoke-WebRequest', '$healthCheckUrl = "http://localhost:$AppPort/api/health/storage"'),
+  'start.ps1 should continuously health-check the storage-aware endpoint and fail when it is unhealthy'
 );
 
 assert(
-  includesAll('Waiting for server to become ready', 'startupReady', 'did not become ready within 60 seconds'),
+  includesAll('Waiting for server to become ready', 'startupReady', '$startupDeadline'),
   'start.ps1 should verify the health check URL responds before entering the monitoring loop'
 );
 
@@ -25,23 +25,33 @@ assert(
 );
 
 assert(
-  includesAll('$tunnelHealthCheckUrl', '$tunnelHealthFailures', '$DevTunnelUrl', 'Tunnel health check failed'),
+  includesAll('$tunnelHealthCheckUrl', '$tunnelHealthFailures', 'DEV_TUNNEL_URL', 'Tunnel health check failed'),
   'start.ps1 should probe the public dev tunnel URL and fail when the tunnel is unreachable even if the process is still running'
 );
 
 assert(
-  includesAll('-ge 200 -and $tunnelResponse.StatusCode -lt 400', '-ge 200 -and $statusCode -lt 400'),
+  includesAll('-ge 200 -and $response.StatusCode -lt 400', '-MaximumRedirection 5'),
   'start.ps1 should treat HTTP 4xx and 5xx tunnel health responses as failures'
 );
 
 assert(
-  includesAll('$AppPort = 3000', 'next start --port $AppPort'),
-  'start.ps1 should start Next.js on the same port it health-checks and exposes through the dev tunnel'
+  includesAll('[string]$NodePath', 'runtime-preflight.mjs', 'check-only', 'start-server.mjs', '--port', '$AppPort'),
+  'start.ps1 should validate and launch with the same explicit Node.js executable and port'
 );
 
 assert(
-  /exit\s+1/i.test(script),
-  'start.ps1 should exit non-zero when the supervised server/tunnel becomes unhealthy so service-watchdog.ps1 restarts it'
+  !/npm\s+run\s+build/i.test(script) && !/Remove-Item\s+-Recurse\s+-Force\s+\.next/i.test(script),
+  'start.ps1 should serve an existing production build instead of rebuilding on every watchdog retry'
+);
+
+assert(
+  includesAll('.next', 'BUILD_ID', 'deploy.ps1'),
+  'start.ps1 should direct operators to deploy.ps1 when the production build is absent'
+);
+
+assert(
+  !script.includes('Get-NetTCPConnection'),
+  'start.ps1 should never kill or otherwise mutate an arbitrary process merely because it owns the app port'
 );
 
 console.log('start.ps1 health supervision checks passed');

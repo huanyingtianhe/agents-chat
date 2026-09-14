@@ -1,7 +1,7 @@
 'use client';
 
 import { signIn } from 'next-auth/react';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 function LoginContent() {
@@ -11,6 +11,11 @@ function LoginContent() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   async function handleAdminLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -75,7 +80,7 @@ function LoginContent() {
         </div>
 
         {/* Admin login */}
-        <form onSubmit={(e) => void handleAdminLogin(e)} style={styles.form}>
+        <form data-hydrated={hydrated} onSubmit={(e) => void handleAdminLogin(e)} style={styles.form}>
           <input
             type="text"
             placeholder="Admin username"

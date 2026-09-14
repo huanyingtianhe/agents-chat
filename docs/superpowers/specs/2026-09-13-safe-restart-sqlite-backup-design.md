@@ -254,10 +254,21 @@ The wrapper:
 2. Requires one fork-mode `agents-chat` instance.
 3. Runs preflight and backup before stopping the process.
 4. Starts or reloads from `ecosystem.config.js`, explicitly using the validated
-   Node 24 executable and a managed JavaScript server launcher instead of
-   relying on the `npm` shebang and mutable `PATH`.
+   Node 24 executable and a PM2-specific entry point for the managed JavaScript
+   server launcher instead of relying on the `npm` shebang and mutable `PATH`.
 5. Updates environment values, checks actual PM2 interpreter/runtime metadata,
    verifies storage health, and runs `pm2 save`.
+
+PM2 fork mode loads application modules through its process container rather
+than executing them as the direct `process.argv[1]` entry point. The PM2
+configuration must therefore use a thin internal entry point that explicitly
+invokes the managed launcher. Without it, PM2 can report its container as
+`online` while no Next.js child process exists and the health-check port
+refuses connections.
+
+The PM2-specific entry point is an internal adapter, not a new operator
+command. Operators continue to use `./scripts/safe-restart.sh pm2` for routine
+restarts and `./scripts/safe-restart.sh pm2 --deploy` for deployment.
 
 The managed server launcher runs check-only before loading Next.js, so neither
 `pm2 restart agents-chat --update-env` nor manual `npm start` can bypass the
@@ -327,14 +338,19 @@ schedulers, and port ownership even though SQLite itself serializes writes.
 
 ## Managed Server Launcher
 
-Add one small JavaScript launcher used by `npm start`, PM2, systemd, and the
-Windows scripts. It runs check-only under the exact Node process that will host
-the app and only then loads the local Next.js server entry. This closes the gap
+Add one small JavaScript launcher used by `npm start`, systemd, and the Windows
+scripts. It runs check-only under the exact Node process that will host the app
+and only then loads the local Next.js server entry. PM2 uses a thin dedicated
+module that explicitly invokes this launcher because PM2 imports the configured
+script through its fork container. This closes both the runtime-selection gap
 where a shell precheck succeeds under one `node` executable but a manager
-starts the app under another.
+starts the app under another and the PM2 entry-point gap where an imported
+module's direct-execution guard prevents the server from starting.
 
 The launcher forwards termination signals and preserves the server exit code.
-Release launchers perform the equivalent check against the standalone bundle.
+The PM2 adapter uses the launcher's existing structured error handling and is
+not user-facing. Release launchers perform the equivalent check against the
+standalone bundle.
 
 ## Storage-aware Health
 
@@ -522,6 +538,8 @@ Extend existing lightweight script tests to verify:
 - Linux deploy runs backup before build and restart.
 - systemd uses the validated runtime and `ExecStartPre`.
 - PM2 avoids an indirect npm interpreter and persists updated configuration.
+- PM2's configured entry point explicitly starts the managed launcher when
+  loaded through the PM2 fork container.
 - Windows deploy uses `npm ci`, backs up before stopping, and does not kill an
   unrelated port owner.
 - Windows `start.ps1` runs check-only before Next.js.

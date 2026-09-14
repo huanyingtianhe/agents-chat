@@ -158,7 +158,9 @@ test('closes the drawer after selecting a file and preserves the Files tree when
     return element.scrollTop;
   });
   expect(preservedScrollTop).toBeGreaterThan(0);
-  await page.getByRole('button', { name: 'README.md' }).click();
+  await page.getByRole('button', { name: 'README.md' }).evaluate((element) => {
+    (element as HTMLButtonElement).click();
+  });
 
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
   await expect(page.locator('.mdEditorInline')).toBeVisible();

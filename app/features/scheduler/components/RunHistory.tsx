@@ -10,7 +10,7 @@ export interface RunHistoryProps {
 }
 
 export function RunHistory({ jobId, onClose }: RunHistoryProps) {
-  const { loadDetail, runNow } = useSchedules();
+  const { loadDetail, runNow } = useSchedules(false);
 
   const [job, setJob] = useState<CronJob | null>(null);
   const [runs, setRuns] = useState<CronRun[]>([]);
@@ -53,7 +53,7 @@ export function RunHistory({ jobId, onClose }: RunHistoryProps) {
   if (loading) {
     return (
       <div className="modalOverlay">
-        <div className="modal agentSettingsModal">
+        <div className="modal agentSettingsModal" role="dialog" aria-modal="true" aria-label={`${jobId} runs`}>
           <div style={{ textAlign: 'center', padding: '20px', color: '#8a90a2' }}>Loading...</div>
         </div>
       </div>
@@ -77,7 +77,7 @@ export function RunHistory({ jobId, onClose }: RunHistoryProps) {
 
   return (
     <div className="modalOverlay">
-      <div className="modal agentSettingsModal">
+      <div className="modal agentSettingsModal" role="dialog" aria-modal="true" aria-label={`${job?.name || jobId} runs`}>
         <h2>📜 {job?.name || jobId} — Runs</h2>
 
         {error && (

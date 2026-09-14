@@ -215,7 +215,12 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
   if (loading) {
     return (
       <div className="modalOverlay">
-        <div className="modal agentSettingsModal">
+        <div
+          className="modal agentSettingsModal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={jobId === 'new' ? 'Create schedule' : 'Edit schedule'}
+        >
           <div style={{ textAlign: 'center', padding: '20px', color: '#8a90a2' }}>Loading...</div>
         </div>
       </div>
@@ -224,7 +229,12 @@ export function ScheduleEditor({ jobId, agents, onClose, onSaved }: ScheduleEdit
 
   return (
     <div className="modalOverlay">
-      <div className="modal agentSettingsModal">
+      <div
+        className="modal agentSettingsModal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={jobId === 'new' ? 'Create schedule' : `Edit ${name || 'schedule'}`}
+      >
         <h2>{jobId === 'new' ? '⏱️ Create Schedule' : '⏱️ Edit Schedule'}</h2>
 
         {error && (

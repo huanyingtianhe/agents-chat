@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { CronJob, ScheduleSpec } from '../scheduleTypes';
+import { useSchedules } from '../hooks/useSchedules';
 import { ScheduleEditor } from './ScheduleEditor';
 import { RunHistory } from './RunHistory';
 
@@ -10,6 +11,7 @@ export interface SchedulesPanelProps {
   isOpen: boolean;
   onClose: () => void;
   mobileModal?: boolean;
+  mobileRestricted?: boolean;
 }
 
 function summarizeSpec(spec: ScheduleSpec): string {
@@ -33,67 +35,76 @@ function summarizeSpec(spec: ScheduleSpec): string {
   }
 }
 
-export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false }: SchedulesPanelProps) {
-  const [jobs, setJobs] = useState<CronJob[]>([]);
+export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false, mobileRestricted = false }: SchedulesPanelProps) {
+  const { jobs, loading, error, refresh, update } = useSchedules(isOpen);
   const [editingJobId, setEditingJobId] = useState<string | null | 'new'>(null);
   const [viewingRunsJobId, setViewingRunsJobId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const updateInFlightRef = useRef(false);
 
-  // Load jobs on mount or when panel opens
-  useEffect(() => {
-    if (!isOpen) return;
-    const loadJobs = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch('/api/schedules');
-        if (res.ok) {
-          const data = await res.json();
-          setJobs(data.jobs ?? []);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadJobs();
-  }, [isOpen]);
-
-  const handleSaved = () => {
+  const handleSaved = async () => {
     setEditingJobId(null);
-    // Refresh jobs list
-    const loadJobs = async () => {
-      try {
-        const res = await fetch('/api/schedules');
-        if (res.ok) {
-          const data = await res.json();
-          setJobs(data.jobs ?? []);
-        }
-      } catch (e) {
-        // ignore
-      }
-    };
-    loadJobs();
+    await refresh();
   };
+
+  async function toggleEnabled(job: CronJob) {
+    if (updateInFlightRef.current) return;
+    updateInFlightRef.current = true;
+    setUpdatingJobId(job.id);
+    setActionError(null);
+    try {
+      await update(job.id, { enabled: !job.enabled });
+    } catch (toggleError) {
+      setActionError(toggleError instanceof Error ? toggleError.message : String(toggleError));
+    } finally {
+      updateInFlightRef.current = false;
+      setUpdatingJobId(null);
+    }
+  }
+
+  async function retry() {
+    setActionError(null);
+    await refresh();
+  }
 
   if (!isOpen) return null;
 
   return (
     <>
-      <aside className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="schedules" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Schedules' : undefined}>
+      <aside
+        className={`agentsSidebar ${isOpen ? 'mobilePanelVisible' : ''}`}
+        data-mobile-overlay-surface="schedules"
+        tabIndex={-1}
+        role={mobileModal ? 'dialog' : undefined}
+        aria-modal={mobileModal || undefined}
+        aria-label={mobileModal ? 'Schedules' : undefined}
+        aria-hidden={viewingRunsJobId !== null || editingJobId !== null || undefined}
+        inert={viewingRunsJobId !== null || editingJobId !== null || undefined}
+      >
         <div className="agentsSidebarHeader">
           <span>Schedules</span>
           <div style={{ display: 'flex', gap: '4px' }}>
-            <button
-              className="sidebarToggle"
-              onClick={() => setEditingJobId('new')}
-              title="Create schedule"
-            >
-              +
-            </button>
+            {!mobileRestricted && (
+              <button
+                className="sidebarToggle"
+                onClick={() => setEditingJobId('new')}
+                title="Create schedule"
+              >
+                +
+              </button>
+            )}
             <button className="sidebarToggle" onClick={onClose} aria-label="Close schedules" data-mobile-overlay-initial-focus>
               →
             </button>
           </div>
         </div>
+        {error || actionError ? (
+          <div className="panelError" role="alert">
+            <span>{actionError || error}</span>
+            <button type="button" onClick={() => void retry()}>Retry</button>
+          </div>
+        ) : null}
         <div className="agentsSidebarSection">
           {jobs.map((job) => (
             <div
@@ -104,15 +115,32 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false }:
               <button
                 type="button"
                 className="scheduleListMain"
-                onClick={() => setEditingJobId(job.id)}
-                title={`${job.name} — Click to edit`}
-                style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 0, color: 'inherit', font: 'inherit', textAlign: 'left', padding: '9px 10px', cursor: 'pointer', borderRadius: 12 }}
+                onClick={() => {
+                  if (!mobileRestricted) setEditingJobId(job.id);
+                }}
+                disabled={mobileRestricted}
+                title={mobileRestricted ? undefined : `${job.name} — Click to edit`}
               >
                 <span className="agentListAvatar">{(job.name || job.id).slice(0, 1).toUpperCase()}</span>
                 <span className="agentListInfo">
                   <span className="agentListName">{job.name}</span>
                   <span className="agentListId">{summarizeSpec(job.scheduleSpec)}</span>
+                  <span className="scheduleStatusText">{job.enabled ? 'Enabled' : 'Disabled'}</span>
+                  <span className="scheduleLastRun">
+                    {job.lastRunAt ? `Last run: ${new Date(job.lastRunAt).toLocaleString()}` : 'Never run'}
+                  </span>
                 </span>
+              </button>
+              <button
+                type="button"
+                className={`scheduleSwitch ${job.enabled ? 'enabled' : ''}`}
+                role="switch"
+                aria-checked={job.enabled}
+                aria-label={`${job.enabled ? 'Disable' : 'Enable'} ${job.name}`}
+                disabled={updatingJobId !== null}
+                onClick={() => void toggleEnabled(job)}
+              >
+                <span className="scheduleSwitchThumb" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -123,9 +151,6 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false }:
               >
                 📜
               </button>
-              <span className={`agentListStatus ${job.enabled ? 'running' : ''}`} style={{ marginLeft: '4px', marginRight: '10px' }}>
-                {job.enabled ? '●' : '○'}
-              </span>
             </div>
           ))}
           {jobs.length === 0 && (
@@ -134,9 +159,10 @@ export function SchedulesPanel({ agents, isOpen, onClose, mobileModal = false }:
             </div>
           )}
         </div>
+        {mobileRestricted ? <p className="mobileDesktopHint panelDesktopHint">Use the desktop interface to create or edit schedules.</p> : null}
       </aside>
 
-      {editingJobId !== null && (
+      {!mobileRestricted && editingJobId !== null && (
         <ScheduleEditor
           jobId={editingJobId}
           agents={agents}

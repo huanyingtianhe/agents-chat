@@ -43,6 +43,7 @@ export type MobileFixture = {
   failNextAgentUpdate: () => void;
   holdNextAgentUpdate: () => () => void;
   holdAgentSettings: (agentId: string) => () => void;
+  holdNextScheduleUpdate: () => () => void;
 };
 
 export async function installMobileChatFixture(page: Page): Promise<MobileFixture> {
@@ -55,7 +56,43 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   const scheduleRequests: MobileFixture['scheduleRequests'] = [];
   let rejectNextAgentUpdate = false;
   let pendingAgentUpdate: Promise<void> | null = null;
+  let pendingScheduleUpdate: Promise<void> | null = null;
   const pendingAgentSettings = new Map<string, Promise<void>>();
+  const nodes = [{
+    name: 'mobile-node',
+    label: 'Mobile Node',
+    online: true,
+    checkedAt: 1_000,
+    platform: 'Linux',
+    manual: true,
+    owner: 'admin@local',
+    canModify: true,
+  }, {
+    name: 'offline-node',
+    label: 'Offline Node',
+    online: false,
+    checkedAt: 1_000,
+    platform: 'Windows',
+    connectionError: 'Relay listener is unavailable',
+    manual: true,
+    owner: 'admin@local',
+    canModify: true,
+  }];
+  const schedule = {
+    id: 'schedule-1',
+    agentId: 'alpha',
+    ownerEmail: 'admin@local',
+    name: 'Daily report',
+    prompt: 'Report',
+    scheduleSpec: { kind: 'daily' as const, hour: 9, minute: 0 },
+    cronExpr: '0 9 * * *',
+    enabled: false,
+    timeoutMinutes: 30,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    lastRunAt: 900,
+    nextRunAt: 2_000,
+  };
   const chat = {
     id: 'mobile-chat',
     name: 'Mobile coverage',
@@ -155,19 +192,29 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(response) });
   });
   await page.route('**/api/nodes', async (route) => {
+    const body = route.request().postDataJSON() as { action?: string; name?: string };
+    if (body.action === 'check-node') {
+      const node = nodes.find((item) => item.name === body.name);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(node
+          ? {
+            ok: true,
+            name: node.name,
+            online: node.online,
+            checkedAt: node.checkedAt,
+            platform: node.platform,
+            connectionError: node.connectionError,
+          }
+          : { ok: false, error: 'Node not found' }),
+      });
+      return;
+    }
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        nodes: [{
-          name: 'mobile-node',
-          label: 'Mobile Node',
-          online: true,
-          checkedAt: 1_000,
-          manual: true,
-          owner: 'admin@local',
-          canModify: true,
-        }],
+        nodes,
       }),
     });
   });
@@ -176,21 +223,39 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     const path = new URL(request.url()).pathname;
     const body = request.postDataJSON() as Record<string, unknown> | null;
     scheduleRequests.push({ method: request.method(), path, body: body ?? undefined });
+    if (request.method() === 'PATCH' && pendingScheduleUpdate) {
+      const updateGate = pendingScheduleUpdate;
+      pendingScheduleUpdate = null;
+      await updateGate;
+    }
+    if (request.method() === 'PATCH') {
+      schedule.enabled = Boolean(body?.enabled);
+    }
+    if (request.method() === 'GET' && path === '/api/schedules/schedule-1') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          job: schedule,
+          runs: [{
+            id: 'run-1',
+            jobId: schedule.id,
+            scheduledFor: 900,
+            startedAt: 901,
+            finishedAt: 905,
+            status: 'success',
+            replyText: 'Report complete',
+            errorMessage: null,
+            rawLogPath: null,
+          }],
+        }),
+      });
+      return;
+    }
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        jobs: [{
-          id: 'schedule-1',
-          agentId: 'alpha',
-          name: 'Daily report',
-          prompt: 'Report',
-          scheduleSpec: { kind: 'daily', hour: 9, minute: 0 },
-          enabled: false,
-          timeoutMinutes: 30,
-          createdAt: 1_000,
-          updatedAt: 1_000,
-        }],
+        jobs: [schedule],
       }),
     });
   });
@@ -243,6 +308,13 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
           resolve();
         };
       }));
+      return release;
+    },
+    holdNextScheduleUpdate: () => {
+      let release = () => {};
+      pendingScheduleUpdate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return release;
     },
   };

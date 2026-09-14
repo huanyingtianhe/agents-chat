@@ -420,3 +420,154 @@ test('mobile Agent settings retains values and reports a failed save', async ({ 
   await expect(settings).toBeVisible();
   await expectDialogFitsVisualViewport(settings);
 });
+
+test('mobile Nodes exposes status and refresh but defers complex setup', async ({ page }) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Nodes' }).click();
+  const nodes = page.getByRole('dialog', { name: 'Nodes' });
+
+  await expect(nodes.getByText('Mobile Node')).toBeVisible();
+  await expect(nodes.getByText('Linux')).toBeVisible();
+  await expect(nodes.getByText('Online', { exact: true })).toBeVisible();
+  await expect(nodes.getByText('Offline', { exact: true })).toBeVisible();
+  await expect(nodes.getByText('Relay listener is unavailable')).toBeVisible();
+  await expect(nodes.getByTitle('Refresh all')).toBeVisible();
+  await expect(nodes.getByTitle('Add node')).toHaveCount(0);
+  await expect(nodes.getByTitle('Add agent on this node')).toHaveCount(0);
+  await expect(nodes.getByTitle('Remove node')).toHaveCount(0);
+  await expect(nodes.locator('.nodeEditInput')).toHaveCount(0);
+  await expect(nodes.getByText('Use the desktop interface to configure nodes.')).toBeVisible();
+});
+
+test('mobile Nodes reports load and check failures with retry in the panel', async ({ page }) => {
+  let listAttempts = 0;
+  let failCheck = true;
+  await page.route('**/api/nodes', async (route) => {
+    const body = route.request().postDataJSON() as { action?: string };
+    if (body.action === 'list-nodes' && listAttempts++ === 0) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: false, error: 'Nodes unavailable' }),
+      });
+      return;
+    }
+    if (body.action === 'check-node' && failCheck) {
+      failCheck = false;
+      await route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: false, error: 'Node check unavailable' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Nodes' }).click();
+  const panel = page.getByRole('dialog', { name: 'Nodes' });
+  await expect(panel.getByRole('alert')).toContainText('Nodes unavailable');
+  await panel.getByRole('button', { name: 'Retry' }).click();
+  await expect(panel.getByText('Mobile Node')).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Refresh Mobile Node' }).click();
+  await expect(panel.getByRole('alert')).toContainText('Node check unavailable');
+  await panel.getByRole('button', { name: 'Retry' }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+});
+
+test('mobile Schedules supports status, guarded enablement, and run history without editing', async ({ page }) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  const schedules = page.getByRole('dialog', { name: 'Schedules' });
+
+  await expect(schedules.getByText('Daily report')).toBeVisible();
+  await expect(schedules.getByText('Disabled', { exact: true })).toBeVisible();
+  await expect(schedules.getByTitle('Create schedule')).toHaveCount(0);
+  await expect(schedules.getByText('Use the desktop interface to create or edit schedules.')).toBeVisible();
+
+  const releaseUpdate = fixture.holdNextScheduleUpdate();
+  const enableSwitch = schedules.getByRole('switch', { name: 'Enable Daily report' });
+  await enableSwitch.click();
+  await expect(enableSwitch).toBeDisabled();
+  await enableSwitch.click({ force: true });
+  expect(fixture.scheduleRequests.filter((request) => request.method === 'PATCH')).toHaveLength(1);
+  releaseUpdate();
+  await expect(schedules.getByRole('switch', { name: 'Disable Daily report' })).toBeEnabled();
+  await expect(schedules.getByText('Enabled', { exact: true })).toBeVisible();
+  await expect.poll(() => fixture.scheduleRequests).toContainEqual(
+    expect.objectContaining({
+      method: 'PATCH',
+      path: '/api/schedules/schedule-1',
+      body: { enabled: true },
+    }),
+  );
+
+  await schedules.getByTitle('View run history').click();
+  const history = page.getByRole('dialog', { name: 'Daily report runs' });
+  await expectExactlyOneActiveModal(page);
+  await history.locator('summary').click();
+  await expect(history.getByText('Report complete')).toBeVisible();
+  await expect(history.getByRole('button', { name: /Run now/i })).toBeVisible();
+});
+
+test('mobile Schedules reports load failures and retries in the panel', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/schedules', async (route) => {
+    if (!fail) {
+      await route.fallback();
+      return;
+    }
+    fail = false;
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Schedules unavailable' }),
+    });
+  });
+
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  const panel = page.getByRole('dialog', { name: 'Schedules' });
+  await expect(panel.getByRole('alert')).toContainText('Schedules unavailable');
+  await panel.getByRole('button', { name: 'Retry' }).click();
+  await expect(panel.getByText('Daily report')).toBeVisible();
+});
+
+test('mobile Schedules reports action failures without duplicating the update', async ({ page }) => {
+  let patchAttempts = 0;
+  let releasePatch = () => {};
+  const patchGate = new Promise<void>((resolve) => {
+    releasePatch = resolve;
+  });
+  await page.route('**/api/schedules/schedule-1', async (route) => {
+    if (route.request().method() !== 'PATCH') {
+      await route.fallback();
+      return;
+    }
+    patchAttempts += 1;
+    await patchGate;
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Schedule update rejected' }),
+    });
+  });
+
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Schedules' }).click();
+  const panel = page.getByRole('dialog', { name: 'Schedules' });
+  const enableSwitch = panel.getByRole('switch', { name: 'Enable Daily report' });
+  await enableSwitch.click();
+  await expect(enableSwitch).toBeDisabled();
+  await enableSwitch.click({ force: true });
+
+  expect(patchAttempts).toBe(1);
+  releasePatch();
+  await expect(panel.getByRole('alert')).toContainText('Schedule update rejected');
+  expect(patchAttempts).toBe(1);
+  await panel.getByRole('button', { name: 'Retry' }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(enableSwitch).toBeEnabled();
+});

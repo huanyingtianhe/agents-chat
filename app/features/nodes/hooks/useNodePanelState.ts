@@ -15,12 +15,16 @@ export type UseNodePanelStateParams = {
 };
 
 async function nodesApi(body: Record<string, unknown>) {
-  const res = await fetch('/api/nodes', {
+  const response = await fetch('/api/nodes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const data = await response.json();
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || `Nodes request failed (${response.status})`);
+  }
+  return data;
 }
 
 export function useNodePanelState({
@@ -31,6 +35,8 @@ export function useNodePanelState({
   const [showNodesPanel, setShowNodesPanel] = useState(false);
   const [nodesData, setNodesData] = useState<NodeData[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
+  const [nodesError, setNodesError] = useState<string | null>(null);
+  const [failedNodeName, setFailedNodeName] = useState<string | null>(null);
 
   // Add node form
   const [showAddNode, setShowAddNode] = useState(false);
@@ -53,13 +59,17 @@ export function useNodePanelState({
 
   async function loadNodes() {
     setNodesLoading(true);
+    setNodesError(null);
+    setFailedNodeName(null);
     try {
       const data = await nodesApi({ action: 'list-nodes' });
-      if (data.ok && Array.isArray(data.nodes)) {
+      if (Array.isArray(data.nodes)) {
         setNodesData(data.nodes);
       }
+      setNodesError(null);
+      setFailedNodeName(null);
     } catch (err) {
-      console.error('Failed to load nodes', err);
+      setNodesError(err instanceof Error ? err.message : String(err));
     } finally {
       setNodesLoading(false);
     }
@@ -96,14 +106,31 @@ export function useNodePanelState({
   }
 
   async function handleRefreshNode(name: string) {
+    setNodesError(null);
+    setFailedNodeName(null);
     try {
       const res = await nodesApi({ action: 'check-node', name });
-      if (res.ok) {
-        setNodesData(prev => prev.map(n => n.name === name ? { ...n, online: res.online, checkedAt: res.checkedAt } : n));
-      }
+      setNodesData(prev => prev.map(n => n.name === name ? {
+        ...n,
+        online: res.online,
+        checkedAt: res.checkedAt,
+        connectionError: res.connectionError,
+        platform: res.platform ?? n.platform,
+      } : n));
+      setNodesError(null);
+      setFailedNodeName(null);
     } catch (err) {
-      console.error('Failed to check node', err);
+      setNodesError(err instanceof Error ? err.message : String(err));
+      setFailedNodeName(name);
     }
+  }
+
+  async function retryNodes() {
+    if (failedNodeName) {
+      await handleRefreshNode(failedNodeName);
+      return;
+    }
+    await loadNodes();
   }
 
   async function handleRenameNode(name: string, newLabel: string) {
@@ -189,6 +216,8 @@ export function useNodePanelState({
     setShowNodesPanel,
     nodesData,
     nodesLoading,
+    nodesError,
+    retryNodes,
     showAddNode,
     setShowAddNode,
     newNodeForm,

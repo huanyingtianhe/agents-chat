@@ -3,6 +3,8 @@ export type NodeData = {
   label: string;
   online: boolean;
   checkedAt: number;
+  platform?: string;
+  connectionError?: string;
   manual?: boolean;
   owner?: string;
   canModify?: boolean;

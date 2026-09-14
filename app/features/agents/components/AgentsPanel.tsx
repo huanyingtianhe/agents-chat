@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import type { Agent } from '../agentTypes';
 import type { NodeData } from '../../nodes/nodeTypes';
 import type { AccessEntry } from '../hooks/useAgentPanelState';
@@ -89,12 +90,45 @@ export function AgentsPanel({
     modelMenuRefs,
     formError,
   } = panelState;
+  const hasOpenAgentForm = showAddAgent || showAddRemoteAgent || showAgentSettings;
+  const hideMobileSidebarForForm = mobileModal && hasOpenAgentForm;
+
+  useEffect(() => {
+    if (!hideMobileSidebarForForm) return;
+    const visualViewport = window.visualViewport;
+    let focusFrame = 0;
+    const keepFocusedFieldVisible = () => {
+      window.cancelAnimationFrame(focusFrame);
+      focusFrame = window.requestAnimationFrame(() => {
+        const focused = document.activeElement;
+        if (focused instanceof HTMLElement && focused.closest('.agentMobileSheet')) {
+          focused.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+      });
+    };
+    visualViewport?.addEventListener('resize', keepFocusedFieldVisible);
+    visualViewport?.addEventListener('scroll', keepFocusedFieldVisible);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      visualViewport?.removeEventListener('resize', keepFocusedFieldVisible);
+      visualViewport?.removeEventListener('scroll', keepFocusedFieldVisible);
+    };
+  }, [hideMobileSidebarForForm]);
 
   return (
     <>
       {/* ── Right sidebar: agents ── */}
       {showAgentsPanel && (
-        <aside className={`agentsSidebar ${showAgentsPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="agents" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Agents' : undefined}>
+        <aside
+          className={`agentsSidebar ${showAgentsPanel ? 'mobilePanelVisible' : ''}`}
+          data-mobile-overlay-surface="agents"
+          tabIndex={-1}
+          role={mobileModal && !hasOpenAgentForm ? 'dialog' : undefined}
+          aria-modal={mobileModal && !hasOpenAgentForm ? true : undefined}
+          aria-label={mobileModal ? 'Agents' : undefined}
+          aria-hidden={hideMobileSidebarForForm || undefined}
+          inert={hideMobileSidebarForForm || undefined}
+        >
           <div className="agentsSidebarHeader">
             <span>Agents</span>
             <div style={{ display: 'flex', gap: '4px' }}>

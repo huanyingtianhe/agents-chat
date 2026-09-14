@@ -14,6 +14,13 @@ export const TEST_AGENT = {
   defaultModelId: 'gpt-5.4',
 };
 
+export const TEST_AGENT_B = {
+  ...TEST_AGENT,
+  id: 'beta',
+  name: 'Beta Agent',
+  cwd: '/home/xujx/wa/agents-chat/beta',
+};
+
 const WIDE_MESSAGE_CONTENT = `Existing mobile message
 
 ${'unbrokenmobiletoken'.repeat(50)}
@@ -35,17 +42,20 @@ export type MobileFixture = {
   scheduleRequests: Array<{ method: string; path: string; body?: Record<string, unknown> }>;
   failNextAgentUpdate: () => void;
   holdNextAgentUpdate: () => () => void;
+  holdAgentSettings: (agentId: string) => () => void;
 };
 
 export async function installMobileChatFixture(page: Page): Promise<MobileFixture> {
   const agents = new Map<string, Record<string, unknown>>([
     [TEST_AGENT.id, { ...TEST_AGENT }],
+    [TEST_AGENT_B.id, { ...TEST_AGENT_B }],
   ]);
   const access = new Map<string, string[]>();
   const acpRequests: Record<string, unknown>[] = [];
   const scheduleRequests: MobileFixture['scheduleRequests'] = [];
   let rejectNextAgentUpdate = false;
   let pendingAgentUpdate: Promise<void> | null = null;
+  const pendingAgentSettings = new Map<string, Promise<void>>();
   const chat = {
     id: 'mobile-chat',
     name: 'Mobile coverage',
@@ -84,6 +94,13 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     acpRequests.push(body);
+    const agentId = String(body.agentId || '');
+    if (
+      (body.action === 'get-agent-config' || body.action === 'list-agent-access')
+      && pendingAgentSettings.has(agentId)
+    ) {
+      await pendingAgentSettings.get(agentId);
+    }
     if (body.action === 'update-agent-config' && pendingAgentUpdate) {
       const updateGate = pendingAgentUpdate;
       pendingAgentUpdate = null;
@@ -216,6 +233,16 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
       pendingAgentUpdate = new Promise<void>((resolve) => {
         release = resolve;
       });
+      return release;
+    },
+    holdAgentSettings: (agentId: string) => {
+      let release = () => {};
+      pendingAgentSettings.set(agentId, new Promise<void>((resolve) => {
+        release = () => {
+          pendingAgentSettings.delete(agentId);
+          resolve();
+        };
+      }));
       return release;
     },
   };

@@ -1,4 +1,8 @@
 import { expect, Page, test } from '@playwright/test';
+import {
+  installTestVisualViewport,
+  setTestVisualViewport,
+} from './helpers/visualViewport';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -13,40 +17,7 @@ async function login(page: Page) {
 }
 
 test('keeps composer controls above iPhone browser chrome and keyboard', async ({ page }) => {
-  await page.addInitScript(() => {
-    let height: number | null = null;
-    let offsetTop = 0;
-    const listeners = new Map<string, Set<EventListener>>();
-    const visualViewport = {
-      get height() { return height ?? window.innerHeight; },
-      get width() { return window.innerWidth; },
-      get offsetTop() { return offsetTop; },
-      get offsetLeft() { return 0; },
-      get pageTop() { return offsetTop; },
-      get pageLeft() { return 0; },
-      get scale() { return 1; },
-      addEventListener(type: string, listener: EventListener) {
-        const handlers = listeners.get(type) || new Set<EventListener>();
-        handlers.add(listener);
-        listeners.set(type, handlers);
-      },
-      removeEventListener(type: string, listener: EventListener) {
-        listeners.get(type)?.delete(listener);
-      },
-    };
-
-    Object.defineProperty(window, 'visualViewport', {
-      configurable: true,
-      value: visualViewport,
-    });
-    (window as typeof window & { setTestVisualViewport: (nextHeight: number, nextOffsetTop: number) => void })
-      .setTestVisualViewport = (nextHeight, nextOffsetTop) => {
-        height = nextHeight;
-        offsetTop = nextOffsetTop;
-        for (const listener of listeners.get('resize') || []) listener(new Event('resize'));
-        for (const listener of listeners.get('scroll') || []) listener(new Event('scroll'));
-      };
-  });
+  await installTestVisualViewport(page);
 
   const chats = new Map<string, Record<string, unknown>>();
   let lastChatId = '';
@@ -161,10 +132,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await expect(textarea).toBeVisible({ timeout: 10000 });
   await textarea.fill('@alpha @beta @gamma @delta mobile viewport');
 
-  await page.evaluate(() => {
-    (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
-      .setTestVisualViewport(430, 24);
-  });
+  await setTestVisualViewport(page, 430, 24);
 
   const app = page.locator('.chatPageRoot .page');
   await expect.poll(() => app.evaluate((element) => {
@@ -239,10 +207,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   expect(backdropBox).not.toBeNull();
   await backdrop.click({ position: { x: backdropBox!.width - 4, y: 200 } });
 
-  await page.evaluate(() => {
-    (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
-      .setTestVisualViewport(926, 0);
-  });
+  await setTestVisualViewport(page, 926, 0);
   await expect.poll(() => app.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { top: Math.round(rect.top), height: Math.round(rect.height) };

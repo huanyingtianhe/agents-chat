@@ -4,10 +4,15 @@ import {
   loginMobileFixture,
   type MobileFixture,
 } from './helpers/mobileChatFixture';
+import {
+  installTestVisualViewport,
+  setTestVisualViewport,
+} from './helpers/visualViewport';
 
 let fixture: MobileFixture;
 
 test.beforeEach(async ({ page }) => {
+  await installTestVisualViewport(page);
   fixture = await installMobileChatFixture(page);
   await loginMobileFixture(page);
 });
@@ -29,6 +34,10 @@ async function expectDialogFitsVisualViewport(dialog: Locator) {
       && rect.top >= top - 1
       && rect.bottom <= top + height + 1;
   })).toBe(true);
+}
+
+async function expectExactlyOneActiveModal(page: import('@playwright/test').Page) {
+  await expect(page.locator('[role="dialog"][aria-modal="true"]:not([aria-hidden="true"])')).toHaveCount(1);
 }
 
 test('separates left navigation from management actions', async ({ page }) => {
@@ -283,6 +292,7 @@ test('mobile Agent management keeps full CRUD and access controls reachable', as
   await panel.getByTitle('Add agent').click();
   await page.getByRole('button', { name: /Add Agent from Remote Node/ }).click();
   const remoteCreate = page.getByRole('dialog', { name: 'Add Agent from Remote Node' });
+  await expectExactlyOneActiveModal(page);
   await expectDialogFitsVisualViewport(remoteCreate);
   await remoteCreate.getByPlaceholder('unique-agent-id').fill('mobile-remote');
   await remoteCreate.getByPlaceholder('My Remote Agent').fill('Mobile Remote');
@@ -299,6 +309,7 @@ test('mobile Agent management keeps full CRUD and access controls reachable', as
   await panel.getByTitle('Add agent').click();
   await page.getByRole('button', { name: /Add Agent in Server/ }).click();
   const create = page.getByRole('dialog', { name: 'Add New Agent' });
+  await expectExactlyOneActiveModal(page);
   await expectDialogFitsVisualViewport(create);
   await create.getByPlaceholder('unique-agent-id').fill('mobile-managed');
   await create.getByPlaceholder('My Agent').fill('Mobile Managed');
@@ -311,6 +322,7 @@ test('mobile Agent management keeps full CRUD and access controls reachable', as
 
   await panel.getByText('Mobile Managed').click();
   const settings = page.getByRole('dialog', { name: /Mobile Managed settings/ });
+  await expectExactlyOneActiveModal(page);
   await expectDialogFitsVisualViewport(settings);
   await settingsField(settings, 'Name').fill('Mobile Managed Updated');
   await settingsField(settings, 'Command').fill('mock-agent-v2');
@@ -324,7 +336,12 @@ test('mobile Agent management keeps full CRUD and access controls reachable', as
   await settings.getByRole('button', { name: 'Revoke access for mobile@example.com' }).click();
   await expect(settings.getByText('mobile@example.com', { exact: true })).toHaveCount(0);
 
-  await settings.locator('textarea').focus();
+  const envTextarea = settings.locator('textarea');
+  await envTextarea.focus();
+  await setTestVisualViewport(page, 420, 96);
+  await expect(envTextarea).toBeFocused();
+  await expectDialogFitsVisualViewport(envTextarea);
+  await expectDialogFitsVisualViewport(settings.locator('.agentSheetActions'));
   for (const name of ['Save', 'Cancel', 'Delete']) {
     await expect(settings.getByRole('button', { name })).toBeVisible();
   }
@@ -353,6 +370,39 @@ test('mobile Agent management keeps full CRUD and access controls reachable', as
   await updatedSettings.getByRole('button', { name: 'Delete' }).click();
   await expect(panel.getByText('Mobile Managed Updated')).toHaveCount(0);
   expect(fixture.agents.has('mobile-managed')).toBe(false);
+});
+
+test('mobile Agent settings ignores stale loads and saves the active agent', async ({ page }) => {
+  const releaseAlpha = fixture.holdAgentSettings('alpha');
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Agents' }).click();
+  const panel = page.locator('.agentsSidebar').filter({ hasText: 'Agents' });
+
+  await panel.getByText('Alpha Agent', { exact: true }).click();
+  await expect.poll(() => fixture.acpRequests.filter((request) =>
+    request.agentId === 'alpha'
+    && (request.action === 'get-agent-config' || request.action === 'list-agent-access')).length,
+  ).toBe(2);
+  await page.keyboard.press('Escape');
+
+  await panel.getByText('Beta Agent', { exact: true }).click();
+  const betaSettings = page.getByRole('dialog', { name: /Beta Agent settings/ });
+  await expect(betaSettings).toBeVisible();
+  releaseAlpha();
+  await expect(betaSettings).toBeVisible();
+  await expect(settingsField(betaSettings, 'Agent ID')).toHaveValue('beta');
+  await expect(settingsField(betaSettings, 'Name')).toHaveValue('Beta Agent');
+
+  await settingsField(betaSettings, 'Name').fill('Beta Agent Updated');
+  await betaSettings.getByRole('button', { name: 'Save' }).click();
+  await expect(betaSettings).toBeHidden();
+  const updates = fixture.acpRequests.filter((request) => request.action === 'update-agent-config');
+  expect(updates.at(-1)).toMatchObject({
+    agentId: 'beta',
+    updates: { name: 'Beta Agent Updated' },
+  });
+  expect(fixture.agents.get('alpha')).toMatchObject({ name: 'Alpha Agent' });
+  expect(fixture.agents.get('beta')).toMatchObject({ name: 'Beta Agent Updated' });
 });
 
 test('mobile Agent settings retains values and reports a failed save', async ({ page }) => {

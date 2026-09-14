@@ -82,6 +82,7 @@ export function useAgentPanelState({
   const [agentAccessLoading, setAgentAccessLoading] = useState(false);
   const [agentAccessList, setAgentAccessList] = useState<AccessEntry[]>([]);
   const [newAccessEmail, setNewAccessEmail] = useState('');
+  const settingsRequestGeneration = useRef(0);
 
   function openAddAgent() {
     setShowAgentAddMenu(false);
@@ -183,6 +184,7 @@ export function useAgentPanelState({
   }
 
   async function openAgentSettings(agentId: string) {
+    const requestGeneration = ++settingsRequestGeneration.current;
     setFormError(null);
     setSettingsAgentId(agentId);
     setSettingsAgentConfig(null);
@@ -196,6 +198,7 @@ export function useAgentPanelState({
         acp({ action: 'get-agent-config', agentId }),
         acp({ action: 'list-agent-access', agentId }),
       ]);
+      if (requestGeneration !== settingsRequestGeneration.current) return;
       requireSuccessfulMutation(configData, 'Failed to load agent settings');
       requireSuccessfulMutation(accessData, 'Failed to load agent settings');
       setSettingsAgentConfig(configData.agent);
@@ -203,9 +206,12 @@ export function useAgentPanelState({
       setSettingsEnvText(Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n'));
       setAgentAccessList(accessData.access || []);
     } catch (error) {
+      if (requestGeneration !== settingsRequestGeneration.current) return;
       setFormError(mutationError(error, 'Failed to load agent settings'));
     } finally {
-      setAgentSettingsLoading(false);
+      if (requestGeneration === settingsRequestGeneration.current) {
+        setAgentSettingsLoading(false);
+      }
     }
   }
 
@@ -245,7 +251,15 @@ export function useAgentPanelState({
   }
 
   async function saveAgentSettings() {
-    if (agentSettingsLoading || agentAccessLoading || !settingsAgentId || !settingsAgentConfig) return;
+    if (
+      agentSettingsLoading
+      || agentAccessLoading
+      || !settingsAgentId
+      || !settingsAgentConfig
+      || settingsAgentConfig.id !== settingsAgentId
+    ) return;
+    const agentId = settingsAgentId;
+    const agentConfig = settingsAgentConfig;
     setFormError(null);
     setAgentSettingsLoading(true);
     try {
@@ -260,21 +274,21 @@ export function useAgentPanelState({
       }
 
       const data = await acp({
-        action: 'update-agent-config', agentId: settingsAgentId,
+        action: 'update-agent-config', agentId,
         updates: {
-          name: settingsAgentConfig.name,
-          command: settingsAgentConfig.command,
-          args: settingsAgentConfig.args,
-          cwd: settingsAgentConfig.cwd,
-          yolo: settingsAgentConfig.yolo,
-          public: settingsAgentConfig.public,
+          name: agentConfig.name,
+          command: agentConfig.command,
+          args: agentConfig.args,
+          cwd: agentConfig.cwd,
+          yolo: agentConfig.yolo,
+          public: agentConfig.public,
           env: envObj,
         },
       });
       requireSuccessfulMutation(data, 'Failed to update agent');
       setShowAgentSettings(false);
       await loadAgents();
-      addMessage({ type: 'system', content: data.restarted ? `⚙️ ${settingsAgentConfig.name} settings updated, restarting...` : `⚙️ ${settingsAgentConfig.name} settings saved` });
+      addMessage({ type: 'system', content: data.restarted ? `⚙️ ${agentConfig.name} settings updated, restarting...` : `⚙️ ${agentConfig.name} settings saved` });
     } catch (error) {
       setFormError(mutationError(error, 'Failed to update agent'));
     } finally {
@@ -301,8 +315,16 @@ export function useAgentPanelState({
   }
 
   function closeAgentSettings() {
+    settingsRequestGeneration.current += 1;
     setFormError(null);
     setShowAgentSettings(false);
+    setSettingsAgentId(null);
+    setSettingsAgentConfig(null);
+    setSettingsEnvText('');
+    setAgentAccessList([]);
+    setNewAccessEmail('');
+    setAgentSettingsLoading(false);
+    setAgentAccessLoading(false);
   }
 
   function openModelSettings(agentId: string) { setOpenModelMenuAgentId(agentId); }

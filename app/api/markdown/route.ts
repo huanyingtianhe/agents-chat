@@ -23,12 +23,24 @@ const SKIP_DIRS = new Set([
 ]);
 
 const MAX_DEPTH = 8;
+const MAX_IMAGE_PREVIEW_BYTES = 10 * 1024 * 1024;
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+};
 
 // Binary/non-text extensions to exclude from file listing
 const SKIP_EXTENSIONS = new Set([
   '.exe', '.dll', '.so', '.dylib', '.bin', '.obj', '.o', '.a', '.lib',
   '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz',
-  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp', '.tiff',
   '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.webm', '.flac',
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
   '.woff', '.woff2', '.ttf', '.eot', '.otf',
@@ -257,9 +269,22 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const content = await fs.readFile(target, 'utf-8');
     const stat = statSync(target);
     const ext = path.extname(target).toLowerCase();
+    const imageMimeType = IMAGE_MIME_TYPES[ext];
+    if (imageMimeType) {
+      if (stat.size > MAX_IMAGE_PREVIEW_BYTES) {
+        return NextResponse.json({ error: 'image is too large to preview' }, { status: 413 });
+      }
+      const content = await fs.readFile(target);
+      return NextResponse.json({
+        path: filePath,
+        content: `data:${imageMimeType};base64,${content.toString('base64')}`,
+        kind: 'image',
+        mtime: stat.mtime.toISOString(),
+      });
+    }
+    const content = await fs.readFile(target, 'utf-8');
     const kind = ext === '.html' || ext === '.htm' ? 'html' : ext === '.md' ? 'markdown' : 'text';
     return NextResponse.json({
       path: filePath,

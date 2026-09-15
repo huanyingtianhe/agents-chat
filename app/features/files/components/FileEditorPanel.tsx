@@ -19,6 +19,7 @@ type FileEditorPanelProps = {
 export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly }: FileEditorPanelProps) {
   const filePath = workspace.mdSelectedFile;
   if (!filePath) return null;
+  const imagePreview = workspace.mdFileKind === 'image';
 
   const renderLineCommentMarker = (lineNum: number, commentsForLine: FileComment[]) => {
     if (commentsForLine.length === 0) return null;
@@ -182,20 +183,22 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
               </div>
             </>
           )}
-          <button
-            className={`mdEditorBtn commentToggle ${comments.commentSidebarOpen ? 'active' : ''}`}
-            onClick={() => comments.setCommentSidebarOpen(p => !p)}
-            title="Toggle comments"
-          >
-            💬 {comments.fileComments.filter(c => c.status === 'active').length || ''}
-          </button>
-          {mobileReadOnly ? (
+          {!imagePreview ? (
+            <button
+              className={`mdEditorBtn commentToggle ${comments.commentSidebarOpen ? 'active' : ''}`}
+              onClick={() => comments.setCommentSidebarOpen(p => !p)}
+              title="Toggle comments"
+            >
+              💬 {comments.fileComments.filter(c => c.status === 'active').length || ''}
+            </button>
+          ) : <span className="mdPreviewBadge">Image preview</span>}
+          {mobileReadOnly && !imagePreview ? (
             <span className="mobileDesktopHint">Use the desktop interface to edit files.</span>
-          ) : (
+          ) : !mobileReadOnly && !imagePreview ? (
             <button className="mdEditorBtn save" onClick={() => void workspace.saveMdFile()} disabled={workspace.mdSaving || !workspace.mdDirty}>
               {workspace.mdSaving ? 'Saving…' : '💾 Save'}
             </button>
-          )}
+          ) : null}
           <button className="mdEditorBtn secondary" onClick={() => {
             if (workspace.mdDirty && !confirm('Discard changes?')) return;
             selection.clearLiveSelectionDraft();
@@ -205,7 +208,11 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
           </button>
         </div>
       </div>
-      {(mobileReadOnly || !workspace.mdConflict) && (mobileReadOnly ? (
+      {(mobileReadOnly || !workspace.mdConflict) && (imagePreview ? (
+        <div className="mdImagePreviewWrap">
+          <img className="mdImagePreview" src={workspace.mdFileContent} alt={filePath} />
+        </div>
+      ) : mobileReadOnly ? (
         <div className="mdEditorSimple">
           <div className="fileContentWithLines" ref={selection.fileContentRef} onMouseUp={selection.handleTextSelection} onScroll={selection.handleFileContentScroll}>
             {renderFileLines()}

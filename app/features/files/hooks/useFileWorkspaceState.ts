@@ -9,10 +9,12 @@ import {
   buildFileTree,
   buildSimpleLineDiff,
   isMarkdownFile,
+  isHtmlFile,
+  isImageFile,
   normalizeFileEditorMode,
   parseFileWorkspaceState,
 } from '../fileWorkspaceHelpers';
-import type { FileWorkspaceState, LeftSidebarTab, MdConflictState, MdEditorMode } from '../fileWorkspaceTypes';
+import type { FilePreviewKind, FileWorkspaceState, LeftSidebarTab, MdConflictState, MdEditorMode } from '../fileWorkspaceTypes';
 import type { MarkdownFileEntry, UseFileWorkspaceStateDeps, UseFileWorkspaceStateResult } from './fileWorkspaceHookTypes';
 
 export type { MarkdownFileEntry, UseFileWorkspaceStateResult } from './fileWorkspaceHookTypes';
@@ -34,6 +36,7 @@ export function useFileWorkspaceState({
   const [mdSelectedAgentId, setMdSelectedAgentId] = useState<string | null>(null);
   const [mdSelectedFile, setMdSelectedFile] = useState<string | null>(null);
   const [mdFileContent, setMdFileContent] = useState('');
+  const [mdFileKind, setMdFileKind] = useState<FilePreviewKind>('text');
   const [mdEditContent, setMdEditContent] = useState('');
   const [mdFileMtime, setMdFileMtime] = useState<string | null>(null);
   const [mdSaving, setMdSaving] = useState(false);
@@ -44,6 +47,7 @@ export function useFileWorkspaceState({
   const [mdConflict, setMdConflict] = useState<MdConflictState | null>(null);
   const [mdConflictResolvedContent, setMdConflictResolvedContent] = useState('');
   const [mdExpandedDirs, setMdExpandedDirs] = useState<Set<string>>(new Set());
+  const [mdFileQuery, setMdFileQuery] = useState('');
   const [mdDiffOnly, setMdDiffOnly] = useState(false);
   const [workspaceScrollTop, setWorkspaceScrollTop] = useState(0);
   const mdLiveRef = useRef<HTMLDivElement>(null);
@@ -64,13 +68,17 @@ export function useFileWorkspaceState({
     if (node) setMdLiveElementVersion((version) => version + 1);
   }, []);
 
-  const mdFileTree = useMemo(() => buildFileTree(mdFilesList), [mdFilesList]);
+  const mdFileTree = useMemo(() => {
+    const normalizedQuery = mdFileQuery.trim().toLocaleLowerCase();
+    const visibleFiles = normalizedQuery
+      ? mdFilesList.filter(file => file.path.toLocaleLowerCase().includes(normalizedQuery))
+      : mdFilesList;
+    return buildFileTree(visibleFiles);
+  }, [mdFileQuery, mdFilesList]);
 
   const loadMdFiles = useCallback(async (agentId: string, diff = false) => {
     setMdFilesLoading(true);
-    setMdFilesList([]);
     setMdFilesError(null);
-    setMdExpandedDirs(new Set());
     try {
       const url = `/api/markdown?agentId=${encodeURIComponent(agentId)}${diff ? '&diff=true' : ''}`;
       const res = await fetch(url);
@@ -79,9 +87,14 @@ export function useFileWorkspaceState({
         return;
       }
       const data = await res.json();
-      if (data.files) setMdFilesList(data.files);
+      if (!res.ok || !Array.isArray(data.files)) {
+        throw new Error(data.error || 'Unable to load files');
+      }
+      setMdFilesList(data.files);
+      setMdExpandedDirs(new Set());
     } catch (err) {
       console.error('Failed to load files', err);
+      setMdFilesError(err instanceof Error ? err.message : 'Unable to load files');
     } finally {
       setMdFilesLoading(false);
     }
@@ -102,10 +115,20 @@ export function useFileWorkspaceState({
       if (!res.ok || data.content === undefined) {
         throw new Error(data.error || `Unable to preview ${filePath}`);
       }
+      const kind: FilePreviewKind = data.kind === 'image' || data.kind === 'html' || data.kind === 'markdown' || data.kind === 'text'
+        ? data.kind
+        : isImageFile(filePath)
+          ? 'image'
+          : isHtmlFile(filePath)
+            ? 'html'
+            : isMarkdownFile(filePath)
+              ? 'markdown'
+              : 'text';
       const restoreScrollTop = options?.restoreScrollTop ?? 0;
       setMdSelectedFile(filePath);
       setMdFileContent(data.content);
       setMdEditContent(data.content);
+      setMdFileKind(kind);
       setMdFileMtime(data.mtime || null);
       setMdDirty(false);
       setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
@@ -189,9 +212,15 @@ export function useFileWorkspaceState({
   const selectMdAgent = useCallback((agentId: string | null) => {
     setMdFileError(null);
     setMdSelectedAgentId(agentId);
+    setMdFilesList([]);
+    setMdFileQuery('');
     if (agentId) void loadMdFiles(agentId, mdDiffOnly);
-    else setMdFilesList([]);
   }, [loadMdFiles, mdDiffOnly]);
+
+  const refreshMdFiles = useCallback(async () => {
+    if (!mdSelectedAgentId) return;
+    await loadMdFiles(mdSelectedAgentId, mdDiffOnly);
+  }, [loadMdFiles, mdDiffOnly, mdSelectedAgentId]);
 
   const toggleMdDiffOnly = useCallback(() => {
     const next = !mdDiffOnly;
@@ -298,6 +327,7 @@ export function useFileWorkspaceState({
     setMdSelectedFile(null);
     setMdFileContent('');
     setMdEditContent('');
+    setMdFileKind('text');
     setMdFileMtime(null);
     setMdDirty(false);
     setMdLiveHtml('');
@@ -339,6 +369,7 @@ export function useFileWorkspaceState({
     setMdSelectedFile,
     mdFileContent,
     setMdFileContent,
+    mdFileKind,
     mdEditContent,
     setMdEditContent,
     mdFileMtime,
@@ -356,6 +387,8 @@ export function useFileWorkspaceState({
     mdConflictResolvedContent,
     setMdConflictResolvedContent,
     mdExpandedDirs,
+    mdFileQuery,
+    setMdFileQuery,
     mdDiffOnly,
     setMdDiffOnly,
     mdLiveRef,
@@ -364,6 +397,7 @@ export function useFileWorkspaceState({
     turndownRef,
     mdFileTree,
     loadMdFiles,
+    refreshMdFiles,
     openMdFileForAgent,
     openMdFile,
     selectMdAgent,

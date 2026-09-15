@@ -16,6 +16,7 @@ export type MdConflictState = {
 
 export type LeftSidebarTab = 'chats' | 'files';
 export type MdEditorMode = 'split' | 'live' | 'review';
+export type FilePreviewKind = 'text' | 'markdown' | 'html' | 'image';
 
 export type FileWorkspaceState = {
   tab: LeftSidebarTab;

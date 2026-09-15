@@ -47,7 +47,7 @@ export function FileWorkspacePanel(props: FileWorkspacePanelProps) {
   return (
     <div className="mdEditorInline">
       <FileEditorPanel workspace={workspace} comments={comments} selection={selection} mobileReadOnly={mobileReadOnly} />
-      <FileCommentSidebar comments={comments} selection={selection} />
+      {workspace.mdFileKind !== 'image' ? <FileCommentSidebar comments={comments} selection={selection} /> : null}
     </div>
   );
 }

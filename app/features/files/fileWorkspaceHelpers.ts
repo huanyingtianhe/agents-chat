@@ -13,6 +13,8 @@ export function getFileIcon(name: string): string {
     json: '📋', yaml: '⚙️', yml: '⚙️', toml: '⚙️',
     py: '🐍', rs: '🦀', go: '🔵', java: '☕',
     css: '🎨', html: '🌐', htm: '🌐', xml: '📄',
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', bmp: '🖼️',
+    ico: '🖼️', svg: '🖼️', webp: '🖼️', tif: '🖼️', tiff: '🖼️',
     sh: '🖥️', bash: '🖥️', ps1: '🖥️', bat: '🖥️', cmd: '🖥️',
     txt: '📄', csv: '📊', env: '🔒', gitignore: '👁️',
   };
@@ -84,6 +86,10 @@ export function isMarkdownFile(filePath: string): boolean {
 export function isHtmlFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return lower.endsWith('.html') || lower.endsWith('.htm');
+}
+
+export function isImageFile(filePath: string): boolean {
+  return /\.(?:png|jpe?g|gif|bmp|ico|svg|webp|tiff?)$/i.test(filePath);
 }
 
 export function buildFileTree(files: { path: string; name: string }[]): FileTreeNode[] {

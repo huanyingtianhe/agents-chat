@@ -33,13 +33,16 @@ ${'widecodecolumn'.repeat(50)}
 
 | Column one | Column two | Column three | Column four | Column five | Column six |
 | --- | --- | --- | --- | --- | --- |
-| Alpha value | Beta value | Gamma value | Delta value | Epsilon value | Zeta value |`;
+| Alpha value | Beta value | Gamma value | Delta value | Epsilon value | Zeta value |
+
+${Array.from({ length: 40 }, (_, index) => `Scrollable mobile history line ${index + 1}`).join('\n\n')}`;
 
 export type MobileFixture = {
   agents: Map<string, Record<string, unknown>>;
   access: Map<string, string[]>;
   acpRequests: Record<string, unknown>[];
   scheduleRequests: Array<{ method: string; path: string; body?: Record<string, unknown> }>;
+  markdownListRequests: string[];
   failNextAgentUpdate: () => void;
   holdNextAgentUpdate: () => () => void;
   holdAgentSettings: (agentId: string) => () => void;
@@ -55,6 +58,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   const access = new Map<string, string[]>();
   const acpRequests: Record<string, unknown>[] = [];
   const scheduleRequests: MobileFixture['scheduleRequests'] = [];
+  const markdownListRequests: string[] = [];
   let rejectNextAgentUpdate = false;
   let pendingAgentUpdate: Promise<void> | null = null;
   let pendingScheduleUpdate: Promise<void> | null = null;
@@ -278,14 +282,18 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   });
   await page.route('**/api/markdown**', async (route) => {
     const path = new URL(route.request().url()).searchParams.get('path');
+    if (!path) markdownListRequests.push(route.request().url());
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(path
-        ? { path, content: '# Mobile file\n\nComment-ready content.', kind: 'markdown', mtime: '2026-09-14T00:00:00.000Z' }
+        ? path === 'assets/mobile.png'
+          ? { path, content: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', kind: 'image', mtime: '2026-09-14T00:00:00.000Z' }
+          : { path, content: '# Mobile file\n\nComment-ready content.', kind: 'markdown', mtime: '2026-09-14T00:00:00.000Z' }
         : {
           files: [
             { path: 'README.md', name: 'README.md', mtime: '2026-09-14T00:00:00.000Z' },
             { path: 'broken.md', name: 'broken.md', mtime: '2026-09-14T00:00:00.000Z' },
+            { path: 'assets/mobile.png', name: 'mobile.png', mtime: '2026-09-14T00:00:00.000Z' },
           ],
         }),
     });
@@ -307,6 +315,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     access,
     acpRequests,
     scheduleRequests,
+    markdownListRequests,
     failNextAgentUpdate: () => {
       rejectNextAgentUpdate = true;
     },

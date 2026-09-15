@@ -150,15 +150,54 @@ test('close arrows clear panel state, backdrop, body lock, and restore More focu
 test('preserves composer and current chat state while opening and closing navigation', async ({ page }) => {
   const composer = page.locator('textarea.composerTextarea');
   await composer.fill('unsent mobile draft');
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'mobile-note.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('attachment retained behind overlay'),
+  });
+  await expect(page.locator('.attachmentChip')).toContainText('mobile-note.txt');
   await expect(page.getByText('Existing mobile message')).toBeVisible();
+  const chatContainer = page.locator('.chatContainer');
+  const preservedScrollTop = await chatContainer.evaluate((element) => {
+    element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
+    return element.scrollTop;
+  });
+  expect(preservedScrollTop).toBeGreaterThan(0);
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
   await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 400, y: 100 } });
 
   await expect(composer).toHaveValue('unsent mobile draft');
+  await expect(page.locator('.attachmentChip')).toContainText('mobile-note.txt');
   await expect(page.getByText('Existing mobile message')).toBeVisible();
+  await expect.poll(() => chatContainer.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
   await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+});
+
+test('keeps navigation, composer, and overlays usable in landscape', async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  const composer = page.locator('.chatInputDock');
+  const send = page.getByRole('button', { name: 'Send message' });
+  await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();
+  await expect(composer).toBeVisible();
+  await expect(send).toBeVisible();
+
+  for (const locator of [composer, send]) {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(844);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(390);
+  }
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  const navigation = page.getByRole('dialog', { name: 'Chats and files navigation' });
+  await expect(navigation).toBeVisible();
+  const navigationBox = await navigation.boundingBox();
+  expect(navigationBox).not.toBeNull();
+  expect(navigationBox!.height).toBeLessThanOrEqual(390);
 });
 
 test('restores the inline body overflow that existed before mobile scroll lock', async ({ page }) => {
@@ -259,6 +298,7 @@ test('closes the drawer after selecting a file and preserves the Files tree when
         ],
       }),
     });
+
   });
 
   await page.locator('textarea.composerTextarea').fill('draft retained behind file');
@@ -289,6 +329,28 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => filesList.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
+});
+
+test('searches, refreshes, and previews images from the mobile Files drawer', async ({ page }) => {
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files agent' }).click();
+  await page.getByRole('option', { name: 'Alpha Agent' }).click();
+
+  const search = page.getByRole('searchbox', { name: 'Search files' });
+  await search.fill('mobile.png');
+  await expect(page.getByRole('button', { name: 'mobile.png' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'README.md' })).toHaveCount(0);
+
+  const requestCount = fixture.markdownListRequests.length;
+  await page.getByRole('button', { name: 'Refresh files' }).click();
+  await expect.poll(() => fixture.markdownListRequests.length).toBeGreaterThan(requestCount);
+
+  await page.getByRole('button', { name: 'mobile.png' }).click();
+  await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByRole('img', { name: 'assets/mobile.png' })).toBeVisible();
+  await expect(page.getByText('Image preview')).toBeVisible();
+  await expect(page.getByText('Use the desktop interface to edit files.')).toHaveCount(0);
 });
 
 test('keeps navigation open and reports a failed file preview', async ({ page }) => {

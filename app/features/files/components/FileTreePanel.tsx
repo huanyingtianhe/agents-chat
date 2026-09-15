@@ -17,7 +17,7 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
   const renderNodes = (nodes: FileTreeNode[], depth: number): ReactNode[] => {
     return nodes.map(node => {
       if (node.isDir) {
-        const expanded = workspace.mdExpandedDirs.has(node.path);
+        const expanded = Boolean(workspace.mdFileQuery.trim()) || workspace.mdExpandedDirs.has(node.path);
         return (
           <div key={node.path}>
             <button
@@ -64,13 +64,37 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
             onChange={(v) => workspace.selectMdAgent(v || null)}
           />
         </div>
-        <button
-          className={`mdDiffToggle ${workspace.mdDiffOnly ? 'active' : ''}`}
-          title={workspace.mdDiffOnly ? 'Showing changed files (git diff)' : 'Show only changed files'}
-          onClick={workspace.toggleMdDiffOnly}
-        >
-          {workspace.mdDiffOnly ? '🔀 Changed' : '🔀 Diff'}
-        </button>
+        {workspace.mdSelectedAgentId ? (
+          <>
+            <div className="mdFileSearchRow">
+              <input
+                type="search"
+                className="mdFileSearch"
+                aria-label="Search files"
+                placeholder="Search files"
+                value={workspace.mdFileQuery}
+                onChange={(event) => workspace.setMdFileQuery(event.target.value)}
+              />
+              <button
+                type="button"
+                className="mdFileRefresh"
+                aria-label="Refresh files"
+                title="Refresh files"
+                disabled={workspace.mdFilesLoading}
+                onClick={() => void workspace.refreshMdFiles()}
+              >
+                ↻
+              </button>
+            </div>
+            <button
+              className={`mdDiffToggle ${workspace.mdDiffOnly ? 'active' : ''}`}
+              title={workspace.mdDiffOnly ? 'Showing changed files (git diff)' : 'Show only changed files'}
+              onClick={workspace.toggleMdDiffOnly}
+            >
+              {workspace.mdDiffOnly ? '🔀 Changed' : '🔀 Diff'}
+            </button>
+          </>
+        ) : null}
       </div>
       <div className="mdFilesList">
         {workspace.mdFilesLoading && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>Loading…</div>}
@@ -81,8 +105,17 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
             <div style={{ fontSize: 11, marginTop: 4 }}>You don&apos;t have access to this agent&apos;s files</div>
           </div>
         )}
+        {!workspace.mdFilesLoading && workspace.mdFilesError && workspace.mdFilesError !== 'unauthorized' && (
+          <div className="fileWorkspaceListError" role="alert">
+            <span>{workspace.mdFilesError}</span>
+            <button type="button" onClick={() => void workspace.refreshMdFiles()}>Retry</button>
+          </div>
+        )}
         {!workspace.mdFilesLoading && !workspace.mdFilesError && workspace.mdSelectedAgentId && workspace.mdFilesList.length === 0 && (
           <div className="muted" style={{ padding: 16, textAlign: 'center' }}>{workspace.mdDiffOnly ? 'No changed files' : 'No files found'}</div>
+        )}
+        {!workspace.mdFilesLoading && !workspace.mdFilesError && workspace.mdSelectedAgentId && workspace.mdFilesList.length > 0 && workspace.mdFileTree.length === 0 && (
+          <div className="muted" style={{ padding: 16, textAlign: 'center' }}>No matching files</div>
         )}
         {!workspace.mdFilesLoading && workspace.mdFileTree.length > 0 && (
           <div className="mdTree">{renderNodes(workspace.mdFileTree, 0)}</div>

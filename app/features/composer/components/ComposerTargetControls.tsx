@@ -3,6 +3,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { AgentModel } from '../../agents/agentTypes';
 import { AgentModelSelect } from '../../agents/components/AgentModelSelect';
+import { getAgentModelMenuKey } from '../../agents/agentModelMenuHelpers';
 import type { OrchestrationMode } from '../../chat/chatTypes';
 
 type ComposerTargetControlsProps = {
@@ -16,8 +17,8 @@ type ComposerTargetControlsProps = {
   currentChatId: string;
   getAgentModels: (agentId: string) => AgentModel[];
   getSelectedModelIdForAgent: (agentId: string) => string;
-  openModelMenuAgentId: string | null;
-  setOpenModelMenuAgentId: Dispatch<SetStateAction<string | null>>;
+  openModelMenuKey: string | null;
+  setOpenModelMenuKey: Dispatch<SetStateAction<string | null>>;
   modelMenuRefs: MutableRefObject<Map<string, HTMLSpanElement | null>>;
   setSelectedModelForAgent: (agentId: string, modelId: string) => void;
   clearLastUsedAgent: () => void;
@@ -28,21 +29,27 @@ export function ComposerTargetControls({
   mentionedAgentIds, orchestrationEnabled, orchestrationMode,
   pendingWorkflowName, onOpenWorkflowPicker,
   effectiveComposerAgentId, rememberedComposerAgentId, currentChatId,
-  getAgentModels, getSelectedModelIdForAgent, openModelMenuAgentId, setOpenModelMenuAgentId,
+  getAgentModels, getSelectedModelIdForAgent, openModelMenuKey, setOpenModelMenuKey,
   modelMenuRefs, setSelectedModelForAgent, clearLastUsedAgent,
   setOrchestrationMode,
 }: ComposerTargetControlsProps) {
-  const modelSelect = (agentId: string) => (
-    <AgentModelSelect
-      agentId={agentId}
-      models={getAgentModels(agentId)}
-      selectedModelId={getSelectedModelIdForAgent(agentId)}
-      isOpen={openModelMenuAgentId === agentId}
-      onToggle={() => setOpenModelMenuAgentId((p) => (p === agentId ? null : agentId))}
-      onSelectModel={(modelId) => { setSelectedModelForAgent(agentId, modelId); setOpenModelMenuAgentId(null); }}
-      wrapRef={(el) => modelMenuRefs.current.set(agentId, el)}
-    />
-  );
+  const modelSelect = (agentId: string) => {
+    const menuKey = getAgentModelMenuKey('composer', agentId);
+    return (
+      <AgentModelSelect
+        agentId={agentId}
+        models={getAgentModels(agentId)}
+        selectedModelId={getSelectedModelIdForAgent(agentId)}
+        isOpen={openModelMenuKey === menuKey}
+        onToggle={() => setOpenModelMenuKey((current) => (current === menuKey ? null : menuKey))}
+        onSelectModel={(modelId) => {
+          setSelectedModelForAgent(agentId, modelId);
+          setOpenModelMenuKey(null);
+        }}
+        wrapRef={(element) => modelMenuRefs.current.set(menuKey, element)}
+      />
+    );
+  };
 
   const workflowPill = onOpenWorkflowPicker ? (
     <button

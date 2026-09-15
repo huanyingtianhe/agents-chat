@@ -53,7 +53,7 @@ export function useAgentPanelState({
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
 
   // UI-only model menu state (open/close dropdown, refs)
-  const [openModelMenuAgentId, setOpenModelMenuAgentId] = useState<string | null>(null);
+  const [openModelMenuKey, setOpenModelMenuKey] = useState<string | null>(null);
   const modelMenuRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map());
 
   // Add agent menu
@@ -327,22 +327,22 @@ export function useAgentPanelState({
     setAgentAccessLoading(false);
   }
 
-  function openModelSettings(agentId: string) { setOpenModelMenuAgentId(agentId); }
-  function closeModelSettings() { setOpenModelMenuAgentId(null); }
+  function openModelSettings(menuKey: string) { setOpenModelMenuKey(menuKey); }
+  function closeModelSettings() { setOpenModelMenuKey(null); }
 
   useEffect(() => {
-    const anyOpen = openModelMenuAgentId || showAgentSettings || showAddAgent || showAddRemoteAgent || showAgentAddMenu;
+    const anyOpen = openModelMenuKey || showAgentSettings || showAddAgent || showAddRemoteAgent || showAgentAddMenu;
     if (!anyOpen) return;
     function handlePointerDown(event: MouseEvent) {
-      if (!openModelMenuAgentId) return;
-      const wrap = modelMenuRefs.current.get(openModelMenuAgentId);
+      if (!openModelMenuKey) return;
+      const wrap = modelMenuRefs.current.get(openModelMenuKey);
       if (wrap && !wrap.contains(event.target as Node)) {
-        setOpenModelMenuAgentId(null);
+        setOpenModelMenuKey(null);
       }
     }
     function handleKey(event: globalThis.KeyboardEvent) {
       if (event.key !== 'Escape') return;
-      if (openModelMenuAgentId) { event.stopImmediatePropagation(); setOpenModelMenuAgentId(null); return; }
+      if (openModelMenuKey) { event.stopImmediatePropagation(); setOpenModelMenuKey(null); return; }
       if (showAgentSettings) { event.stopImmediatePropagation(); closeAgentSettings(); return; }
       if (showAddAgent) { event.stopImmediatePropagation(); closeAddAgent(); return; }
       if (showAddRemoteAgent) { event.stopImmediatePropagation(); closeAddRemoteAgent(); return; }
@@ -354,7 +354,7 @@ export function useAgentPanelState({
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleKey, { capture: true });
     };
-  }, [openModelMenuAgentId, showAgentSettings, showAddAgent, showAddRemoteAgent, showAgentAddMenu]);
+  }, [openModelMenuKey, showAgentSettings, showAddAgent, showAddRemoteAgent, showAgentAddMenu]);
 
   // Minimal AgentPanelState/Actions compat
   const formValues: Record<string, string> = {
@@ -423,8 +423,8 @@ export function useAgentPanelState({
     removeAccess,
 
     // UI-only model menu state
-    openModelMenuAgentId,
-    setOpenModelMenuAgentId,
+    openModelMenuKey,
+    setOpenModelMenuKey,
     modelMenuRefs,
 
     // Model settings actions

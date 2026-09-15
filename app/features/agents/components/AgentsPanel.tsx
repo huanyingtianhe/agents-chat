@@ -5,6 +5,7 @@ import type { Agent } from '../agentTypes';
 import type { NodeData } from '../../nodes/nodeTypes';
 import type { AccessEntry } from '../hooks/useAgentPanelState';
 import { useAgentPanelState } from '../hooks/useAgentPanelState';
+import { getAgentModelMenuKey } from '../agentModelMenuHelpers';
 import { AgentModelSelect } from './AgentModelSelect';
 import { AgentAuthControl } from './AgentAuthControl';
 import './AgentAuthControl.css';
@@ -85,8 +86,8 @@ export function AgentsPanel({
     addAccess,
     removeAccess,
     openAgentSettings,
-    openModelMenuAgentId,
-    setOpenModelMenuAgentId,
+    openModelMenuKey,
+    setOpenModelMenuKey,
     modelMenuRefs,
     formError,
   } = panelState;
@@ -183,6 +184,7 @@ export function AgentsPanel({
             const activeAgent = agents.find((a) => a.id === selectedAgentFilter);
             const models = activeAgent?.models || [];
             if (!models.length) return null;
+            const menuKey = getAgentModelMenuKey('panel', activeAgent!.id);
             return (
               <div className="agentSidebarModelRow">
                 <span className="agentSidebarModelLabel">Model</span>
@@ -190,13 +192,13 @@ export function AgentsPanel({
                   agentId={activeAgent!.id}
                   models={models}
                   selectedModelId={selectedAgentModels[activeAgent!.id] || ''}
-                  isOpen={openModelMenuAgentId === activeAgent!.id}
-                  onToggle={() => setOpenModelMenuAgentId((p) => (p === activeAgent!.id ? null : activeAgent!.id))}
+                  isOpen={openModelMenuKey === menuKey}
+                  onToggle={() => setOpenModelMenuKey((current) => (current === menuKey ? null : menuKey))}
                   onSelectModel={(modelId) => {
                     setSelectedModelForAgent(activeAgent!.id, modelId);
-                    setOpenModelMenuAgentId(null);
+                    setOpenModelMenuKey(null);
                   }}
-                  wrapRef={(el) => modelMenuRefs.current.set(activeAgent!.id, el)}
+                  wrapRef={(element) => modelMenuRefs.current.set(menuKey, element)}
                   isEnsuring={ensuringAgentModels[activeAgent!.id]}
                 />
               </div>

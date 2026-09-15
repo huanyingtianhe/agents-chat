@@ -8,6 +8,8 @@ import {
   toAgentResumeOutcome,
 } from './reconcileStalePendingMessages';
 
+export type LoadChatResult = 'loaded' | 'failed' | 'superseded';
+
 export type PersistenceContext = {
   acp: (body: Record<string, unknown>) => Promise<any>;
   currentChatIdRef: MutableRefObject<string>;
@@ -143,12 +145,16 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     if (opts?.clearAgentFilter !== false) ctx.onClearAgentFilter?.();
   }
 
-  async function loadChat(chatId: string) {
+  async function loadChat(
+    chatId: string,
+    isCurrentSelection: () => boolean = () => true,
+  ): Promise<LoadChatResult> {
     const currentChatId = ctx.currentChatIdRef.current;
-    if (chatId === currentChatId) return;
+    if (chatId === currentChatId) return 'loaded';
 
     ctx.setActiveSidebarChatId(chatId);
     await saveCurrentChatToHistory(true);
+    if (!isCurrentSelection()) return 'superseded';
 
     let targetMessages: ChatMessage[] = [];
     let targetName = ctx.chatHistoryRef.current.find(c => c.id === chatId)?.name || chatId;
@@ -158,9 +164,11 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     try {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
+      if (!isCurrentSelection()) return 'superseded';
       if (!res.ok || !data.ok || !data.chat) {
         ctx.addMessage({ type: 'system', content: `Failed to load chat: ${data.error || 'not found'}` });
-        return;
+        ctx.setActiveSidebarChatId(currentChatId);
+        return 'failed';
       }
       if (data.ok && data.chat) {
         agentSessions = data.chat.agentSessions || {};
@@ -180,10 +188,13 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         ctx.currentAgentSessionsRef.current = agentSessions;
       }
     } catch {
+      if (!isCurrentSelection()) return 'superseded';
       ctx.addMessage({ type: 'system', content: 'Failed to load chat. Please try again.' });
-      return;
+      ctx.setActiveSidebarChatId(currentChatId);
+      return 'failed';
     }
 
+    if (!isCurrentSelection()) return 'superseded';
     if (targetMessages.length === 0) {
       targetMessages = [{
         id: 'welcome', type: 'system',
@@ -227,6 +238,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const hasAnySessions = Object.values(agentSessions).some(s => !!lastSessionId(s));
     ctx.needsContextRestoreRef.current = true;
     if (ctx.prepareResume) await ctx.prepareResume(chatId);
+    if (!isCurrentSelection()) return 'superseded';
     if (hasAnySessions) {
       const sessionEntries = Object.entries(agentSessions)
         .map(([agentId, raw]) => [agentId, lastSessionId(raw)] as [string, string | null])
@@ -236,6 +248,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
           ctx.acp({ action: 'resume-session', agentId, sessionId, chatId }),
         ),
       );
+      if (!isCurrentSelection()) return 'superseded';
       const resumeOutcomes = resumeResults.map((result, index) =>
         toAgentResumeOutcome(sessionEntries[index][0], result));
       const allLoaded = resumeResults.every(r => r.status === 'fulfilled' && (r as any).value?.loaded === true);
@@ -266,11 +279,15 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
       if (reconciliation.changed) {
         ctx.setMessagesForChat(chatId, reconciliation.messages);
         await saveChatToHistory(chatId, true);
+        if (!isCurrentSelection()) return 'superseded';
       }
     }
+    if (!isCurrentSelection()) return 'superseded';
     if (ctx.finalizeResume) await ctx.finalizeResume(chatId);
+    if (!isCurrentSelection()) return 'superseded';
     ctx.onCloseChatsPanel?.();
     ctx.onCloseAgentsPanel?.();
+    return 'loaded';
   }
 
   async function createNewChat(chatAgentFilter?: string | null) {

@@ -3,6 +3,7 @@ import type { Agent } from '../../agents/agentTypes';
 import type { ChatAttachment } from '../../composer/attachmentTypes';
 import type { ChatHistoryEntry, ChatMessage, OrchestrationMode, ShareDialog } from '../chatTypes';
 import type { PtyPhase } from './chatRunLoop';
+import type { LoadChatResult } from './chatPersistenceService';
 
 export type ComposerRuntime = {
   input: string;
@@ -30,7 +31,10 @@ export type ChatRuntime = {
   stopRun: () => Promise<void>;
   retryFailedSend: (messageId: string) => Promise<void>;
   createNewChat: () => Promise<void>;
-  loadChat: (chatId: string) => Promise<void>;
+  loadChat: (
+    chatId: string,
+    isCurrentSelection?: () => boolean,
+  ) => Promise<LoadChatResult>;
 };
 
 export type EnsureAgentModelsOptions = {

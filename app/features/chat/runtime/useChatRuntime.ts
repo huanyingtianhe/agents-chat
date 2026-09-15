@@ -264,11 +264,14 @@ export function useChatRuntime({
   hydrateOrchestrationsForChatRef.current = hydrateOrchestrationsForChat;
   reconcileRunningWorkflowNodesRef.current = reconcileRunningWorkflowNodes;
 
-  const wrappedLoadChat = async (chatId: string) => {
+  const wrappedLoadChat = (
+    chatId: string,
+    isCurrentSelection?: () => boolean,
+  ) => {
     // persistHandlers.loadChat now invokes hydrate (prepareResume) before
     // session-resume and reconcile (finalizeResume) after, so no extra
     // hydrate call needed here.
-    await persistHandlers.loadChat(chatId);
+    return persistHandlers.loadChat(chatId, isCurrentSelection);
   };
 
   /* ── Failed send helpers ── */

@@ -36,6 +36,8 @@ export type StoredMessage = {
   sendError?: string;
   resendAgentIds?: string[];
   resendMessage?: string;
+  pending?: boolean;
+  statusText?: string;
 };
 
 export type StoredChat = {
@@ -273,12 +275,19 @@ export async function saveChat(userId: string, chat: StoredChat): Promise<void> 
 }
 
 export function mergeStoredMessages(existing: StoredMessage[], incoming: StoredMessage[]): StoredMessage[] {
+  const existingById = new Map(existing.map(message => [message.id, message]));
   const merged = new Map(
     existing
       .filter(message => message.type === 'user')
       .map(message => [message.id, message]),
   );
-  for (const message of incoming) merged.set(message.id, message);
+  for (const message of incoming) {
+    const saved = existingById.get(message.id);
+    merged.set(
+      message.id,
+      saved?.pending === false && message.pending === true ? saved : message,
+    );
+  }
   return [...merged.values()].sort((a, b) => a.ts - b.ts);
 }
 

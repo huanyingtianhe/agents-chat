@@ -13,7 +13,7 @@ async function login(page: Page) {
 test('reconciles stale pending output after a successful session resume', async ({ page }) => {
   const chatId = `stale-pending-${Date.now()}`;
   const anchorChatId = `stale-pending-anchor-${Date.now()}`;
-  const chatName = 'Stale pending reconciliation';
+  const chatName = `Stale pending reconciliation ${chatId}`;
   let reconciliationSaves = 0;
 
   await page.route('**/api/acp', async (route) => {
@@ -56,6 +56,12 @@ test('reconciles stale pending output after a successful session resume', async 
 
   await login(page);
   await page.evaluate(async ({ id, anchorId, name }) => {
+    const existing = await fetch('/api/chats').then((response) => response.json());
+    await Promise.all(
+      (existing.chats || [])
+        .filter((chat: { id: string }) => chat.id.startsWith('stale-pending-'))
+        .map((chat: { id: string }) => fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, { method: 'DELETE' })),
+    );
     const now = Date.now();
     await fetch('/api/chats', {
       method: 'POST',
@@ -75,12 +81,12 @@ test('reconciles stale pending output after a successful session resume', async 
               pending: true,
               statusText: 'Reading shell output',
               ts: now,
-              parts: [{
+              parts: Array.from({ length: 1_734 }, (_, index) => ({
                 kind: 'tool',
-                toolName: 'read_shell',
-                result: 'Preserved historical tool output',
-                done: false,
-              }],
+                toolName: index === 1_733 ? 'read_shell' : `historical_tool_${index}`,
+                result: 'Preserved historical tool output '.repeat(60),
+                done: index !== 1_733,
+              })),
             },
           ],
           agentSessions: { alpha: 'missing-session' },
@@ -110,12 +116,12 @@ test('reconciles stale pending output after a successful session resume', async 
 
   await page.reload();
   await page.waitForSelector('.chatContainer', { timeout: 30_000 });
-  await page.locator('.chatHistoryRow', { hasText: chatName }).locator('.chatHistoryItem').click();
+  await page.getByTitle(chatName, { exact: true }).click();
   const agentMessage = page.locator('.message.agent', { hasText: 'read_shell' });
-  await expect(agentMessage).toBeVisible();
-  await expect(agentMessage.locator('.ptyStatusBadge')).toHaveText('Interrupted');
+  await expect(agentMessage).toBeVisible({ timeout: 30_000 });
+  await expect(agentMessage.locator('.ptyStatusBadge')).toHaveText('Interrupted', { timeout: 30_000 });
   await expect(page.getByText('Reading shell output')).toHaveCount(0);
-  await expect(agentMessage.locator('.toolCallName')).toHaveText('read_shell');
+  await expect(agentMessage.locator('.toolCallName').filter({ hasText: /^read_shell$/ })).toHaveText('read_shell');
   await expect.poll(() => reconciliationSaves).toBe(1);
 
   const persisted = await page.evaluate(async (id) => {
@@ -128,12 +134,13 @@ test('reconciles stale pending output after a successful session resume', async 
     statusText: 'Interrupted',
     content: '⏹ Interrupted',
   });
-  expect(reconciledMessage.parts).toEqual([{
+  expect(reconciledMessage.parts).toHaveLength(1_734);
+  expect(reconciledMessage.parts.at(-1)).toEqual({
     kind: 'tool',
     toolName: 'read_shell',
-    result: 'Preserved historical tool output',
+    result: 'Preserved historical tool output '.repeat(60),
     done: false,
-  }]);
+  });
 
   await page.reload();
   await expect(page.locator('.message.agent .ptyStatusBadge')).toHaveText('Interrupted');

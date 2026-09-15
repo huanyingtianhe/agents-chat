@@ -253,15 +253,30 @@ test('keeps wide message content inside the viewport and hides unavailable voice
   }).toBe(true);
 });
 
-test('closes navigation only after a successful chat selection', async ({ page }) => {
+test('closes navigation immediately and masks chat while selection loads', async ({ page }) => {
+  let releaseLoad!: () => void;
+  const loadGate = new Promise<void>((resolve) => { releaseLoad = resolve; });
+  await page.route('**/api/chats**', async (route) => {
+    const id = new URL(route.request().url()).searchParams.get('id');
+    if (id === 'second-mobile-chat') await loadGate;
+    await route.fallback();
+  });
+
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Second mobile chat' }).click();
 
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByRole('status', { name: 'Loading Second mobile chat' })).toBeVisible();
+  await expect(page.locator('textarea.composerTextarea')).toHaveCount(0);
+  await expect(page.getByText('Existing mobile message')).toHaveCount(0);
+
+  releaseLoad();
   await expect(page.getByText('Second chat message')).toBeVisible();
+  await expect(page.locator('.chatContainer')).toBeFocused();
+  await expect(page.locator('textarea.composerTextarea')).not.toBeFocused();
 });
 
-test('keeps navigation open after a failed chat selection', async ({ page }) => {
+test('closes navigation immediately and restores the current chat after a failed selection', async ({ page }) => {
   await page.route('**/api/chats**', async (route) => {
     const id = new URL(route.request().url()).searchParams.get('id');
     if (id === 'second-mobile-chat') {
@@ -276,7 +291,9 @@ test('keeps navigation open after a failed chat selection', async ({ page }) => 
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Second mobile chat' }).click();
-  await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
+  await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByText('Existing mobile message')).toBeVisible();
+  await expect(page.getByText('Failed to load chat: Chat unavailable')).toBeVisible();
 });
 
 test('closes the drawer after selecting a file and preserves the Files tree when reopening', async ({ page }) => {

@@ -114,10 +114,17 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     messages: [{ id: 'second-message', type: 'user', content: 'Second chat message', ts: 901 }],
     agentSessions: {},
   };
+  const thirdChat = {
+    id: 'third-mobile-chat',
+    name: 'Third mobile chat',
+    ts: 800,
+    messages: [{ id: 'third-message', type: 'user', content: 'Third chat message', ts: 801 }],
+    agentSessions: {},
+  };
 
   await page.route('**/api/chats**', async (route) => {
     const id = new URL(route.request().url()).searchParams.get('id');
-    const selectedChat = id === secondChat.id ? secondChat : chat;
+    const selectedChat = id === secondChat.id ? secondChat : id === thirdChat.id ? thirdChat : chat;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(id
@@ -127,6 +134,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
           chats: [
             { id: chat.id, name: chat.name, ts: chat.ts },
             { id: secondChat.id, name: secondChat.name, ts: secondChat.ts },
+            { id: thirdChat.id, name: thirdChat.name, ts: thirdChat.ts },
           ],
           lastChatId: chat.id,
         }),

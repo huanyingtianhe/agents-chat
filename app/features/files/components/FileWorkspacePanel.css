@@ -74,6 +74,9 @@
 .mdEditorLive{flex:1;min-height:0;overflow-y:auto;position:relative;}
 .mdEditorSimple{flex:1;min-height:0;display:flex;}
 .mdEditorSimple .mdEditorTextarea{flex:1;border:none;border-radius:0;}
+.mobileMarkdownViewer{flex:1;min-width:0;min-height:0;overflow:auto;padding:20px clamp(16px, 5vw, 28px) 32px;background:var(--panel-bg);}
+.mobileMarkdownViewer .markdownBody{min-width:0;max-width:760px;margin:0 auto;}
+.mobileMarkdownViewer .markdownBody pre,.mobileMarkdownViewer .markdownBody table{display:block;max-width:100%;overflow-x:auto;}
 .mdHtmlPreviewWrap{flex:1;min-height:0;padding:16px;background:var(--input-bg);}
 .mdHtmlPreviewFrame{width:100%;height:100%;border:1px solid var(--border);border-radius:12px;background:#fff;}
 .mdImagePreviewWrap{flex:1;min-height:0;display:grid;place-items:center;overflow:auto;padding:16px;background:var(--input-bg);}
@@ -159,6 +162,7 @@
   .mdEditorToolbarRight{align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;}
   .mobileDesktopHint{order:3;flex-basis:100%;text-align:right;}
   .fileContentWithLines{font-size:12px;}
+  .mobileMarkdownViewer{padding:16px 14px calc(24px + env(safe-area-inset-bottom));overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
   .mdFileSearch,.mdFileRefresh{min-height:44px;}
   .commentSidebar{width:min(82vw, 300px);min-width:min(82vw, 300px);position:absolute;right:0;top:0;bottom:0;z-index:4;box-shadow:var(--shadow);}
 }

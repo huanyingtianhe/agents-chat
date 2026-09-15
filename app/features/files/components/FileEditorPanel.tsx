@@ -212,6 +212,14 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
         <div className="mdImagePreviewWrap">
           <img className="mdImagePreview" src={workspace.mdFileContent} alt={filePath} />
         </div>
+      ) : mobileReadOnly && isMarkdownFile(filePath) ? (
+        <div className="mobileMarkdownViewer">
+          <div className="markdownBody">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+              {workspace.mdEditContent}
+            </ReactMarkdown>
+          </div>
+        </div>
       ) : mobileReadOnly ? (
         <div className="mdEditorSimple">
           <div className="fileContentWithLines" ref={selection.fileContentRef} onMouseUp={selection.handleTextSelection} onScroll={selection.handleFileContentScroll}>

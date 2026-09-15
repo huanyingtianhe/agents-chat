@@ -1330,10 +1330,11 @@
     box-shadow: var(--shadow);
     transition: transform 180ms ease;
   }
-  .chatPageRoot .participantsSidebar {
+  .chatPageRoot .page .participantsSidebar {
     display: flex;
     left: 0;
     width: min(84vw, 320px);
+    overflow: hidden;
     transform: translateX(-105%);
     border-right: 1px solid var(--border);
   }

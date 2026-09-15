@@ -42,14 +42,14 @@
 - [x] Add typed `mdFileQuery`, filtered tree calculation, and `refreshMdFiles()` state to `useFileWorkspaceState`.
 - [x] Add an accessible `Search files` input and `Refresh files` button to `FileTreePanel`; expand matching directory paths while searching.
 - [x] Surface list failures with a Retry action instead of silently presenting an empty tree.
-- [ ] Run the shared mobile scenario on Android Chromium and iPhone WebKit. Blocked locally because Playwright browser processes require the unavailable system library `libatk-1.0.so.0`; CI installs browser dependencies with `playwright install --with-deps`.
+- [x] Run the shared mobile scenario on Android Chromium and iPhone WebKit.
 
 ### Task 4: Complete state and orientation acceptance coverage
 
 - [x] Extend the overlay state test to attach a file, scroll chat history away from the bottom, open and close navigation, and verify draft, attachment, message, and scroll state are unchanged.
 - [x] Add a shared landscape scenario that resizes to `844x390` and verifies header, composer, send control, and an overlay remain inside the viewport.
-- [ ] Run both mobile spec files against Android Chromium and iPhone WebKit. Blocked locally because Playwright browser processes require the unavailable system library `libatk-1.0.so.0`.
-- [ ] Run the desktop header regression scenario and `npm run build`. The build passes; browser execution is blocked by the same missing system library.
+- [x] Run both mobile spec files against Android Chromium and iPhone WebKit (52/52 passing).
+- [x] Run the desktop header regression scenario and `npm run build`.
 
 ### Task 5: Final spec review
 

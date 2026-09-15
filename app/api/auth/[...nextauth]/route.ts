@@ -4,7 +4,11 @@ import AzureADProvider from 'next-auth/providers/azure-ad';
 import GitHubProvider from 'next-auth/providers/github';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { type NextRequest } from 'next/server';
-import { getGitHubAllowedEmails, isGitHubEmailAllowed } from '@/lib/auth';
+import {
+  getGitHubAllowedEmails,
+  isGitHubEmailAllowed,
+  shouldUseSecureAuthCookies,
+} from '@/lib/auth';
 
 /** Constant-time string comparison to prevent timing attacks. */
 function safeEqual(a: string, b: string): boolean {
@@ -91,6 +95,11 @@ providers.push(
   }),
 );
 
+const secureAuthCookies = shouldUseSecureAuthCookies(
+  process.env.NEXTAUTH_URL,
+  process.env.NODE_ENV,
+);
+
 export const authOptions: AuthOptions = {
   debug: true,
   providers,
@@ -103,7 +112,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     callbackUrl: {
@@ -112,7 +121,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     state: {
@@ -121,7 +130,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     pkceCodeVerifier: {
@@ -130,7 +139,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'none',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     sessionToken: {
@@ -139,7 +148,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
   },

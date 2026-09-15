@@ -2,6 +2,7 @@ import {
   getGitHubAllowedEmails,
   isGitHubEmailAllowed,
   parseEmailList,
+  shouldUseSecureAuthCookies,
 } from '../lib/auth';
 import { authOptions } from '../app/api/auth/[...nextauth]/route';
 
@@ -40,6 +41,21 @@ expectEqual(
   isGitHubEmailAllowed('other@example.com', ['alice@example.com']),
   false,
   'denies an email outside the allowlist',
+);
+expectEqual(
+  shouldUseSecureAuthCookies('http://localhost:3010', 'development'),
+  false,
+  'allows auth cookies on an explicit HTTP development URL',
+);
+expectEqual(
+  shouldUseSecureAuthCookies('https://chat.example.com', 'production'),
+  true,
+  'keeps auth cookies secure on HTTPS',
+);
+expectEqual(
+  shouldUseSecureAuthCookies(undefined, 'production'),
+  true,
+  'defaults production auth cookies to secure',
 );
 
 async function testSignInCallback(): Promise<void> {

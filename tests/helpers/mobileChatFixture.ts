@@ -351,9 +351,14 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
 
 export async function loginMobileFixture(page: Page): Promise<void> {
   await page.goto('/login');
-  await expect(page.locator('form')).toHaveAttribute('data-hydrated', 'true');
-  await page.getByPlaceholder('Admin username').fill(process.env.ADMIN_USERNAME || 'admin');
-  await page.getByPlaceholder('Password').fill(process.env.ADMIN_PASSWORD || 'admin123');
-  await page.locator('button[type="submit"]').click();
+  const username = page.getByPlaceholder('Admin username');
+  const password = page.getByPlaceholder('Password');
+  const submit = page.locator('button[type="submit"]');
+  await expect(async () => {
+    await username.fill(process.env.ADMIN_USERNAME || 'admin');
+    await password.fill(process.env.ADMIN_PASSWORD || 'admin123');
+    await expect(submit).toBeEnabled();
+  }).toPass({ timeout: 30_000 });
+  await submit.click();
   await expect(page.locator('.message.user')).toBeVisible({ timeout: 30_000 });
 }

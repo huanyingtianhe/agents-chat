@@ -8,10 +8,15 @@ const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
-  await expect(page.locator('form')).toHaveAttribute('data-hydrated', 'true', { timeout: 30000 });
-  await page.locator('input[placeholder="Admin username"]').fill(process.env.ADMIN_USERNAME || 'admin');
-  await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
-  await page.locator('button[type="submit"]').click();
+  const username = page.locator('input[placeholder="Admin username"]');
+  const password = page.locator('input[placeholder="Password"]');
+  const submit = page.locator('button[type="submit"]');
+  await expect(async () => {
+    await username.fill(process.env.ADMIN_USERNAME || 'admin');
+    await password.fill(process.env.ADMIN_PASSWORD || 'admin123');
+    await expect(submit).toBeEnabled();
+  }).toPass({ timeout: 30000 });
+  await submit.click();
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   await page.waitForTimeout(500);
 }

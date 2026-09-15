@@ -177,6 +177,7 @@ test('preserves composer and current chat state while opening and closing naviga
 
 test('keeps navigation, composer, and overlays usable in landscape', async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 390 });
+  await setTestVisualViewport(page, 390, 0);
   const composer = page.locator('.chatInputDock');
   const send = page.getByRole('button', { name: 'Send message' });
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();

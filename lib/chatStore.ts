@@ -38,6 +38,7 @@ export type StoredMessage = {
   resendMessage?: string;
   pending?: boolean;
   statusText?: string;
+  ptyPhase?: string;
 };
 
 export type StoredChat = {
@@ -300,6 +301,37 @@ export async function mergeChat(userId: string, chat: StoredChat): Promise<void>
       : chat);
   });
   merge();
+}
+
+export async function reconcileStalePendingMessagesForAgent(
+  userId: string,
+  chatId: string,
+  agentId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const reconcile = db.transaction(() => {
+    const existing = getChatWithDb(db, userId, chatId);
+    if (!existing) return false;
+
+    let changed = false;
+    const messages = existing.messages.map((message) => {
+      if (message.type !== 'agent' || message.agentId !== agentId || message.pending !== true) {
+        return message;
+      }
+      changed = true;
+      return {
+        ...message,
+        content: message.content.trim() ? message.content : '⏹ Interrupted',
+        pending: false,
+        statusText: 'Interrupted',
+        ptyPhase: undefined,
+        userRequest: undefined,
+      };
+    });
+    if (changed) saveChatWithDb(db, userId, { ...existing, messages });
+    return changed;
+  });
+  return reconcile();
 }
 
 function mapStoredChatRow(row: any): StoredChat {

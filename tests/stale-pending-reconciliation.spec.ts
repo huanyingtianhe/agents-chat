@@ -12,6 +12,7 @@ async function login(page: Page) {
 
 test('reconciles stale pending output after a successful session resume', async ({ page }) => {
   const chatId = `stale-pending-${Date.now()}`;
+  const anchorChatId = `stale-pending-anchor-${Date.now()}`;
   const chatName = 'Stale pending reconciliation';
   let reconciliationSaves = 0;
 
@@ -54,7 +55,7 @@ test('reconciles stale pending output after a successful session resume', async 
   });
 
   await login(page);
-  await page.evaluate(async ({ id, name }) => {
+  await page.evaluate(async ({ id, anchorId, name }) => {
     const now = Date.now();
     await fetch('/api/chats', {
       method: 'POST',
@@ -89,13 +90,27 @@ test('reconciles stale pending output after a successful session resume', async 
     await fetch('/api/chats', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'set-last-chat', chatId: id }),
+      body: JSON.stringify({
+        chat: {
+          id: anchorId,
+          name: 'Reconciliation anchor chat',
+          ts: now + 1,
+          messages: [{ id: 'anchor-user', type: 'user', content: 'Anchor chat', ts: now + 1 }],
+          agentSessions: {},
+        },
+      }),
     });
-  }, { id: chatId, name: chatName });
+    await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-last-chat', chatId: anchorId }),
+    });
+  }, { id: chatId, anchorId: anchorChatId, name: chatName });
   reconciliationSaves = 0;
 
   await page.reload();
   await page.waitForSelector('.chatContainer', { timeout: 30_000 });
+  await page.locator('.chatHistoryRow', { hasText: chatName }).locator('.chatHistoryItem').click();
   const agentMessage = page.locator('.message.agent', { hasText: 'read_shell' });
   await expect(agentMessage).toBeVisible();
   await expect(agentMessage.locator('.ptyStatusBadge')).toHaveText('Interrupted');
@@ -127,4 +142,6 @@ test('reconciles stale pending output after a successful session resume', async 
   await page.goto('about:blank');
   const response = await page.context().request.delete(`${BASE}/api/chats?id=${encodeURIComponent(chatId)}`);
   expect(response.ok()).toBeTruthy();
+  const anchorResponse = await page.context().request.delete(`${BASE}/api/chats?id=${encodeURIComponent(anchorChatId)}`);
+  expect(anchorResponse.ok()).toBeTruthy();
 });

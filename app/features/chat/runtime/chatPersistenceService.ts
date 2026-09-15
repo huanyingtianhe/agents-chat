@@ -2,6 +2,11 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { ChatHistoryEntry, ChatMessage, ShareDialog } from '../chatTypes';
 import { getPersistableMessages, migrateFailedSendWarnings, normalizeChatHistory, lastSessionId } from '../chatHelpers';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
+import {
+  collectInterruptedAgentIds,
+  reconcileStalePendingMessages,
+  toAgentResumeOutcome,
+} from './reconcileStalePendingMessages';
 
 export type PersistenceContext = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -231,6 +236,8 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
           ctx.acp({ action: 'resume-session', agentId, sessionId, chatId }),
         ),
       );
+      const resumeOutcomes = resumeResults.map((result, index) =>
+        toAgentResumeOutcome(sessionEntries[index][0], result));
       const allLoaded = resumeResults.every(r => r.status === 'fulfilled' && (r as any).value?.loaded === true);
       if (allLoaded) ctx.needsContextRestoreRef.current = false;
       for (const [index, r] of resumeResults.entries()) {
@@ -249,6 +256,16 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
           }
           ctx.addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
         }
+      }
+      const currentMessages = ctx.chatMessagesRef.current[chatId]
+        || (ctx.currentChatIdRef.current === chatId ? ctx.messagesRef.current : []);
+      const reconciliation = reconcileStalePendingMessages(
+        currentMessages,
+        collectInterruptedAgentIds(resumeOutcomes),
+      );
+      if (reconciliation.changed) {
+        ctx.setMessagesForChat(chatId, reconciliation.messages);
+        await saveChatToHistory(chatId, true);
       }
     }
     if (ctx.finalizeResume) await ctx.finalizeResume(chatId);

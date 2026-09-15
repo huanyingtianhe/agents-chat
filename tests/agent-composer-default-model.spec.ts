@@ -1,5 +1,4 @@
 import { test, expect, Page } from '@playwright/test';
-import { expectModelPickerSelection, selectModelOption } from './model-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 const ADMIN_USER = 'admin';
@@ -123,19 +122,47 @@ test('composer model picker saves the selected model as a user preference', asyn
 
   await login(page);
   await resetChats(page);
+  await page.getByRole('button', { name: 'Filter chats by primary agent' }).click();
+  await page.getByRole('listbox', { name: 'Filter chats by primary agent' })
+    .getByRole('option', { name: 'Alpha Agent', exact: true })
+    .click();
   await ensureActiveChat(page);
   await page.waitForTimeout(500);
 
   const textarea = page.locator('textarea.composerTextarea');
-  await textarea.fill('@alpha use composer default model');
+  await textarea.fill('use pane-selected model');
 
-  await expectModelPickerSelection(page, 'alpha', 'Claude Sonnet 4.6');
-  await selectModelOption(page, 'alpha', 'GPT-5.2');
-  await expectModelPickerSelection(page, 'alpha', 'GPT-5.2');
+  const composerModel = page.locator('.chatInputDock')
+    .getByRole('button', { name: 'Model for alpha' });
+  await expect(composerModel.locator('.agentModelSelectLabel')).toHaveText('Claude Sonnet 4.6');
+  await page.locator('button[title="Agents"]').click();
+  const paneModel = page.locator('.agentsSidebar')
+    .getByRole('button', { name: 'Model for alpha' });
+  await expect(paneModel).toBeVisible();
+  await paneModel.click();
 
+  const modelMenus = page.getByRole('listbox', { name: 'Model for alpha' });
+  await expect(modelMenus).toHaveCount(1);
+  await expect(paneModel).toHaveAttribute('aria-expanded', 'true');
+  await expect(composerModel).toHaveAttribute('aria-expanded', 'false');
+
+  await page.keyboard.press('Escape');
+  await expect(modelMenus).toHaveCount(0);
+  await expect(paneModel).toHaveAttribute('aria-expanded', 'false');
+
+  await paneModel.click();
+  await expect(modelMenus).toHaveCount(1);
+  await page.locator('.agentsSidebarHeader').click();
+  await expect(modelMenus).toHaveCount(0);
+
+  await paneModel.click();
+  await expect(modelMenus).toHaveCount(1);
+  await modelMenus.getByRole('option', { name: 'GPT-5.2', exact: true }).click();
+  await expect(modelMenus).toHaveCount(0);
+  await expect(paneModel.locator('.agentModelSelectLabel')).toHaveText('GPT-5.2');
+  await expect(composerModel.locator('.agentModelSelectLabel')).toHaveText('GPT-5.2');
   await expect.poll(() => modelPrefRequests.map((request) => `${request.agentId}:${request.modelId}`)).toEqual(['alpha:gpt-5.2']);
 
-  await page.locator('button[title="Agents"]').click();
   await page.locator('.agentListItem', { hasText: 'Alpha Agent' }).click();
   await expect(page.locator('[data-testid="agent-settings-default-model-select"]')).toHaveCount(0);
   await expect(page.locator('.agentSettingsModal')).not.toContainText('Default Model');

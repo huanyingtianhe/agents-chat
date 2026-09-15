@@ -17,9 +17,7 @@ desktop rendering branch, so mobile users see source syntax such as `#`,
 The mobile read-only branch becomes file-type aware:
 
 - Markdown uses rendered view.
-- Plain text and source code continue to use the raw line viewer.
-- HTML continues to use the existing sandboxed rendered preview.
-- Images continue to use the existing image preview.
+- Every non-Markdown type keeps its current mobile behavior.
 
 Desktop Split, Live Edit, Review, conflict resolution, and save behavior remain
 unchanged.

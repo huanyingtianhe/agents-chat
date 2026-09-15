@@ -19,6 +19,11 @@ import {
   toAgentResumeOutcome,
   type AgentResumeOutcome,
 } from './reconcileStalePendingMessages';
+import {
+  useInitialChatRestore,
+  type InitialChatRecord,
+  type InitialChatTarget,
+} from './useInitialChatRestore';
 
 export type UseChatRuntimeParams = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -572,52 +577,88 @@ export function useChatRuntime({
 
   function dismissAgentUserRequest(_requestId: string) { /* no-op currently */ }
 
-  /* ── Mount effect: load last chat + agent sessions ── */
+  /* ── Initial Chat restore ── */
   useEffect(() => {
     try {
       const savedInputHistory = window.localStorage.getItem(STORAGE_INPUT_HISTORY);
       if (savedInputHistory) inputHistoryRef.current = JSON.parse(savedInputHistory) || {};
     } catch { /* ignore */ }
-    fetch('/api/chats').then(r => r.json()).then(data => {
-      if (data.ok && Array.isArray(data.chats)) setChatHistory(normalizeChatHistory(data.chats));
-      const lastChatId = (data.lastChatId as string | null) || (data.chats?.[0]?.id as string | null);
-      if (lastChatId) {
-        currentChatIdRef.current = lastChatId;
-        setCurrentChatId(lastChatId);
-        setActiveSidebarChatId(lastChatId);
-        fetch(`/api/chats?id=${encodeURIComponent(lastChatId)}`).then(r => r.json()).then(async (chatData) => {
-          if (chatData.ok && chatData.chat) {
-            const agentSessions = chatData.chat.agentSessions || {};
-            const isReviewChat = typeof lastChatId === 'string' && lastChatId.startsWith('comment-review:');
-            const migration = migrateFailedSendWarnings(chatData.chat.messages || [], agentSessions, { inferLatestUserFailure: !isReviewChat });
-            const msgs = migration.messages;
-            currentAgentSessionsRef.current = agentSessions;
-            setMessagesForChat(lastChatId, msgs.length > 0 ? msgs : [{ id: 'welcome', type: 'system', content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.', ts: 0 }]);
-            setChatName(chatData.chat.name || lastChatId);
-            needsContextRestoreRef.current = true;
-            // Load workflow orchestrations BEFORE triggering session-resume:
-            // the resume effect pre-seeds sessionRunsRef from running nodes,
-            // and reconcileRunningWorkflowNodes uses sessionRunsRef to decide
-            // which nodes truly need awaiting-input recovery.
-            await hydrateOrchestrationsForChat(lastChatId);
-            setLoadedChatIdForResume(lastChatId);
-            if (migration.changed) {
-              void persistHandlers.persistLoadedChatMigration(lastChatId, chatData.chat.name || lastChatId, chatData.chat.ts || Date.now(), msgs, agentSessions);
-            }
-            // Backfill input history from loaded messages if none exists for this chat
-            if (!inputHistoryRef.current[lastChatId]) {
-              const userTexts = msgs.filter((m: ChatMessage) => m.type === 'user' && m.content).map((m: ChatMessage) => m.content as string).filter((t: string) => t.trim().length > 0);
-              if (userTexts.length > 0) {
-                inputHistoryRef.current[lastChatId] = userTexts.slice(-100);
-                try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(inputHistoryRef.current)); } catch { /* ignore */ }
-              }
-            }
-          }
-        }).catch(() => { /* ignore */ });
-      }
-    }).catch(() => { /* ignore */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const initialChatRestore = useInitialChatRestore({
+    onChatListLoaded(data): InitialChatTarget | null {
+      const history = normalizeChatHistory(data.chats || []);
+      setChatHistory(history);
+      const lastChatId = data.lastChatId || history[0]?.id || null;
+      if (!lastChatId) return null;
+      return {
+        chatId: lastChatId,
+        chatName: history.find((chat) => chat.id === lastChatId)?.name || lastChatId,
+      };
+    },
+    onChatIdentified(target) {
+      setChatName(target.chatName);
+      setActiveSidebarChatId(target.chatId);
+    },
+    onChatLoaded(target, chat: InitialChatRecord, isCurrent) {
+      const agentSessions = chat.agentSessions || {};
+      const isReviewChat = target.chatId.startsWith('comment-review:');
+      const migration = migrateFailedSendWarnings(
+        chat.messages || [],
+        agentSessions,
+        { inferLatestUserFailure: !isReviewChat },
+      );
+      const restoredMessages = migration.messages.length > 0
+        ? migration.messages
+        : [{
+            id: 'welcome',
+            type: 'system' as const,
+            content: 'Welcome to Agents Chat. Messages auto-route to the default agent, or type @agent to target a specific one.',
+            ts: 0,
+          }];
+      const restoredName = chat.name || target.chatName;
+
+      currentChatIdRef.current = target.chatId;
+      currentAgentSessionsRef.current = agentSessions;
+      setMessagesForChat(target.chatId, restoredMessages);
+      setChatName(restoredName);
+      setCurrentChatId(target.chatId);
+      setActiveSidebarChatId(target.chatId);
+      needsContextRestoreRef.current = true;
+
+      void (async () => {
+        await hydrateOrchestrationsForChat(target.chatId);
+        if (!isCurrent() || currentChatIdRef.current !== target.chatId) return;
+        setLoadedChatIdForResume(target.chatId);
+
+        if (migration.changed) {
+          void persistHandlers.persistLoadedChatMigration(
+            target.chatId,
+            restoredName,
+            chat.ts || Date.now(),
+            migration.messages,
+            agentSessions,
+          );
+        }
+
+        if (!inputHistoryRef.current[target.chatId]) {
+          const userTexts = migration.messages
+            .filter((message) => message.type === 'user' && message.content)
+            .map((message) => message.content as string)
+            .filter((text) => text.trim().length > 0);
+          if (userTexts.length > 0) {
+            inputHistoryRef.current[target.chatId] = userTexts.slice(-100);
+            try {
+              window.localStorage.setItem(
+                STORAGE_INPUT_HISTORY,
+                JSON.stringify(inputHistoryRef.current),
+              );
+            } catch { /* ignore unavailable local UI history */ }
+          }
+        }
+      })();
+    },
+  });
 
   /* ── Session resume effect ── */
   useEffect(() => {
@@ -711,6 +752,7 @@ export function useChatRuntime({
     /* state */
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
+    initialChatRestore: initialChatRestore.state,
     orchestrationMode,
     pendingWorkflowPlan,
     /* state setters exposed for page.tsx */
@@ -738,6 +780,8 @@ export function useChatRuntime({
     /* persistence handlers */
     ...persistHandlers,
     loadChat: wrappedLoadChat,
+    retryInitialChatRestore: initialChatRestore.retry,
+    cancelInitialChatRestore: initialChatRestore.cancel,
     /* send/stop/answer */
     handleSend, handleStop, retryFailedSend, resendFailedUserMessage,
     sendWorkflowFollowUpReply,

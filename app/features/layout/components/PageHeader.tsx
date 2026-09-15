@@ -78,6 +78,9 @@ export function PageHeader({
     function handlePointerDown(event: MouseEvent) {
       if (!headerOverflowRef.current?.contains(event.target as Node)) setShowHeaderOverflow(false);
     }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowHeaderOverflow(false);
+    }
     window.addEventListener('mousedown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -90,6 +93,9 @@ export function PageHeader({
     if (!showSettings || isMobileLayout) return;
     function handlePointerDown(event: MouseEvent) {
       if (!settingsRef.current?.contains(event.target as Node)) setShowSettings(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowSettings(false);
     }
     window.addEventListener('mousedown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);

@@ -13,6 +13,12 @@ import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
 import { recoverInterruptedOrchestration } from '@/lib/workflow/recoverInterrupted.mjs';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
+import {
+  collectInterruptedAgentIds,
+  reconcileStalePendingMessages,
+  toAgentResumeOutcome,
+  type AgentResumeOutcome,
+} from './reconcileStalePendingMessages';
 
 export type UseChatRuntimeParams = {
   acp: (body: Record<string, unknown>) => Promise<any>;
@@ -636,6 +642,8 @@ export function useChatRuntime({
         );
         const allLoaded = results.every(r => r.status === 'fulfilled' && (r as any).value?.loaded === true);
         if (allLoaded) needsContextRestoreRef.current = false;
+        const outcomes: AgentResumeOutcome[] = results.map((result, index) =>
+          toAgentResumeOutcome(entries[index][0], result));
         for (const [index, r] of results.entries()) {
           if (r.status !== 'fulfilled') continue;
           const agentId = entries[index]?.[0];
@@ -650,6 +658,16 @@ export function useChatRuntime({
             for (const rm of val.recoveredMessages) addMessage({ type: 'agent', content: rm.content, agentId: rm.agentId, ts: rm.ts });
             addMessage({ type: 'system', content: `✅ Recovered ${val.recoveredMessages.length} message(s) from previous session.` });
           }
+        }
+        const currentMessages = chatMessagesRef.current[activeChatId]
+          || (currentChatIdRef.current === activeChatId ? messagesRef.current : []);
+        const reconciliation = reconcileStalePendingMessages(
+          currentMessages,
+          collectInterruptedAgentIds(outcomes),
+        );
+        if (reconciliation.changed) {
+          setMessagesForChat(activeChatId, reconciliation.messages);
+          await persistHandlers.saveCurrentChatToHistory(true);
         }
         // After all resumes have either reattached live turns or shown them
         // gone, decide which workflow 'running' nodes need awaiting-input.

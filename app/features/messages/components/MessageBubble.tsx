@@ -104,7 +104,9 @@ export const MessageBubble = memo(function MessageBubble({
         </div>
       ) : (
         <>
-          {message.pending && message.statusText && !hasParts ? <div className="ptyStatusBadge">{getStatusDisplayText(message.statusText, 'Generating')}</div> : null}
+          {message.statusText === 'Interrupted' || (message.pending && message.statusText && !hasParts) ? (
+            <div className="ptyStatusBadge">{getStatusDisplayText(message.statusText, 'Generating')}</div>
+          ) : null}
           {hasParts ? (() => {
             const totalText = message.parts!.filter(p => p.kind === 'text').map(p => (p as { kind: 'text'; text: string }).text).join('');
             const partsLong = totalText.length > 400 || totalText.split('\n').length > 12 || message.parts!.length > 6;

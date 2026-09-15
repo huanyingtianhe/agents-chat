@@ -26,7 +26,12 @@ export function MessageContentParts({
           );
         }
         if (part.kind === 'tool') {
-          return <MessageToolCall key={pi} part={part} />;
+          const displayName = statusText === 'Interrupted'
+            && pi === parts.length - 1
+            && part.toolName === 'Reading shell output'
+            ? 'Interrupted shell output'
+            : undefined;
+          return <MessageToolCall key={pi} part={part} displayName={displayName} />;
         }
         if (part.kind === 'user_answer') {
           return (

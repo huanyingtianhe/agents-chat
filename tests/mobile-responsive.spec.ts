@@ -308,6 +308,7 @@ test('closes the drawer after selecting a file and preserves the Files tree when
       body: JSON.stringify({
         files: [
           { path: 'README.md', name: 'README.md', mtime: '2026-09-14T00:00:00.000Z' },
+          { path: 'notes.txt', name: 'notes.txt', mtime: '2026-09-14T00:00:00.000Z' },
           ...Array.from({ length: 60 }, (_, index) => ({
             path: `notes/note-${String(index).padStart(2, '0')}.md`,
             name: `note-${String(index).padStart(2, '0')}.md`,
@@ -324,7 +325,7 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   await page.getByRole('tab', { name: 'Files' }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
-  await page.getByRole('button', { name: 'notes' }).click();
+  await page.locator('.mdTreeDir', { hasText: 'notes' }).click();
   const filesList = page.locator('.mdFilesList');
   const preservedScrollTop = await filesList.evaluate((element) => {
     element.scrollTop = 240;
@@ -337,8 +338,20 @@ test('closes the drawer after selecting a file and preserves the Files tree when
 
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
   await expect(page.locator('.mdEditorInline')).toBeVisible();
+  const mobileMarkdown = page.locator('.mobileMarkdownViewer');
+  await expect(mobileMarkdown).toBeVisible();
+  await expect(mobileMarkdown.locator('.markdownBody')).toBeVisible();
+  await expect(mobileMarkdown.getByRole('heading', { name: 'Mobile rendered heading', level: 1 })).toBeVisible();
+  await expect(mobileMarkdown.locator('strong')).toHaveText('rendered emphasis');
+  await expect(mobileMarkdown.getByRole('listitem')).toHaveCount(2);
+  await expect(mobileMarkdown.locator('table')).toBeVisible();
+  await expect(mobileMarkdown.locator('pre code')).toContainText('mobileRendered');
+  await expect(page.locator('.fileLine')).toHaveCount(0);
+  await expect(page.locator('[contenteditable="true"]')).toHaveCount(0);
   await expect(page.getByTitle('Toggle comments')).toBeVisible();
   await expect(page.getByRole('button', { name: /Save/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Split' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Live Edit' })).toHaveCount(0);
   await expect(page.getByText('Use the desktop interface to edit files.')).toBeVisible();
   await expect(page.locator('textarea.composerTextarea')).toHaveCount(0);
 
@@ -347,6 +360,14 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => filesList.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
+  await page.getByRole('button', { name: 'notes.txt' }).evaluate((element) => {
+    (element as HTMLButtonElement).click();
+  });
+  await expect(page.locator('.mobileMarkdownViewer')).toHaveCount(0);
+  await expect(page.locator('.fileContentWithLines')).toBeVisible();
+  await expect(page.locator('.fileLineText').first()).toHaveText('# Plain text heading');
+  await page.getByRole('button', { name: /Close/ }).click();
+  await expect(page.locator('textarea.composerTextarea')).toHaveValue('draft retained behind file');
 });
 
 test('searches, refreshes, and previews images from the mobile Files drawer', async ({ page }) => {

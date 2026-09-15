@@ -37,6 +37,21 @@ ${'widecodecolumn'.repeat(50)}
 
 ${Array.from({ length: 40 }, (_, index) => `Scrollable mobile history line ${index + 1}`).join('\n\n')}`;
 
+const MOBILE_MARKDOWN_CONTENT = `# Mobile rendered heading
+
+This is **rendered emphasis**.
+
+- first rendered item
+- second rendered item
+
+| Name | Value |
+| --- | --- |
+| Mobile | Rendered |
+
+\`\`\`ts
+const mobileRendered = true;
+\`\`\``;
+
 export type MobileFixture = {
   agents: Map<string, Record<string, unknown>>;
   access: Map<string, string[]>;
@@ -296,11 +311,14 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
       body: JSON.stringify(path
         ? path === 'assets/mobile.png'
           ? { path, content: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', kind: 'image', mtime: '2026-09-14T00:00:00.000Z' }
-          : { path, content: '# Mobile file\n\nComment-ready content.', kind: 'markdown', mtime: '2026-09-14T00:00:00.000Z' }
+          : path === 'notes.txt'
+            ? { path, content: '# Plain text heading\n\n**Plain text emphasis**', kind: 'text', mtime: '2026-09-14T00:00:00.000Z' }
+            : { path, content: MOBILE_MARKDOWN_CONTENT, kind: 'markdown', mtime: '2026-09-14T00:00:00.000Z' }
         : {
           files: [
             { path: 'README.md', name: 'README.md', mtime: '2026-09-14T00:00:00.000Z' },
             { path: 'broken.md', name: 'broken.md', mtime: '2026-09-14T00:00:00.000Z' },
+            { path: 'notes.txt', name: 'notes.txt', mtime: '2026-09-14T00:00:00.000Z' },
             { path: 'assets/mobile.png', name: 'mobile.png', mtime: '2026-09-14T00:00:00.000Z' },
           ],
         }),

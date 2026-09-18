@@ -201,6 +201,53 @@ test('keeps navigation, composer, and overlays usable in landscape', async ({ pa
   expect(navigationBox!.height).toBeLessThanOrEqual(390);
 });
 
+test('keeps controls and management panels within a narrow phone viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await setTestVisualViewport(page, 568, 0);
+  await expectDialogFitsVisualViewport(page.locator('.chatInputDock'));
+  await expectDialogFitsVisualViewport(page.getByRole('button', { name: 'Send message' }));
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  )).toBe(true);
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expectDialogFitsVisualViewport(page.getByRole('dialog', { name: 'Chats and files navigation' }));
+  await page.getByRole('button', { name: 'Close navigation' }).click();
+
+  for (const name of ['Agents', 'Nodes', 'Schedules']) {
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('menuitem', { name }).click();
+    const panel = page.locator(`[data-mobile-overlay-surface="${name.toLowerCase()}"]`);
+    await expect(panel).toBeVisible();
+    await expectDialogFitsVisualViewport(panel);
+    const close = page.getByRole('button', { name: `Close ${name.toLowerCase()}` });
+    await expectDialogFitsVisualViewport(close);
+    await close.click();
+  }
+});
+
+test('clears mobile overlay state when resizing to desktop and back', async ({ page }) => {
+  await page.locator('textarea.composerTextarea').fill('Draft survives responsive layout changes');
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(1);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await setTestVisualViewport(page, 800, 0);
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  await expect(page.getByRole('complementary', { name: 'Chats and files navigation' })).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setTestVisualViewport(page, 844, 0);
+  await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+  await expect(page.locator('textarea.composerTextarea')).toHaveValue('Draft survives responsive layout changes');
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expectExactlyOneActiveModal(page);
+  await page.getByRole('button', { name: 'Close navigation' }).click();
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+});
+
 test('restores the inline body overflow that existed before mobile scroll lock', async ({ page }) => {
   await page.evaluate(() => {
     document.body.style.overflow = 'clip';

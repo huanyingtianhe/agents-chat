@@ -589,11 +589,11 @@ export function useChatRuntime({
     onChatListLoaded(data): InitialChatTarget | null {
       const history = normalizeChatHistory(data.chats || []);
       setChatHistory(history);
-      const lastChatId = data.lastChatId || history[0]?.id || null;
-      if (!lastChatId) return null;
+      const target = history.find((chat) => chat.id === data.lastChatId) || history[0];
+      if (!target) return null;
       return {
-        chatId: lastChatId,
-        chatName: history.find((chat) => chat.id === lastChatId)?.name || lastChatId,
+        chatId: target.id,
+        chatName: target.name || target.id,
       };
     },
     onChatIdentified(target) {

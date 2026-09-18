@@ -458,7 +458,13 @@ export async function renameChat(userId: string, chatId: string, newName: string
 /** Delete a chat. */
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
   const db = getDb();
-  db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+  db.transaction(() => {
+    db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+    db.prepare(`
+      UPDATE user_prefs SET last_chat_id = NULL, updated_at = ?
+      WHERE user_id = ? AND last_chat_id = ?
+    `).run(Date.now(), userId, chatId);
+  })();
 }
 
 /* ─────────── Shared chats ─────────── */

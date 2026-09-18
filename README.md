@@ -486,11 +486,20 @@ npx tsx lib/migrate.ts
 
 Tests are Playwright E2E plus lightweight Node regression checks. Playwright expects the app running on `localhost:3010`.
 
+The **Playwright E2E** workflow runs on every PR targeting `main` and every push to `main`.
+It builds and serves the production app with isolated CI credentials, runs desktop Chromium
+in four shards, and runs Android Chromium and iPhone WebKit as independent jobs. Desktop
+failures do not prevent mobile coverage from running. Mobile checks cover navigation and
+overlay state, narrow screens and landscape, keyboard/composer geometry, file previews,
+and management panels. Failed jobs upload HTML reports, traces, screenshots, and server logs.
+Do not run stateful E2E tests against a production instance or its database.
+
 ```bash
 # Backend/source regression checks
 node tests/session-mcp-routing.test.mjs
 node tests/session-prompt-stop-reason.test.mjs
 node tests/markdown-file-limit.test.mjs
+npx tsx tests/chat-store-last-selection.test.ts
 
 # Type/build checks
 npx tsc --noEmit
@@ -504,6 +513,10 @@ PLAYWRIGHT_BASE_URL=https://localhost:3010 NODE_TLS_REJECT_UNAUTHORIZED=0 \
 # Single spec / single test
 npx playwright test --config tests/playwright.config.ts tests/test-ui.spec.ts
 npx playwright test --config tests/playwright.config.ts -g "test name"
+
+# Mobile regression projects (set PLAYWRIGHT_BASE_URL for your test server)
+npx playwright test --config tests/playwright.config.ts --project=android-chromium
+npx playwright test --config tests/playwright.config.ts --project=iphone-webkit
 ```
 
 ## License

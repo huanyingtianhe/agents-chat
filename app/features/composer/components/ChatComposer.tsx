@@ -20,6 +20,7 @@ type ChatComposerProps = {
   slashCommands: SlashCommand[];
   slashSelectedIndex: number;
   targetControls: ReactNode;
+  optionalActions?: ReactNode;
   isSending: boolean;
   sendDisabled: boolean;
   onMentionSelect: (agentId: string) => void;
@@ -49,6 +50,7 @@ export function ChatComposer({
   slashCommands,
   slashSelectedIndex,
   targetControls,
+  optionalActions,
   isSending,
   sendDisabled,
   onMentionSelect,
@@ -143,6 +145,9 @@ export function ChatComposer({
                     </svg>
                   </span>
                 </button>
+                {optionalActions ? (
+                  <div className="composerOptionalActions">{optionalActions}</div>
+                ) : null}
                 {targetControls}
               </div>
               <div className="composerActions composerToolbarActions">

@@ -1,4 +1,9 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
+
+const mobileSpecs = [
+  '**/mobile-responsive.spec.ts',
+  '**/mobile-composer-viewport.spec.ts',
+];
 
 export default defineConfig({
   testDir: '.',
@@ -13,4 +18,21 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     screenshot: 'only-on-failure',
   },
+  projects: [
+    {
+      name: 'desktop-chromium',
+      testIgnore: mobileSpecs,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'android-chromium',
+      testMatch: mobileSpecs,
+      use: { ...devices['Pixel 7'] },
+    },
+    {
+      name: 'iphone-webkit',
+      testMatch: mobileSpecs,
+      use: { ...devices['iPhone 14 Pro Max'] },
+    },
+  ],
 });

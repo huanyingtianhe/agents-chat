@@ -1,7 +1,7 @@
 import type { MutableRefObject } from 'react';
 import type TurndownService from 'turndown';
 import type { Agent } from '../../agents/agentTypes';
-import type { FileTreeNode, FileWorkspaceController, LeftSidebarTab, MdConflictState, MdEditorMode } from '../fileWorkspaceTypes';
+import type { FilePreviewKind, FileTreeNode, FileWorkspaceController, LeftSidebarTab, MdConflictState, MdEditorMode } from '../fileWorkspaceTypes';
 
 export type MarkdownFileEntry = { path: string; name: string; mtime: string };
 
@@ -27,12 +27,14 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   setMdFilesList: (files: MarkdownFileEntry[]) => void;
   mdFilesLoading: boolean;
   mdFilesError: string | null;
+  mdFileError: string | null;
   mdSelectedAgentId: string | null;
   setMdSelectedAgentId: (agentId: string | null) => void;
   mdSelectedFile: string | null;
   setMdSelectedFile: (path: string | null) => void;
   mdFileContent: string;
   setMdFileContent: (content: string) => void;
+  mdFileKind: FilePreviewKind;
   mdEditContent: string;
   setMdEditContent: (content: string) => void;
   mdFileMtime: string | null;
@@ -50,6 +52,8 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   mdConflictResolvedContent: string;
   setMdConflictResolvedContent: (content: string) => void;
   mdExpandedDirs: Set<string>;
+  mdFileQuery: string;
+  setMdFileQuery: (query: string) => void;
   mdDiffOnly: boolean;
   setMdDiffOnly: (diffOnly: boolean) => void;
   mdLiveRef: MutableRefObject<HTMLDivElement | null>;
@@ -58,6 +62,7 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   turndownRef: MutableRefObject<TurndownService | null>;
   mdFileTree: FileTreeNode[];
   loadMdFiles: (agentId: string, diff?: boolean) => Promise<void>;
+  refreshMdFiles: () => Promise<void>;
   openMdFileForAgent: (agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number }) => Promise<void>;
   openMdFile: (filePath: string) => Promise<void>;
   selectMdAgent: (agentId: string | null) => void;

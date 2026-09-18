@@ -166,6 +166,23 @@
 .chatPageRoot .agentConfigurationModal .remoteAgentSelect {
   font-size: inherit;
 }
+.chatPageRoot .agentAccessGrantRow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.chatPageRoot .agentAccessGrantRow input {
+  flex: 1;
+}
+.chatPageRoot .agentFormError {
+  padding: 10px 12px;
+  margin: 8px 0;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 12%, var(--panel-strong));
+  color: var(--danger);
+  font-size: 13px;
+}
 
 /* ── Agent sidebar model row ── */
 .chatPageRoot .agentSidebarModelRow {
@@ -283,4 +300,62 @@
 }
 .chatPageRoot .agentModelOptionCheck {
   color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .chatPageRoot .agentMobileSheet {
+    position: fixed;
+    inset: var(--app-viewport-offset-top, 0) 0 auto 0;
+    width: 100%;
+    height: var(--app-viewport-height, 100dvh);
+    max-height: none;
+    border-radius: 0;
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      calc(14px + env(safe-area-inset-right))
+      calc(14px + env(safe-area-inset-bottom))
+      calc(14px + env(safe-area-inset-left));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chatPageRoot .agentMobileSheet h2 {
+    flex: 0 0 auto;
+  }
+  .chatPageRoot .agentSheetBody {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .chatPageRoot .agentSheetActions {
+    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    padding-top: 10px;
+    background: var(--panel-strong);
+  }
+  .chatPageRoot .agentMobileSheet input:not([type="checkbox"]):not([type="radio"]),
+  .chatPageRoot .agentMobileSheet textarea,
+  .chatPageRoot .agentMobileSheet select {
+    font-size: 16px;
+  }
+  .chatPageRoot .agentMobileSheet .danger {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 560px) {
+  .chatPageRoot .agentAccessGrantRow {
+    flex-direction: column;
+  }
+  .chatPageRoot .agentAccessGrantRow .inlinePrimary {
+    min-height: 44px;
+  }
+  .chatPageRoot .agentSheetActions {
+    flex-wrap: wrap;
+  }
+  .chatPageRoot .agentSheetActions .danger {
+    margin-left: 0 !important;
+  }
 }

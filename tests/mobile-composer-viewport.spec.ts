@@ -1,52 +1,28 @@
 import { expect, Page, test } from '@playwright/test';
+import {
+  installTestVisualViewport,
+  setTestVisualViewport,
+} from './helpers/visualViewport';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
 async function login(page: Page) {
   await page.goto(`${BASE}/login`);
-  await page.locator('input[placeholder="Admin username"]').fill(process.env.ADMIN_USERNAME || 'admin');
-  await page.locator('input[placeholder="Password"]').fill(process.env.ADMIN_PASSWORD || 'admin123');
-  await page.locator('button[type="submit"]').click();
+  const username = page.locator('input[placeholder="Admin username"]');
+  const password = page.locator('input[placeholder="Password"]');
+  const submit = page.locator('button[type="submit"]');
+  await expect(async () => {
+    await username.fill(process.env.ADMIN_USERNAME || 'admin');
+    await password.fill(process.env.ADMIN_PASSWORD || 'admin123');
+    await expect(submit).toBeEnabled();
+  }).toPass({ timeout: 30000 });
+  await submit.click();
   await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
   await page.waitForTimeout(500);
 }
 
 test('keeps composer controls above iPhone browser chrome and keyboard', async ({ page }) => {
-  await page.setViewportSize({ width: 428, height: 926 });
-  await page.addInitScript(() => {
-    let height = 926;
-    let offsetTop = 0;
-    const listeners = new Map<string, Set<EventListener>>();
-    const visualViewport = {
-      get height() { return height; },
-      get width() { return 428; },
-      get offsetTop() { return offsetTop; },
-      get offsetLeft() { return 0; },
-      get pageTop() { return offsetTop; },
-      get pageLeft() { return 0; },
-      get scale() { return 1; },
-      addEventListener(type: string, listener: EventListener) {
-        const handlers = listeners.get(type) || new Set<EventListener>();
-        handlers.add(listener);
-        listeners.set(type, handlers);
-      },
-      removeEventListener(type: string, listener: EventListener) {
-        listeners.get(type)?.delete(listener);
-      },
-    };
-
-    Object.defineProperty(window, 'visualViewport', {
-      configurable: true,
-      value: visualViewport,
-    });
-    (window as typeof window & { setTestVisualViewport: (nextHeight: number, nextOffsetTop: number) => void })
-      .setTestVisualViewport = (nextHeight, nextOffsetTop) => {
-        height = nextHeight;
-        offsetTop = nextOffsetTop;
-        for (const listener of listeners.get('resize') || []) listener(new Event('resize'));
-        for (const listener of listeners.get('scroll') || []) listener(new Event('scroll'));
-      };
-  });
+  await installTestVisualViewport(page);
 
   const chats = new Map<string, Record<string, unknown>>();
   let lastChatId = '';
@@ -88,6 +64,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await page.route('**/api/orchestrations**', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, items: [] }) }),
   );
+  let generationActive = false;
   await page.route('**/api/acp', async (route) => {
     const body = route.request().postDataJSON();
     if (body?.action === 'list-agents') {
@@ -95,9 +72,9 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
         contentType: 'application/json',
         body: JSON.stringify({
           ok: true,
-          agents: [{
-            id: 'alpha',
-            name: 'Alpha Agent',
+          agents: ['alpha', 'beta', 'gamma', 'delta'].map((id) => ({
+            id,
+            name: `${id[0].toUpperCase()}${id.slice(1)} Agent`,
             command: 'mock',
             args: [],
             cwd: '/tmp',
@@ -110,10 +87,42 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
               { modelId: 'gpt-5.4', name: 'GPT-5.4' },
             ],
             defaultModelId: 'claude-sonnet-4.6',
-          }],
+          })),
         }),
       });
       return;
+    }
+    if (body?.action === 'send') {
+      generationActive = true;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          sessionId: 'mobile-viewport-session',
+          turn: { id: 'mobile-viewport-turn' },
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'poll' && generationActive) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          activeTurn: {
+            id: 'mobile-viewport-turn',
+            fullText: '',
+            done: false,
+            phase: 'thinking',
+            statusText: 'Thinking',
+            events: [],
+          },
+        }),
+      });
+      return;
+    }
+    if (body?.action === 'interrupt') {
+      generationActive = false;
     }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
@@ -126,12 +135,9 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await page.locator('button.emptyHomepageNewChat').click();
   const textarea = page.locator('textarea.composerTextarea');
   await expect(textarea).toBeVisible({ timeout: 10000 });
-  await textarea.fill('@alpha mobile viewport');
+  await textarea.fill('@alpha @beta @gamma @delta mobile viewport');
 
-  await page.evaluate(() => {
-    (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
-      .setTestVisualViewport(430, 24);
-  });
+  await setTestVisualViewport(page, 430, 24);
 
   const app = page.locator('.chatPageRoot .page');
   await expect.poll(() => app.evaluate((element) => {
@@ -141,8 +147,18 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
 
   const sendButton = page.getByRole('button', { name: 'Send message' });
   const modelButton = page.getByRole('button', { name: 'Model for alpha' });
+  const targetPills = page.locator('.targetPills');
   await expect(sendButton).toBeVisible();
   await expect(modelButton).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start voice input' })).toHaveCount(0);
+  await expect(targetPills).toHaveCSS('overflow-x', 'auto');
+  await expect.poll(() => targetPills.evaluate(
+    (element) => element.scrollWidth > element.clientWidth,
+  )).toBe(true);
+  await expect.poll(() => targetPills.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    return element.scrollLeft;
+  })).toBeGreaterThan(0);
 
   for (const locator of [page.locator('.chatInputDock'), sendButton, modelButton]) {
     const [controlBox, appBox] = await Promise.all([locator.boundingBox(), app.boundingBox()]);
@@ -150,6 +166,18 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
     expect(appBox).not.toBeNull();
     expect(controlBox!.y + controlBox!.height).toBeLessThanOrEqual(appBox!.y + appBox!.height + 1);
   }
+
+  await textarea.fill('@alpha mobile viewport');
+  await sendButton.click();
+  const stopButton = page.getByRole('button', { name: 'Stop generation' });
+  await expect(stopButton).toBeVisible();
+  const [stopBox, compressedAppBox] = await Promise.all([stopButton.boundingBox(), app.boundingBox()]);
+  expect(stopBox).not.toBeNull();
+  expect(compressedAppBox).not.toBeNull();
+  expect(stopBox!.x + stopBox!.width).toBeLessThanOrEqual(compressedAppBox!.x + compressedAppBox!.width + 1);
+  expect(stopBox!.y + stopBox!.height).toBeLessThanOrEqual(compressedAppBox!.y + compressedAppBox!.height + 1);
+  await stopButton.click();
+  await expect(sendButton).toBeVisible();
 
   await modelButton.click();
   const modelMenu = page.getByRole('listbox', { name: 'Model for alpha' });
@@ -169,8 +197,7 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   }).toBe(true);
 
   await modelButton.click();
-  await page.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('menuitem', { name: 'Chats' }).click();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
   const mobileSidebar = page.locator('.participantsSidebar');
   const backdrop = page.locator('.mobilePanelBackdrop');
   await expect(mobileSidebar).toBeVisible();
@@ -181,12 +208,11 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
       return { top: Math.round(rect.top), height: Math.round(rect.height) };
     })).toEqual({ top: 24, height: 430 });
   }
-  await backdrop.click({ position: { x: 420, y: 200 } });
+  const backdropBox = await backdrop.boundingBox();
+  expect(backdropBox).not.toBeNull();
+  await backdrop.click({ position: { x: backdropBox!.width - 4, y: 200 } });
 
-  await page.evaluate(() => {
-    (window as typeof window & { setTestVisualViewport: (height: number, offsetTop: number) => void })
-      .setTestVisualViewport(926, 0);
-  });
+  await setTestVisualViewport(page, 926, 0);
   await expect.poll(() => app.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { top: Math.round(rect.top), height: Math.round(rect.height) };

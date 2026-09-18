@@ -183,6 +183,45 @@ test.describe('Chat UI', () => {
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 
+  test('keeps Markdown tables in the desktop table layout', async ({ page }) => {
+    const chat = {
+      id: `desktop-markdown-table-${Date.now()}`,
+      name: 'Desktop Markdown table',
+      ts: Date.now(),
+      messages: [{
+        id: 'desktop-table-message',
+        type: 'user',
+        content: '| Name | Value |\n| --- | --- |\n| Alpha | Beta |',
+        ts: Date.now() + 1,
+      }],
+      agentSessions: {},
+    };
+    const request = page.context().request;
+    const createResponse = await request.post(`${BASE}/api/chats`, { data: { chat } });
+    expect(createResponse.ok()).toBeTruthy();
+    const selectResponse = await request.post(`${BASE}/api/chats`, {
+      data: { action: 'set-last-chat', chatId: chat.id },
+    });
+    expect(selectResponse.ok()).toBeTruthy();
+
+    await page.reload();
+    const markdown = page.locator('.message.user .markdownBody');
+    const table = markdown.locator('table');
+    await expect(table).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeGreaterThan(900);
+    await expect(table).toHaveCSS('display', 'table');
+    await expect(table).toHaveCSS('overflow-x', 'visible');
+    await expect.poll(async () => {
+      const [tableBox, markdownBox] = await Promise.all([
+        table.boundingBox(),
+        markdown.boundingBox(),
+      ]);
+      return tableBox !== null && markdownBox !== null
+        ? Math.abs(tableBox.width - markdownBox.width)
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+  });
+
   test('keeps the header stationary while messages scroll in either direction', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 800 });
     await ensureActiveChat(page);
@@ -1105,23 +1144,44 @@ test.describe('Chat UI', () => {
     const chatId = `ui-message-punctuation-status-${Date.now()}`;
     const chatName = 'Message punctuation status';
     const partialText = 'partial answer with punctuation status';
+    const resumedAgents = new Set<string>();
+    const polledAgents = new Set<string>();
 
     await page.route('**/api/acp', async (route) => {
-      const body = route.request().postDataJSON() as any;
+      const body = route.request().postDataJSON() as { action?: string; agentId?: string; sessionId?: string };
       if (body?.action === 'list-agents') {
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
             ok: true,
-            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+            agents: ['alpha', 'beta'].map((id) => ({
+              id, name: `${id} Agent`, command: 'mock', args: [], cwd: '', running: true,
+            })),
           }),
         });
         return;
       }
-      if (body?.action === 'resume-session') {
+      if (body?.action === 'resume-session' || body?.action === 'poll') {
+        const agentId = body.agentId!;
+        if (body.action === 'resume-session') resumedAgents.add(agentId);
+        else polledAgents.add(agentId);
         await route.fulfill({
           contentType: 'application/json',
-          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+          body: JSON.stringify({
+            ok: true,
+            sessionId: `session-${agentId}`,
+            loaded: true,
+            recoveredMessages: [],
+            activeTurn: {
+              id: `turn-${agentId}`,
+              messageId: agentId === 'alpha' ? 'a1' : 'a2',
+              fullText: agentId === 'alpha' ? '' : partialText,
+              done: false,
+              phase: 'thinking',
+              statusText: '.',
+              events: [],
+            },
+          }),
         });
         return;
       }
@@ -1138,9 +1198,9 @@ test.describe('Chat UI', () => {
           { id: 'u1', type: 'user', content: 'trigger empty punctuation message status', ts: now },
           { id: 'a1', type: 'agent', content: '', agentId: 'alpha', pending: true, statusText: '.', ts: now + 1 },
           { id: 'u2', type: 'user', content: 'trigger content punctuation message status', ts: now + 2 },
-          { id: 'a2', type: 'agent', content: partialText, agentId: 'alpha', pending: true, statusText: '.', ts: now + 3 },
+          { id: 'a2', type: 'agent', content: partialText, agentId: 'beta', pending: true, statusText: '.', ts: now + 3 },
         ],
-        agentSessions: { alpha: 'session-alpha' },
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
       };
       await fetch('/api/chats', {
         method: 'POST',
@@ -1156,6 +1216,8 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect.poll(() => [...resumedAgents].sort()).toEqual(['alpha', 'beta']);
+    await expect.poll(() => [...polledAgents].sort()).toEqual(['alpha', 'beta']);
     await expect(chatArea.locator('.thinkingText').first()).toHaveText('Thinking');
     await expect(chatArea.locator('.thinkingText').first()).not.toHaveText('.');
 
@@ -4480,11 +4542,8 @@ test.describe('Chat UI', () => {
   });
 
   test('should stop polling a stalled active turn with no progress', async ({ page }) => {
-    await page.addInitScript(() => {
-      const initialNow = Date.now();
-      let callCount = 0;
-      Date.now = () => initialNow + (callCount++ * 2 * 60 * 1000);
-    });
+    const initialNow = Date.now();
+    await page.clock.setFixedTime(initialNow);
 
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea.composerTextarea');
@@ -4539,8 +4598,18 @@ test.describe('Chat UI', () => {
 
     const agentMessage = chatArea.locator('.message.agent', { hasText: 'Implemented in' }).last();
     await expect(agentMessage).toBeVisible({ timeout: 10000 });
+    await expect(agentMessage.locator('.streamingIndicator')).toBeVisible();
+    await expect.poll(() => pollCount).toBeGreaterThanOrEqual(3);
+
+    await page.clock.setFixedTime(initialNow + 10 * 60_000);
+    const pollsAtThreshold = pollCount;
+    await expect.poll(() => pollCount).toBeGreaterThan(pollsAtThreshold);
+    await expect(agentMessage.locator('.streamingIndicator')).toBeVisible();
+
+    await page.clock.setFixedTime(initialNow + 10 * 60_000 + 1);
     await expect(agentMessage.locator('.streamingIndicator')).toHaveCount(0, { timeout: 15000 });
-    expect(pollCount).toBeGreaterThan(2);
+    await expect(page.getByRole('button', { name: 'Stop generation' })).toHaveCount(0);
+    await expect(agentMessage).toContainText('Implemented in');
   });
 
   test('should restore pending request card from resumed active turn', async ({ page }) => {
@@ -4691,7 +4760,7 @@ test.describe('Empty Homepage', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -4722,7 +4791,7 @@ test.describe('Delete Active Chat', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -4753,7 +4822,7 @@ test.describe('Chat Rename', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
     await ensureActiveChat(page);
   });
@@ -4847,7 +4916,7 @@ test.describe('Agent Filter Tabs', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -5131,7 +5200,7 @@ test.describe('Theme', () => {
       expectedSelectionStyle,
     ]);
 
-    await page.getByRole('button', { name: /Files/ }).click();
+    await page.getByRole('tab', { name: /Files/ }).click();
     await selectFilesAgent(page, 'selection-agent');
     await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
     await expect(page.locator('.mdLiveEditable')).toBeVisible();
@@ -5181,7 +5250,7 @@ test.describe('Comment Review Chat', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
   });
 

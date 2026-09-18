@@ -1,6 +1,7 @@
 .mdFilesTab{display:flex;flex-direction:column;gap:4px;min-height:0;flex:1;}
+.fileWorkspaceError{margin:8px;padding:9px 10px;border:1px solid color-mix(in srgb, var(--danger) 55%, var(--border));border-radius:8px;background:color-mix(in srgb, var(--danger) 10%, var(--panel-bg));color:var(--danger);font-size:12px;line-height:1.4;}
 .mdFilesTab .remoteAgentSelect{font-size:12px;padding:8px 10px;}
-.mdFilesList{overflow-y:auto;min-height:0;}
+.mdFilesList{overflow-y:auto;min-height:0;flex:1;}
 .mdTree{font-size:12px;}
 .mdTreeDir, .mdTreeFile{display:flex;align-items:center;gap:4px;width:100%;padding:4px 8px;border:none;background:transparent;color:var(--text);font-size:12px;cursor:pointer;border-radius:6px;text-align:left;white-space:nowrap;}
 .mdTreeLabel{overflow:hidden;text-overflow:ellipsis;min-width:0;}
@@ -10,6 +11,13 @@
 .mdDiffToggle{margin-top:4px;padding:3px 8px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-soft);cursor:pointer;width:100%;text-align:center;}
 .mdDiffToggle:hover{background:var(--hover-bg);}
 .mdDiffToggle.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.mdFileSearchRow{display:flex;gap:6px;min-width:0;}
+.mdFileSearch{min-width:0;flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;}
+.mdFileRefresh{width:32px;min-width:32px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-soft);cursor:pointer;}
+.mdFileRefresh:hover:not(:disabled){background:var(--hover-bg);}
+.mdFileRefresh:disabled{opacity:.5;cursor:wait;}
+.fileWorkspaceListError{display:flex;flex-direction:column;align-items:center;gap:8px;margin:8px;padding:12px;border:1px solid color-mix(in srgb, var(--danger) 55%, var(--border));border-radius:8px;color:var(--danger);text-align:center;font-size:12px;}
+.fileWorkspaceListError button{padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--panel-soft);color:var(--text);cursor:pointer;}
 .mdTreeDirIcon, .mdTreeFileIcon{font-size:12px;flex-shrink:0;}
 .mdTreeLabel{overflow:hidden;text-overflow:ellipsis;}
 .mdEditorInline{display:flex;flex-direction:row;height:100%;overflow:hidden;position:relative;}
@@ -27,6 +35,7 @@
 .mdEditorBtn.save:not(:disabled){background:var(--accent-soft);color:var(--accent);}
 .mdEditorBtn.commentToggle{background:transparent;color:var(--text-soft);}
 .mdEditorBtn.commentToggle.active{background:var(--accent-soft);color:var(--accent);}
+.mobileDesktopHint{color:var(--text-soft);font-size:12px;line-height:1.3;}
 .mdConflictBackdrop{position:fixed;inset:0;display:grid;place-items:center;padding:18px;background:rgba(0, 0, 0, 0.52);backdrop-filter:blur(6px);z-index:8;}
 .mdConflictDialog{width:min(560px, 100%);padding:22px;border:1px solid var(--border);border-radius:18px;background:var(--panel-strong);box-shadow:var(--shadow);}
 .mdConflictDialog h2, .mdConflictDiffHeader h2{margin:0 0 10px;color:var(--accent);}
@@ -65,8 +74,13 @@
 .mdEditorLive{flex:1;min-height:0;overflow-y:auto;position:relative;}
 .mdEditorSimple{flex:1;min-height:0;display:flex;}
 .mdEditorSimple .mdEditorTextarea{flex:1;border:none;border-radius:0;}
+.mobileMarkdownViewer{flex:1;min-width:0;min-height:0;overflow:auto;padding:20px clamp(16px, 5vw, 28px) 32px;background:var(--panel-bg);}
+.mobileMarkdownViewer .markdownBody{min-width:0;max-width:760px;margin:0 auto;}
+.mobileMarkdownViewer .markdownBody pre,.mobileMarkdownViewer .markdownBody table{display:block;max-width:100%;overflow-x:auto;}
 .mdHtmlPreviewWrap{flex:1;min-height:0;padding:16px;background:var(--input-bg);}
 .mdHtmlPreviewFrame{width:100%;height:100%;border:1px solid var(--border);border-radius:12px;background:#fff;}
+.mdImagePreviewWrap{flex:1;min-height:0;display:grid;place-items:center;overflow:auto;padding:16px;background:var(--input-bg);}
+.mdImagePreview{display:block;max-width:100%;max-height:100%;object-fit:contain;}
 .mdLiveEditable{min-height:100%;padding:20px 72px 20px 32px;outline:none;cursor:text;}
 .mdLiveEditable:focus{box-shadow:inset 0 0 0 2px var(--accent);border-radius:4px;}
 .liveSelectionDraftLayer{position:absolute;inset:0;pointer-events:none;z-index:2;}
@@ -142,3 +156,13 @@
 .fileLineCommentSlot{width:34px;min-width:34px;display:flex;align-items:center;justify-content:center;user-select:none;}
 .addCommentFloatingBtn{background:var(--accent);color:white;border:none;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;z-index:10;box-shadow:0 2px 8px rgba(0, 0, 0, 0.3);}
 .addCommentFloatingBtn:hover{opacity:0.85;}
+
+@media (max-width: 900px) {
+  .mdEditorToolbar{align-items:flex-start;gap:8px;padding:8px 10px;}
+  .mdEditorToolbarRight{align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;}
+  .mobileDesktopHint{order:3;flex-basis:100%;text-align:right;}
+  .fileContentWithLines{font-size:12px;}
+  .mobileMarkdownViewer{padding:16px 14px calc(24px + env(safe-area-inset-bottom));overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
+  .mdFileSearch,.mdFileRefresh{min-height:44px;}
+  .commentSidebar{width:min(82vw, 300px);min-width:min(82vw, 300px);position:absolute;right:0;top:0;bottom:0;z-index:4;box-shadow:var(--shadow);}
+}

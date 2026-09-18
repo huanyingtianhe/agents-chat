@@ -13,6 +13,7 @@ type FileWorkspaceEditorProps = {
   workspace: UseFileWorkspaceStateResult;
   comments: UseFileCommentsResult;
   selection: UseLiveEditorSelectionResult;
+  mobileReadOnly: boolean;
 };
 
 type FileWorkspaceTreeProps = {
@@ -28,16 +29,25 @@ type FileWorkspacePanelProps = FileWorkspaceEditorProps | FileWorkspaceTreeProps
 
 export function FileWorkspacePanel(props: FileWorkspacePanelProps) {
   if (props.variant === 'tree') {
-    return <FileTreePanel workspace={props.workspace} agents={props.agents} schedulerAgentId={props.schedulerAgentId} />;
+    return (
+      <>
+        {props.workspace.mdFileError ? (
+          <div className="fileWorkspaceError" role="alert">
+            {props.workspace.mdFileError}
+          </div>
+        ) : null}
+        <FileTreePanel workspace={props.workspace} agents={props.agents} schedulerAgentId={props.schedulerAgentId} />
+      </>
+    );
   }
 
-  const { workspace, comments, selection } = props;
+  const { workspace, comments, selection, mobileReadOnly } = props;
   if (!workspace.mdEditorOpen || !workspace.mdSelectedFile) return null;
 
   return (
     <div className="mdEditorInline">
-      <FileEditorPanel workspace={workspace} comments={comments} selection={selection} />
-      <FileCommentSidebar comments={comments} selection={selection} />
+      <FileEditorPanel workspace={workspace} comments={comments} selection={selection} mobileReadOnly={mobileReadOnly} />
+      {workspace.mdFileKind !== 'image' ? <FileCommentSidebar comments={comments} selection={selection} /> : null}
     </div>
   );
 }

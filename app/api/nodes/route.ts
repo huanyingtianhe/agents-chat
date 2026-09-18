@@ -3,6 +3,8 @@ import { isAdminToken, getUserEmail, canModify, getAuthToken } from '@/lib/auth'
 import * as configStore from '@/lib/configStore';
 import { getNodeOwner } from '@/lib/nodeOwner';
 import { createLogger } from '@/lib/logger';
+import { probeRelayNode } from '@/lib/nodes/nodeProbe';
+import type { NodeProbeState, NodeStatus } from '@/lib/nodes/nodeTypes';
 
 const logger = createLogger('nodes');
 
@@ -14,18 +16,8 @@ const RELAY_SUBSCRIPTION_ID = process.env.RELAY_SUBSCRIPTION_ID || '';
 const RELAY_RESOURCE_GROUP = process.env.RELAY_RESOURCE_GROUP || '';
 const RELAY_NAMESPACE = process.env.RELAY_NAMESPACE || '';
 
-type NodeStatus = {
-  name: string;
-  label: string;
-  owner: string;
-  canModify: boolean;
-  manual: boolean;
-  online: boolean;
-  checkedAt: number;
-};
-
 // Cache probe results for 30s to avoid hammering relay
-const probeCache = new Map<string, { online: boolean; ts: number }>();
+const probeCache = new Map<string, NodeProbeState>();
 const PROBE_TTL_MS = 30_000;
 
 // Cache discovered hybrid connections for 60s
@@ -116,58 +108,28 @@ async function getAllMergedNodes(): Promise<MergedNode[]> {
 /**
  * Probe a relay hybrid connection to check if a listener is active.
  */
-async function probeNode(connectionName: string): Promise<boolean> {
+async function probeNode(connectionName: string): Promise<NodeProbeState> {
   const cached = probeCache.get(connectionName);
-  if (cached && Date.now() - cached.ts < PROBE_TTL_MS) return cached.online;
+  if (cached && Date.now() - cached.checkedAt < PROBE_TTL_MS) return cached;
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const HycoWebSocket = require('hyco-ws');
 
-    const ns = RELAY_SEND_CONNECTION_STRING.match(/Endpoint=sb:\/\/([^/;]+)/)?.[1];
-    const keyName = RELAY_SEND_CONNECTION_STRING.match(/SharedAccessKeyName=([^;]+)/)?.[1];
-    const key = RELAY_SEND_CONNECTION_STRING.match(/SharedAccessKey=([^;]+)/)?.[1];
-    if (!ns || !keyName || !key) throw new Error('Invalid RELAY_SEND_CONNECTION_STRING');
-
-    const uri = HycoWebSocket.createRelaySendUri(ns, connectionName);
-    const token = HycoWebSocket.createRelayToken(uri, keyName, key);
-    logger.debug({ connectionName, uri, keyName }, `[probeNode] ${connectionName} uri:${uri} keyName:${keyName}`);
-
-    const online = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        logger.debug({ connectionName }, `[probeNode] ${connectionName} TIMEOUT`);
-        try { ws.close(); } catch { /* ignore */ }
-        resolve(false);
-      }, 5_000);
-
-      // Use relayedConnect which passes token via ServiceBusAuthorization header
-      const ws = HycoWebSocket.relayedConnect(uri, token);
-
-      ws.on('open', () => {
-        logger.debug({ connectionName }, `[probeNode] ${connectionName} OPEN`);
-        clearTimeout(timeout);
-        try { ws.close(); } catch { /* ignore */ }
-        resolve(true);
-      });
-
-      ws.on('error', (err: Error) => {
-        logger.debug({ connectionName, err: err?.message }, `[probeNode] ${connectionName} ERROR: ${err?.message}`);
-        clearTimeout(timeout);
-        resolve(false);
-      });
-
-      ws.on('close', () => {
-        clearTimeout(timeout);
-      });
-    });
-
-    logger.debug({ connectionName, online }, `[probeNode] ${connectionName} result: ${online}`);
-    probeCache.set(connectionName, { online, ts: Date.now() });
-    return online;
+    const result = await probeRelayNode(connectionName, RELAY_SEND_CONNECTION_STRING, HycoWebSocket);
+    logger.debug({ connectionName, result }, `[probeNode] ${connectionName} result`);
+    probeCache.set(connectionName, result);
+    return result;
   } catch (err) {
     logger.debug({ connectionName, err }, `[probeNode] ${connectionName} CATCH`);
-    probeCache.set(connectionName, { online: false, ts: Date.now() });
-    return false;
+    const result: NodeProbeState = {
+      online: false,
+      checkedAt: Date.now(),
+      platform: null,
+      connectionError: err instanceof Error ? err.message : String(err),
+    };
+    probeCache.set(connectionName, result);
+    return result;
   }
 }
 
@@ -180,15 +142,17 @@ export async function POST(req: NextRequest) {
     if (action === 'list-nodes') {
       const nodes = await getAllMergedNodes();
       const statuses: NodeStatus[] = await Promise.all(
-        nodes.map(async (node) => ({
-          name: node.name,
-          label: node.label,
-          owner: node.owner,
-          canModify: canModify(token, node.owner),
-          manual: node.manual,
-          online: await probeNode(node.name),
-          checkedAt: Date.now(),
-        }))
+        nodes.map(async (node) => {
+          const probe = await probeNode(node.name);
+          return {
+            name: node.name,
+            label: node.label,
+            owner: node.owner,
+            canModify: canModify(token, node.owner),
+            manual: node.manual,
+            ...probe,
+          };
+        })
       );
       return NextResponse.json({ ok: true, nodes: statuses });
     }
@@ -197,8 +161,8 @@ export async function POST(req: NextRequest) {
       const { name } = body;
       if (!name) return NextResponse.json({ ok: false, error: 'missing name' }, { status: 400 });
       probeCache.delete(name);
-      const online = await probeNode(name);
-      return NextResponse.json({ ok: true, name, online, checkedAt: Date.now() });
+      const probe = await probeNode(name);
+      return NextResponse.json({ ok: true, name, ...probe });
     }
 
     if (action === 'add-node') {

@@ -39,6 +39,8 @@
 }
 
 .message {
+  box-sizing: border-box;
+  min-width: 0;
   max-width: 80%;
   padding: 14px 16px;
   border-radius: 18px;
@@ -123,7 +125,14 @@
 
 /* ── Message content & markdown ── */
 .messageContent {
+  min-width: 0;
+  max-width: 100%;
   word-break: break-word;
+}
+.chatPageRoot .markdownBody {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .markdownBody * { max-width: 100%; }
 .markdownBody p { margin: 0 0 0.4em; }
@@ -156,6 +165,8 @@
   padding: 0.1em 0.32em;
 }
 .markdownBody pre {
+  box-sizing: border-box;
+  max-width: 100%;
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -186,7 +197,11 @@
 .markdownBody a:hover { text-decoration: underline; }
 .markdownBody hr { border: 0; border-top: 1px solid var(--border); margin: 0.6em 0; }
 .markdownBody strong { font-weight: 600; }
-.markdownBody img { border-radius: 8px; }
+.markdownBody img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
 .messageContent.collapsed {
   max-height: 220px;
   overflow: hidden;
@@ -508,6 +523,18 @@
 }
 
 /* ── Responsive ── */
+@media (max-width: 900px) {
+  .markdownBody table {
+    display: block;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+}
 @media (max-width: 768px) {
   .message {
     max-width: 100%;

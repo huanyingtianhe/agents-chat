@@ -4,7 +4,11 @@ import AzureADProvider from 'next-auth/providers/azure-ad';
 import GitHubProvider from 'next-auth/providers/github';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { type NextRequest } from 'next/server';
-import { getGitHubAllowedEmails, isGitHubEmailAllowed } from '@/lib/auth';
+import {
+  getGitHubAllowedEmails,
+  isGitHubEmailAllowed,
+  shouldUseSecureAuthCookies,
+} from '@/lib/auth';
 
 /** Constant-time string comparison to prevent timing attacks. */
 function safeEqual(a: string, b: string): boolean {
@@ -91,6 +95,11 @@ providers.push(
   }),
 );
 
+const secureAuthCookies = shouldUseSecureAuthCookies(
+  process.env.NEXTAUTH_URL,
+  process.env.NODE_ENV,
+);
+
 export const authOptions: AuthOptions = {
   debug: true,
   providers,
@@ -103,7 +112,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     callbackUrl: {
@@ -112,7 +121,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     state: {
@@ -121,7 +130,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     pkceCodeVerifier: {
@@ -130,7 +139,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'none',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
     sessionToken: {
@@ -139,7 +148,7 @@ export const authOptions: AuthOptions = {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
-        secure: true,
+        secure: secureAuthCookies,
       },
     },
   },
@@ -177,10 +186,13 @@ export const authOptions: AuthOptions = {
 
       return isGitHubEmailAllowed(email || user.email || undefined, allowedEmails);
     },
-    async jwt({ token, user, account }) {
-      // For GitHub OAuth: fetch the verified primary email if it wasn't
-      // included in the profile (users with private email settings).
-      if (account?.provider === 'github' && account.access_token && !token.email) {
+    async jwt({ token, user, account, profile }) {
+      // GitHub's profile helper supplies a noreply fallback when the public
+      // email is private. Resolve the verified primary email for stable identity.
+      const githubProfileEmail = account?.provider === 'github'
+        ? (profile as { email?: string | null } | undefined)?.email
+        : undefined;
+      if (account?.provider === 'github' && account.access_token && !githubProfileEmail) {
         try {
           const res = await fetch('https://api.github.com/user/emails', {
             headers: {
@@ -211,7 +223,7 @@ export const authOptions: AuthOptions = {
             .filter(Boolean);
           // Check both user.email and token.email — Azure AD may populate
           // the email on the token (from the id_token) rather than user object
-          const userEmail = (user.email || token.email || '').toString().toLowerCase();
+          const userEmail = (token.email || user.email || '').toString().toLowerCase();
           token.role = adminEmails.includes(userEmail) ? 'admin' : 'user';
         }
       } else {

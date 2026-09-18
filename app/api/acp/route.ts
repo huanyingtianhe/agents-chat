@@ -5,7 +5,13 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
 import { getToken } from 'next-auth/jwt';
-import { updateChatAgentSession, getChat, saveChat, StoredMessage } from '@/lib/chatStore';
+import {
+  getChat,
+  reconcileStalePendingMessagesForAgent,
+  saveChat,
+  StoredMessage,
+  updateChatAgentSession,
+} from '@/lib/chatStore';
 import { isAdminToken, getUserEmail, canModify, canTalkTo, getAuthToken } from '@/lib/auth';
 import * as configStore from '@/lib/configStore';
 import type { AcpPromptPart, AgentConfig, AgentModel, AgentProcess, PromptAttachment, StoredContentPart, TurnEvent, TurnPhase, TurnState, UserSession, WarmLocalAgentResult } from '@/lib/acp/types';
@@ -2391,6 +2397,9 @@ export async function POST(req: NextRequest) {
       // If this session is known to be active in the agent, just switch to it
       if (sess.sessionId === savedSessionId || proc.knownSessions.has(savedSessionId)) {
         const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
+        if (chatId && (!activeTurn || activeTurn.done)) {
+          await reconcileStalePendingMessagesForAgent(userId, chatId, agentId);
+        }
         sess.sessionId = savedSessionId;
         if (chatId) pushChatSession(sess, chatId, savedSessionId);
         if (!activeTurn && chatTurn) {
@@ -2421,6 +2430,9 @@ export async function POST(req: NextRequest) {
           // Compare with stored chat to find recovered messages
           const recovery = await compareAndRecover(userId, chatId, agentId, replayMessages);
           const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
+          if (chatId && (!activeTurn || activeTurn.done)) {
+            await reconcileStalePendingMessagesForAgent(userId, chatId, agentId);
+          }
           return NextResponse.json({ ok: true, sessionId: savedSessionId, loaded: true, activeTurn: serializeTurn(activeTurn), ...recovery });
         } catch (loadErr: any) {
           replayBuffers.delete(savedSessionId);
@@ -2431,6 +2443,9 @@ export async function POST(req: NextRequest) {
           const alreadyLoaded = code === -32602 || /already loaded/i.test(errStr);
           if (alreadyLoaded) {
             const activeTurn = getActiveTurnForResume(chatTurn, savedSessionId);
+            if (chatId && (!activeTurn || activeTurn.done)) {
+              await reconcileStalePendingMessagesForAgent(userId, chatId, agentId);
+            }
             sess.sessionId = savedSessionId;
             if (chatId) pushChatSession(sess, chatId, savedSessionId);
             sess.phase = sess.activeTurns.size > 0 ? 'busy' : 'idle';
@@ -2456,6 +2471,7 @@ export async function POST(req: NextRequest) {
         // Update SQLite with the new sessionId
         if (chatId) {
           updateChatAgentSession(userId, chatId, agentId, session.sessionId).catch(() => { /* ignore */ });
+          await reconcileStalePendingMessagesForAgent(userId, chatId, agentId);
         }
         log(`[ACP:${agentId}] Fallback new session ${session.sessionId} for user ${userId}`);
         return NextResponse.json({ ok: true, sessionId: session.sessionId, loaded: false });

@@ -5,9 +5,14 @@ import type { CSSProperties } from 'react';
 import { THEMES, normalizeThemeId, type ThemeId } from '../../theme/themes';
 import { STORAGE_SIDEBAR_COLLAPSED, STORAGE_THEME } from './sessionPersistence';
 
-export function usePageUIState({ mounted }: { mounted: boolean }) {
+export function usePageUIState({ mounted, isMobileLayout, onMobileNavigationClose }: {
+  mounted: boolean;
+  isMobileLayout: boolean;
+  onMobileNavigationClose: () => void;
+}) {
   const [themeId, setThemeIdState] = useState<ThemeId>('aurora');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
+  const sidebarCollapsed = !isMobileLayout && desktopSidebarCollapsed;
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const sidebarDragRef = useRef(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -23,10 +28,18 @@ export function usePageUIState({ mounted }: { mounted: boolean }) {
 
   function setThemeId(id: string) { setThemeIdState(normalizeThemeId(id) as ThemeId); }
 
+  function setSidebarCollapsed(collapsed: boolean) {
+    if (isMobileLayout) {
+      if (collapsed) onMobileNavigationClose();
+    } else {
+      setDesktopSidebarCollapsed(collapsed);
+    }
+  }
+
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED);
-      if (saved != null) setSidebarCollapsed(saved === '1');
+      if (saved != null) setDesktopSidebarCollapsed(saved === '1');
     } catch { /* ignore */ }
     try {
       const savedTheme = window.localStorage.getItem(STORAGE_THEME);
@@ -36,8 +49,8 @@ export function usePageUIState({ mounted }: { mounted: boolean }) {
 
   useEffect(() => {
     if (!mounted) return;
-    window.localStorage.setItem(STORAGE_SIDEBAR_COLLAPSED, sidebarCollapsed ? '1' : '0');
-  }, [sidebarCollapsed, mounted]);
+    window.localStorage.setItem(STORAGE_SIDEBAR_COLLAPSED, desktopSidebarCollapsed ? '1' : '0');
+  }, [desktopSidebarCollapsed, mounted]);
 
   useEffect(() => {
     if (!mounted) return;

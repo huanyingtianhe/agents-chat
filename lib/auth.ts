@@ -25,6 +25,13 @@ export function isGitHubEmailAllowed(email: string | undefined, allowedEmails: s
   return Boolean(normalizedEmail && allowedEmails.includes(normalizedEmail));
 }
 
+export function shouldUseSecureAuthCookies(
+  nextAuthUrl: string | undefined,
+  nodeEnv: string | undefined,
+): boolean {
+  return nextAuthUrl ? nextAuthUrl.startsWith('https://') : nodeEnv === 'production';
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function isAdminToken(token: any): boolean {
   if (!token) return false;

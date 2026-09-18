@@ -27,6 +27,8 @@ type Node = {
   manual: boolean;
   owner: string;
   canModify: boolean;
+  platform: string | null;
+  connectionError: string | null;
 };
 
 type AccessEntry = { email: string; grantedBy: string; createdAt: string };
@@ -57,6 +59,8 @@ async function installIsolatedBackend(page: Page) {
       manual: true,
       owner: 'admin@local',
       canModify: true,
+      platform: null,
+      connectionError: null,
     }],
     ['locked-node', {
       name: 'locked-node',
@@ -66,6 +70,8 @@ async function installIsolatedBackend(page: Page) {
       manual: true,
       owner: 'other@example.com',
       canModify: false,
+      platform: null,
+      connectionError: 'Relay connection closed before opening',
     }],
   ]);
   const access = new Map<string, AccessEntry[]>();
@@ -195,6 +201,8 @@ async function installIsolatedBackend(page: Page) {
         manual: true,
         owner: 'admin@local',
         canModify: true,
+        platform: null,
+        connectionError: null,
       });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
       return;
@@ -203,9 +211,17 @@ async function installIsolatedBackend(page: Page) {
       const node = nodes.get(body.name)!;
       node.online = true;
       node.checkedAt = 300;
+      node.connectionError = null;
       await route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({ ok: true, name: body.name, online: true, checkedAt: 300 }),
+        body: JSON.stringify({
+          ok: true,
+          name: body.name,
+          online: true,
+          checkedAt: 300,
+          platform: null,
+          connectionError: null,
+        }),
       });
       return;
     }

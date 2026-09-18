@@ -1,0 +1,53 @@
+.chatPageRoot .chatLoadingView {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--muted);
+  background:
+    radial-gradient(circle at 50% 46%, var(--accent-soft), transparent 180px),
+    var(--panel-bg);
+  outline: none;
+}
+
+.chatPageRoot .chatLoadingTrack {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-strong);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 12%, transparent);
+}
+
+.chatPageRoot .chatLoadingSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--muted) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chatLoadingSpin 700ms linear infinite;
+}
+
+.chatPageRoot .chatLoadingLabel {
+  max-width: min(80vw, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+@keyframes chatLoadingSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatPageRoot .chatLoadingSpinner {
+    animation: none;
+  }
+}

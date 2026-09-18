@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import type { MobileOverlay } from '../hooks/useMobileOverlayState';
 
 export type ChatShellProps = {
   sidebar: ReactNode;
@@ -12,8 +13,9 @@ export type ChatShellProps = {
   shareDialog: ReactNode | null;
   imageLightbox: ReactNode | null;
   workflowPicker?: ReactNode | null;
-  mobilePanel: 'chat' | 'agents' | 'nodes' | 'schedules' | null;
-  onMobilePanelChange: (panel: 'chat' | 'agents' | 'nodes' | 'schedules' | null) => void;
+  mobileOverlay: MobileOverlay;
+  isMobileLayout: boolean;
+  onMobileOverlayClose: () => void;
   themeStyle: CSSProperties;
   themeId: string;
   sidebarWidth: number;
@@ -32,8 +34,9 @@ export function ChatShell({
   shareDialog,
   imageLightbox,
   workflowPicker,
-  mobilePanel,
-  onMobilePanelChange,
+  mobileOverlay,
+  isMobileLayout,
+  onMobileOverlayClose,
   themeStyle,
   themeId,
   sidebarWidth,
@@ -42,6 +45,7 @@ export function ChatShell({
   onSidebarResizeStart,
 }: ChatShellProps) {
   const pageRef = useRef<HTMLElement | null>(null);
+  const hasModalMobileOverlay = isMobileLayout && mobileOverlay !== null;
 
   useEffect(() => {
     const page = pageRef.current;
@@ -68,12 +72,46 @@ export function ChatShell({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isMobileLayout || mobileOverlay === null) return;
+
+    let retryFrame = 0;
+    const focusOverlay = () => {
+      const surfaceSelector = mobileOverlay === 'navigation'
+        ? '.participantsSidebar'
+        : `[data-mobile-overlay-surface="${mobileOverlay}"]`;
+      const surface = pageRef.current?.querySelector<HTMLElement>(surfaceSelector);
+      const target = surface?.querySelector<HTMLElement>('[data-mobile-overlay-initial-focus]')
+        ?? surface?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        ?? surface;
+      if (target) target.focus();
+      else retryFrame = window.requestAnimationFrame(focusOverlay);
+    };
+    const frame = window.requestAnimationFrame(focusOverlay);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(retryFrame);
+    };
+  }, [isMobileLayout, mobileOverlay]);
+
   return (
-    <main ref={pageRef} className="page" style={themeStyle} data-theme={themeId} suppressHydrationWarning>
+    <main
+      ref={pageRef}
+      className="page"
+      style={themeStyle}
+      data-theme={themeId}
+      data-mobile-overlay={mobileOverlay ?? 'none'}
+      suppressHydrationWarning
+    >
       {header}
-      {mobilePanel !== null && (
-        <div className="mobilePanelBackdrop" onClick={() => onMobilePanelChange(null)} />
-      )}
+      {isMobileLayout && mobileOverlay !== null ? (
+        <button
+          type="button"
+          className="mobilePanelBackdrop"
+          aria-label="Close active panel"
+          onClick={onMobileOverlayClose}
+        />
+      ) : null}
       <div
         className={`chatLayout${sidebarCollapsed ? ' sidebarCollapsed' : ''}${agentsSidebarOpen ? ' agentsSidebarOpen' : ''}`}
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
@@ -82,7 +120,7 @@ export function ChatShell({
         {!sidebarCollapsed && (
           <div className="sidebarResizeHandle" onMouseDown={onSidebarResizeStart} />
         )}
-        <div className="chatMain">
+        <div className="chatMain" aria-hidden={hasModalMobileOverlay || undefined}>
           {messages}
           {composer}
         </div>

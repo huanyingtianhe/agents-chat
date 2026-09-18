@@ -5,16 +5,21 @@ import { useNodePanelState } from '../hooks/useNodePanelState';
 
 export interface NodesPanelProps {
   panelState: ReturnType<typeof useNodePanelState>;
+  onClose?: () => void;
+  mobileModal?: boolean;
+  mobileRestricted?: boolean;
 }
 
 type Launcher = 'copilot' | 'agency';
 
-export function NodesPanel({ panelState }: NodesPanelProps) {
+export function NodesPanel({ panelState, onClose, mobileModal = false, mobileRestricted = false }: NodesPanelProps) {
   const {
     showNodesPanel,
     setShowNodesPanel,
     nodesData,
     nodesLoading,
+    nodesError,
+    retryNodes,
     showAddNode,
     setShowAddNode,
     newNodeForm,
@@ -49,23 +54,37 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
     <>
       {/* ── Right sidebar: nodes ── */}
       {showNodesPanel && (
-        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`}>
+        <aside className={`agentsSidebar ${showNodesPanel ? 'mobilePanelVisible' : ''}`} data-mobile-overlay-surface="nodes" tabIndex={-1} role={mobileModal ? 'dialog' : undefined} aria-modal={mobileModal || undefined} aria-label={mobileModal ? 'Nodes' : undefined}>
           <div className="agentsSidebarHeader">
             <span>Nodes</span>
             <div style={{ display: 'flex', gap: '4px' }}>
-              <button className="sidebarToggle" onClick={() => loadNodes()} title="Refresh all">↻</button>
-              <div style={{ position: 'relative' }}>
-                <button className="sidebarToggle" onClick={() => { setShowSetupScript(true); }} title="Add node">+</button>
-              </div>
-              <button className="sidebarToggle" onClick={() => setShowNodesPanel(false)}>→</button>
+              <button className="sidebarToggle" onClick={() => void loadNodes()} title="Refresh all" aria-label="Refresh all nodes">↻</button>
+              {!mobileRestricted && (
+                <div style={{ position: 'relative' }}>
+                  <button className="sidebarToggle" onClick={() => { setShowSetupScript(true); }} title="Add node">+</button>
+                </div>
+              )}
+              <button className="sidebarToggle" onClick={onClose ?? (() => setShowNodesPanel(false))} aria-label="Close nodes" data-mobile-overlay-initial-focus>→</button>
             </div>
           </div>
+          {nodesError ? (
+            <div className="panelError" role="alert">
+              <span>{nodesError}</span>
+              <button type="button" onClick={() => void retryNodes()}>Retry</button>
+            </div>
+          ) : null}
           <div className="agentsSidebarSection">
             {nodesData.map((node) => (
-              <button key={node.name} className="agentListItem" onClick={() => handleRefreshNode(node.name)} title={`Click to refresh — ${node.online ? 'Online' : 'Offline'}`}>
+              <button
+                key={node.name}
+                className="agentListItem"
+                onClick={() => void handleRefreshNode(node.name)}
+                title={`Click to refresh — ${node.online ? 'Online' : 'Offline'}`}
+                aria-label={`Refresh ${node.label}`}
+              >
                 <span className="agentListAvatar nodeAvatar" data-online={node.online ? '' : undefined}>{node.label.slice(0, 1).toUpperCase()}</span>
                 <span className="agentListInfo">
-                  {editingNodeName === node.name ? (
+                  {!mobileRestricted && editingNodeName === node.name ? (
                     <input
                       className="nodeEditInput"
                       value={editingNodeLabel}
@@ -76,27 +95,43 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
                       autoFocus
                     />
                   ) : (
-                    <span className="agentListName nodeListName" onDoubleClick={(e) => { if (node.canModify) { e.stopPropagation(); setEditingNodeName(node.name); setEditingNodeLabel(node.label); } }} title={node.canModify ? `${node.label} — double-click to rename` : node.label}>{node.label}</span>
+                    <span
+                      className="agentListName nodeListName"
+                      onDoubleClick={(e) => {
+                        if (!mobileRestricted && node.canModify) {
+                          e.stopPropagation();
+                          setEditingNodeName(node.name);
+                          setEditingNodeLabel(node.label);
+                        }
+                      }}
+                      title={!mobileRestricted && node.canModify ? `${node.label} — double-click to rename` : node.label}
+                    >
+                      {node.label}
+                    </span>
                   )}
                   <span className="agentListId nodeListId" title={node.name}>{node.name}{!node.manual ? ' · auto' : ''}</span>
+                  <span className="nodeStatusText">{node.online ? 'Online' : 'Offline'}</span>
+                  {mobileRestricted ? <span className="nodePlatform">{node.platform || 'Platform unavailable'}</span> : null}
+                  {mobileRestricted && node.connectionError ? <span className="nodeConnectionError">{node.connectionError}</span> : null}
                 </span>
-                {node.canModify && (
+                {!mobileRestricted && node.canModify && (
                   <span className="nodeActionBtn" onClick={(e) => { e.stopPropagation(); openRelayAgent(node.name); }} title="Add agent on this node">＋</span>
                 )}
-                {node.canModify && (
+                {!mobileRestricted && node.canModify && (
                   <span className="nodeRemoveBtn" onClick={(e) => { e.stopPropagation(); handleRemoveNode(node.name); }} title="Remove node">✕</span>
                 )}
               </button>
             ))}
-            {nodesData.length === 0 && (
+            {nodesData.length === 0 && !nodesError && (
               <div className="muted" style={{ padding: 20, textAlign: 'center' }}>
                 {nodesLoading ? 'Checking nodes...' : 'No nodes configured'}
               </div>
             )}
           </div>
+          {mobileRestricted ? <p className="mobileDesktopHint panelDesktopHint">Use the desktop interface to configure nodes.</p> : null}
 
           {/* Add node form */}
-          {showAddNode && (
+          {!mobileRestricted && showAddNode && (
             <div className="nodeAddForm">
               <div className="nodeAddFormTitle">Add Node</div>
               <input className="nodeAddInput" placeholder="Connection name (e.g. cpc-team-vm1)" value={newNodeForm.name} onChange={(e) => setNewNodeForm(f => ({ ...f, name: e.target.value }))} />
@@ -115,9 +150,9 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
       )}
 
       {/* ── Setup script modal ── */}
-      {showSetupScript && (
+      {!mobileRestricted && showSetupScript && (
         <div className="modalOverlay">
-          <div className="modal setupScriptModal">
+          <div className="modal setupScriptModal" role="dialog" aria-modal="true" aria-label="Node Setup Kit">
             <h2>🖥️ Node Setup Kit</h2>
             <p className="setupScriptDesc">
               Download the setup kit and run it on your devbox to connect it as a node.
@@ -184,9 +219,9 @@ export function NodesPanel({ panelState }: NodesPanelProps) {
       )}
 
       {/* ── Add relay agent modal ── */}
-      {showAddRelayAgent && (
+      {!mobileRestricted && showAddRelayAgent && (
         <div className="modalOverlay">
-          <div className="modal agentSettingsModal">
+          <div className="modal agentSettingsModal" role="dialog" aria-modal="true" aria-label={`Add Agent on ${relayAgentNode}`}>
             <h2>➕ Add Agent on <code>{relayAgentNode}</code></h2>
             <label>
               <span>Agent ID</span>

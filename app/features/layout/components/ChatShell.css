@@ -374,8 +374,13 @@
 .chatPageRoot .mobileOnlyButton {
   display: none;
 }
+.chatPageRoot .mobileNavigationButton {
+  display: none;
+}
 .chatPageRoot .mobilePanelBackdrop {
   display: none;
+  border: 0;
+  padding: 0;
 }
 .chatPageRoot .header {
   position: relative;
@@ -1115,6 +1120,94 @@
 }
 .chatPageRoot .lightboxClose:hover { background: rgba(255,255,255,0.3); }
 
+.chatPageRoot .panelError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #e57373) 55%, var(--border));
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger, #e57373) 10%, var(--panel-bg));
+  font-size: 12px;
+}
+.chatPageRoot .panelError button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+.chatPageRoot .panelDesktopHint {
+  margin: auto 12px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+.chatPageRoot .scheduleListMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 12px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chatPageRoot .scheduleListMain:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.chatPageRoot .scheduleStatusText,
+.chatPageRoot .scheduleLastRun {
+  font-size: 11px;
+  line-height: 1.35;
+}
+.chatPageRoot .scheduleStatusText { color: var(--text-soft); font-weight: 600; }
+.chatPageRoot .scheduleLastRun { color: var(--muted); }
+.chatPageRoot .scheduleSwitch {
+  position: relative;
+  width: 44px;
+  height: 32px;
+  flex: 0 0 44px;
+  padding: 6px 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+.chatPageRoot .scheduleSwitch.enabled {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.chatPageRoot .scheduleSwitch:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.chatPageRoot .scheduleSwitchThumb {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateX(0);
+  transition: transform 150ms ease, background 150ms ease;
+}
+.chatPageRoot .scheduleSwitch.enabled .scheduleSwitchThumb {
+  background: var(--accent);
+  transform: translateX(20px);
+}
+
 @media (max-width: 1100px) {
   .chatPageRoot .header {
     padding: 14px 16px;
@@ -1151,14 +1244,56 @@
 
 @media (max-width: 900px) {
   .chatPageRoot .page {
+    --mobile-header-height: 68px;
     position: fixed;
     top: var(--app-viewport-offset-top, 0px);
     right: 0;
     left: 0;
     width: 100%;
   }
-  .chatPageRoot .mobileOnlyButton {
+  .chatPageRoot .mobileOnlyButton,
+  .chatPageRoot .mobileNavigationButton {
     display: inline-flex;
+  }
+  .chatPageRoot .header {
+    z-index: 23;
+  }
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .header {
+    pointer-events: none;
+  }
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .mobileNavigationButton,
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .headerOverflowWrap,
+  .chatPageRoot .page:is(
+    [data-mobile-overlay="navigation"],
+    [data-mobile-overlay="agents"],
+    [data-mobile-overlay="nodes"],
+    [data-mobile-overlay="schedules"]
+  ) .userChip {
+    pointer-events: auto;
+  }
+  .chatPageRoot .mobileNavigationButton {
+    flex: 0 0 auto;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
   }
   .chatPageRoot .mobilePanelBackdrop {
     display: block;
@@ -1170,7 +1305,7 @@
     height: var(--app-viewport-height, 100dvh);
     background: rgba(0, 0, 0, 0.42);
     backdrop-filter: blur(3px);
-    z-index: 11;
+    z-index: 21;
   }
   .chatPageRoot .chatLayout,
   .chatPageRoot .chatLayout.agentsSidebarOpen,
@@ -1181,25 +1316,31 @@
   .chatPageRoot .sidebarResizeHandle {
     display: none;
   }
-  .chatPageRoot .participantsSidebar,
-  .chatPageRoot .agentsSidebar {
+  .chatPageRoot .page .participantsSidebar,
+  .chatPageRoot .page .agentsSidebar {
     display: block;
     position: fixed;
     top: var(--app-viewport-offset-top, 0px);
     bottom: auto;
     height: var(--app-viewport-height, 100dvh);
-    width: min(84vw, 320px);
-    z-index: 12;
+    box-sizing: border-box;
+    padding-top: calc(var(--mobile-header-height) + env(safe-area-inset-top));
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 22;
     box-shadow: var(--shadow);
     transition: transform 180ms ease;
   }
-  .chatPageRoot .participantsSidebar {
+  .chatPageRoot .page .participantsSidebar {
+    display: flex;
     left: 0;
+    width: min(84vw, 320px);
+    overflow: hidden;
     transform: translateX(-105%);
     border-right: 1px solid var(--border);
   }
   .chatPageRoot .agentsSidebar {
     right: 0;
+    width: min(92vw, 420px);
     transform: translateX(105%);
     border-left: 1px solid var(--border);
   }
@@ -1215,9 +1356,26 @@
     backdrop-filter: blur(16px);
     z-index: 1;
   }
+  .chatPageRoot .headerLeft {
+    overflow: hidden;
+  }
+  .chatPageRoot .headerOverflowMenu,
+  .chatPageRoot .accountMenu {
+    max-width: calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  }
+  .chatPageRoot .mobileHeaderSubmenu {
+    min-width: min(260px, calc(100vw - 20px));
+  }
   .chatPageRoot .chatContainer {
     padding: 14px 12px;
     gap: 12px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chatPageRoot .participantsSidebar,
+    .chatPageRoot .agentsSidebar {
+      transition: none;
+    }
   }
   .chatPageRoot .chatInputDock {
     padding: 12px;
@@ -1236,7 +1394,7 @@
     padding: 12px;
   }
   .chatPageRoot .modal,
-  .chatPageRoot .agentSettingsModal {
+  .chatPageRoot .agentSettingsModal:not(.agentMobileSheet) {
     width: 100%;
     max-height: calc(100vh - 24px);
     overflow-y: auto;
@@ -1246,6 +1404,9 @@
 }
 
 @media (max-width: 560px) {
+  .chatPageRoot .page {
+    --mobile-header-height: 52px;
+  }
   .chatPageRoot .header {
     flex-wrap: nowrap;
     gap: 8px;
@@ -1279,7 +1440,8 @@
   .chatPageRoot .userName {
     max-width: 76px;
   }
-  .chatPageRoot .mobileOnlyButton {
+  .chatPageRoot .mobileOnlyButton,
+  .chatPageRoot .mobileNavigationButton {
     min-height: 36px;
   }
   .chatPageRoot .ghostButton,

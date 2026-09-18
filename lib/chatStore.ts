@@ -36,6 +36,9 @@ export type StoredMessage = {
   sendError?: string;
   resendAgentIds?: string[];
   resendMessage?: string;
+  pending?: boolean;
+  statusText?: string;
+  ptyPhase?: string;
 };
 
 export type StoredChat = {
@@ -273,12 +276,19 @@ export async function saveChat(userId: string, chat: StoredChat): Promise<void> 
 }
 
 export function mergeStoredMessages(existing: StoredMessage[], incoming: StoredMessage[]): StoredMessage[] {
+  const existingById = new Map(existing.map(message => [message.id, message]));
   const merged = new Map(
     existing
       .filter(message => message.type === 'user')
       .map(message => [message.id, message]),
   );
-  for (const message of incoming) merged.set(message.id, message);
+  for (const message of incoming) {
+    const saved = existingById.get(message.id);
+    merged.set(
+      message.id,
+      saved?.pending === false && message.pending === true ? saved : message,
+    );
+  }
   return [...merged.values()].sort((a, b) => a.ts - b.ts);
 }
 
@@ -291,6 +301,37 @@ export async function mergeChat(userId: string, chat: StoredChat): Promise<void>
       : chat);
   });
   merge();
+}
+
+export async function reconcileStalePendingMessagesForAgent(
+  userId: string,
+  chatId: string,
+  agentId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const reconcile = db.transaction(() => {
+    const existing = getChatWithDb(db, userId, chatId);
+    if (!existing) return false;
+
+    let changed = false;
+    const messages = existing.messages.map((message) => {
+      if (message.type !== 'agent' || message.agentId !== agentId || message.pending !== true) {
+        return message;
+      }
+      changed = true;
+      return {
+        ...message,
+        content: message.content.trim() ? message.content : '⏹ Interrupted',
+        pending: false,
+        statusText: 'Interrupted',
+        ptyPhase: undefined,
+        userRequest: undefined,
+      };
+    });
+    if (changed) saveChatWithDb(db, userId, { ...existing, messages });
+    return changed;
+  });
+  return reconcile();
 }
 
 function mapStoredChatRow(row: any): StoredChat {
@@ -417,7 +458,13 @@ export async function renameChat(userId: string, chatId: string, newName: string
 /** Delete a chat. */
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
   const db = getDb();
-  db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+  db.transaction(() => {
+    db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+    db.prepare(`
+      UPDATE user_prefs SET last_chat_id = NULL, updated_at = ?
+      WHERE user_id = ? AND last_chat_id = ?
+    `).run(Date.now(), userId, chatId);
+  })();
 }
 
 /* ─────────── Shared chats ─────────── */

@@ -50,6 +50,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chatPageRoot .nodeStatusText,
+.chatPageRoot .nodePlatform,
+.chatPageRoot .nodeConnectionError {
+  font-size: 11px;
+  line-height: 1.35;
+}
+.chatPageRoot .nodeStatusText { color: var(--text-soft); font-weight: 600; }
+.chatPageRoot .nodePlatform { color: var(--muted); }
+.chatPageRoot .nodeConnectionError { color: var(--danger, #e57373); white-space: normal; }
 
 /* ── Node inline editing ── */
 .chatPageRoot .nodeEditInput {

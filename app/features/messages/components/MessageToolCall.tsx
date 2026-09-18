@@ -33,14 +33,14 @@ function prettifyToolPayload(raw: string | undefined | null): string {
   return text;
 }
 
-export function MessageToolCall({ part }: { part: ToolPart }) {
+export function MessageToolCall({ part, displayName }: { part: ToolPart; displayName?: string }) {
   const argsText = useMemo(() => prettifyToolPayload(part.args), [part.args]);
   const resultText = useMemo(() => prettifyToolPayload(part.result), [part.result]);
   return (
     <details className="toolCallItem" open={!part.done}>
       <summary className={`toolCallSummary ${part.done ? 'complete' : 'running'}`}>
         <span className="toolCallIcon">{part.done ? '✅' : '⏳'}</span>
-        <span className="toolCallName">{part.toolName}</span>
+        <span className="toolCallName">{displayName || part.toolName}</span>
       </summary>
       {argsText && (
         <pre className="toolCallDetail">{argsText}</pre>

@@ -34,6 +34,16 @@ export type UseAgentPanelStateParams = {
   loadNodes: () => Promise<void>;
 };
 
+function mutationError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function requireSuccessfulMutation(data: any, fallback: string) {
+  if (data?.ok === true) return;
+  throw new Error(typeof data?.error === 'string' && data.error ? data.error : fallback);
+}
+
 export function useAgentPanelState({
   acp,
   loadAgents,
@@ -43,7 +53,7 @@ export function useAgentPanelState({
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
 
   // UI-only model menu state (open/close dropdown, refs)
-  const [openModelMenuAgentId, setOpenModelMenuAgentId] = useState<string | null>(null);
+  const [openModelMenuKey, setOpenModelMenuKey] = useState<string | null>(null);
   const modelMenuRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map());
 
   // Add agent menu
@@ -55,6 +65,7 @@ export function useAgentPanelState({
     id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '',
   });
   const [addAgentLoading, setAddAgentLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Add remote agent
   const [showAddRemoteAgent, setShowAddRemoteAgent] = useState(false);
@@ -68,23 +79,29 @@ export function useAgentPanelState({
   const [settingsAgentConfig, setSettingsAgentConfig] = useState<Agent | null>(null);
   const [settingsEnvText, setSettingsEnvText] = useState('');
   const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
+  const [agentAccessLoading, setAgentAccessLoading] = useState(false);
   const [agentAccessList, setAgentAccessList] = useState<AccessEntry[]>([]);
   const [newAccessEmail, setNewAccessEmail] = useState('');
+  const settingsRequestGeneration = useRef(0);
 
   function openAddAgent() {
     setShowAgentAddMenu(false);
+    setFormError(null);
     setShowAddAgent(true);
   }
 
   function closeAddAgent() {
+    setFormError(null);
     setShowAddAgent(false);
     setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' });
   }
 
   async function createAgent() {
+    if (addAgentLoading) return;
     const { id, name, command, args, cwd, yolo, env } = newAgentForm;
     const trimmedId = id.trim();
     if (!trimmedId) return;
+    setFormError(null);
     setAddAgentLoading(true);
     try {
       const envObj: Record<string, string> = {};
@@ -108,16 +125,13 @@ export function useAgentPanelState({
           env: envObj,
         },
       });
-      if (data.ok) {
-        await loadAgents();
-        addMessage({ type: 'system', content: `✅ Agent "${name.trim() || trimmedId}" created` });
-        setShowAddAgent(false);
-        setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' });
-      } else {
-        addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
-      }
-    } catch {
-      addMessage({ type: 'system', content: '❌ Failed to create agent' });
+      requireSuccessfulMutation(data, 'Failed to create agent');
+      await loadAgents();
+      addMessage({ type: 'system', content: `✅ Agent "${name.trim() || trimmedId}" created` });
+      setShowAddAgent(false);
+      setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' });
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to create agent'));
     } finally {
       setAddAgentLoading(false);
     }
@@ -125,17 +139,25 @@ export function useAgentPanelState({
 
   function openAddRemoteAgent() {
     setShowAgentAddMenu(false);
+    setFormError(null);
     setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: DEFAULT_CWD });
     setShowAddRemoteAgent(true);
     void loadNodes();
   }
 
+  function closeAddRemoteAgent() {
+    setFormError(null);
+    setShowAddRemoteAgent(false);
+  }
+
   async function createRemoteAgent() {
+    if (addAgentLoading) return;
     const { id, name, nodeName, cwd } = newRemoteAgentForm;
     const trimmedId = id.trim();
     if (!trimmedId || !nodeName) return;
     const agentId = trimmedId;
     const displayName = name.trim() || nodeName;
+    setFormError(null);
     setAddAgentLoading(true);
     try {
       const data = await acp({
@@ -149,22 +171,21 @@ export function useAgentPanelState({
           yolo: true,
         },
       });
-      if (data.ok) {
-        await loadAgents();
-        addMessage({ type: 'system', content: `✅ Remote agent "${displayName}" created on node ${nodeName}` });
-        setShowAddRemoteAgent(false);
-        setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: DEFAULT_CWD });
-      } else {
-        addMessage({ type: 'system', content: `❌ Failed: ${data.error}` });
-      }
-    } catch {
-      addMessage({ type: 'system', content: '❌ Failed to create remote agent' });
+      requireSuccessfulMutation(data, 'Failed to create remote agent');
+      await loadAgents();
+      addMessage({ type: 'system', content: `✅ Remote agent "${displayName}" created on node ${nodeName}` });
+      setShowAddRemoteAgent(false);
+      setNewRemoteAgentForm({ id: '', name: '', nodeName: '', cwd: DEFAULT_CWD });
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to create remote agent'));
     } finally {
       setAddAgentLoading(false);
     }
   }
 
   async function openAgentSettings(agentId: string) {
+    const requestGeneration = ++settingsRequestGeneration.current;
+    setFormError(null);
     setSettingsAgentId(agentId);
     setSettingsAgentConfig(null);
     setSettingsEnvText('');
@@ -177,36 +198,69 @@ export function useAgentPanelState({
         acp({ action: 'get-agent-config', agentId }),
         acp({ action: 'list-agent-access', agentId }),
       ]);
-      if (configData.ok) {
-        setSettingsAgentConfig(configData.agent);
-        const env = configData.agent.env || {};
-        setSettingsEnvText(Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n'));
-      }
-      if (accessData.ok) setAgentAccessList(accessData.access || []);
-    } catch (err) {
-      console.error('Failed to load agent config', err);
+      if (requestGeneration !== settingsRequestGeneration.current) return;
+      requireSuccessfulMutation(configData, 'Failed to load agent settings');
+      requireSuccessfulMutation(accessData, 'Failed to load agent settings');
+      setSettingsAgentConfig(configData.agent);
+      const env = configData.agent.env || {};
+      setSettingsEnvText(Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n'));
+      setAgentAccessList(accessData.access || []);
+    } catch (error) {
+      if (requestGeneration !== settingsRequestGeneration.current) return;
+      setFormError(mutationError(error, 'Failed to load agent settings'));
     } finally {
-      setAgentSettingsLoading(false);
+      if (requestGeneration === settingsRequestGeneration.current) {
+        setAgentSettingsLoading(false);
+      }
     }
   }
 
   async function addAccess() {
-    if (!settingsAgentId || !newAccessEmail.trim()) return;
-    await acp({ action: 'add-agent-access', agentId: settingsAgentId, email: newAccessEmail.trim() });
-    setNewAccessEmail('');
-    const data = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
-    if (data.ok) setAgentAccessList(data.access || []);
+    if (agentSettingsLoading || agentAccessLoading || !settingsAgentId || !newAccessEmail.trim()) return;
+    setFormError(null);
+    setAgentAccessLoading(true);
+    try {
+      const updateData = await acp({ action: 'add-agent-access', agentId: settingsAgentId, email: newAccessEmail.trim() });
+      requireSuccessfulMutation(updateData, 'Failed to update agent access');
+      const accessData = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
+      requireSuccessfulMutation(accessData, 'Failed to update agent access');
+      setNewAccessEmail('');
+      setAgentAccessList(accessData.access || []);
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to update agent access'));
+    } finally {
+      setAgentAccessLoading(false);
+    }
   }
 
   async function removeAccess(email: string) {
-    if (!settingsAgentId) return;
-    await acp({ action: 'remove-agent-access', agentId: settingsAgentId, email });
-    const data = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
-    if (data.ok) setAgentAccessList(data.access || []);
+    if (agentSettingsLoading || agentAccessLoading || !settingsAgentId) return;
+    setFormError(null);
+    setAgentAccessLoading(true);
+    try {
+      const updateData = await acp({ action: 'remove-agent-access', agentId: settingsAgentId, email });
+      requireSuccessfulMutation(updateData, 'Failed to update agent access');
+      const accessData = await acp({ action: 'list-agent-access', agentId: settingsAgentId });
+      requireSuccessfulMutation(accessData, 'Failed to update agent access');
+      setAgentAccessList(accessData.access || []);
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to update agent access'));
+    } finally {
+      setAgentAccessLoading(false);
+    }
   }
 
   async function saveAgentSettings() {
-    if (!settingsAgentId || !settingsAgentConfig) return;
+    if (
+      agentSettingsLoading
+      || agentAccessLoading
+      || !settingsAgentId
+      || !settingsAgentConfig
+      || settingsAgentConfig.id !== settingsAgentId
+    ) return;
+    const agentId = settingsAgentId;
+    const agentConfig = settingsAgentConfig;
+    setFormError(null);
     setAgentSettingsLoading(true);
     try {
       // Parse env text to object on save
@@ -220,74 +274,87 @@ export function useAgentPanelState({
       }
 
       const data = await acp({
-        action: 'update-agent-config', agentId: settingsAgentId,
+        action: 'update-agent-config', agentId,
         updates: {
-          name: settingsAgentConfig.name,
-          command: settingsAgentConfig.command,
-          args: settingsAgentConfig.args,
-          cwd: settingsAgentConfig.cwd,
-          yolo: settingsAgentConfig.yolo,
-          public: settingsAgentConfig.public,
+          name: agentConfig.name,
+          command: agentConfig.command,
+          args: agentConfig.args,
+          cwd: agentConfig.cwd,
+          yolo: agentConfig.yolo,
+          public: agentConfig.public,
           env: envObj,
         },
       });
-      if (data.ok) {
-        setShowAgentSettings(false);
-        await loadAgents();
-        addMessage({ type: 'system', content: data.restarted ? `⚙️ ${settingsAgentConfig.name} settings updated, restarting...` : `⚙️ ${settingsAgentConfig.name} settings saved` });
-      }
-    } catch (err) {
-      console.error('Failed to save agent settings', err);
+      requireSuccessfulMutation(data, 'Failed to update agent');
+      setShowAgentSettings(false);
+      await loadAgents();
+      addMessage({ type: 'system', content: data.restarted ? `⚙️ ${agentConfig.name} settings updated, restarting...` : `⚙️ ${agentConfig.name} settings saved` });
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to update agent'));
     } finally {
       setAgentSettingsLoading(false);
     }
   }
 
   async function deleteAgent(agentId: string, agentName: string) {
+    if (agentSettingsLoading || agentAccessLoading) return;
     if (!confirm(`Delete agent "${agentName}"? This cannot be undone.`)) return;
+    setFormError(null);
     setAgentSettingsLoading(true);
     try {
       const data = await acp({ action: 'delete-agent', agentId });
-      if (data.ok) {
-        setShowAgentSettings(false);
-        await loadAgents();
-        addMessage({ type: 'system', content: `🗑️ Agent "${agentName}" deleted` });
-      }
-    } catch (err) {
-      console.error('Failed to delete agent', err);
+      requireSuccessfulMutation(data, 'Failed to delete agent');
+      setShowAgentSettings(false);
+      await loadAgents();
+      addMessage({ type: 'system', content: `🗑️ Agent "${agentName}" deleted` });
+    } catch (error) {
+      setFormError(mutationError(error, 'Failed to delete agent'));
     } finally {
       setAgentSettingsLoading(false);
     }
   }
 
-  function openModelSettings(agentId: string) { setOpenModelMenuAgentId(agentId); }
-  function closeModelSettings() { setOpenModelMenuAgentId(null); }
+  function closeAgentSettings() {
+    settingsRequestGeneration.current += 1;
+    setFormError(null);
+    setShowAgentSettings(false);
+    setSettingsAgentId(null);
+    setSettingsAgentConfig(null);
+    setSettingsEnvText('');
+    setAgentAccessList([]);
+    setNewAccessEmail('');
+    setAgentSettingsLoading(false);
+    setAgentAccessLoading(false);
+  }
+
+  function openModelSettings(menuKey: string) { setOpenModelMenuKey(menuKey); }
+  function closeModelSettings() { setOpenModelMenuKey(null); }
 
   useEffect(() => {
-    const anyOpen = openModelMenuAgentId || showAgentSettings || showAddAgent || showAddRemoteAgent || showAgentAddMenu;
+    const anyOpen = openModelMenuKey || showAgentSettings || showAddAgent || showAddRemoteAgent || showAgentAddMenu;
     if (!anyOpen) return;
     function handlePointerDown(event: MouseEvent) {
-      if (!openModelMenuAgentId) return;
-      const wrap = modelMenuRefs.current.get(openModelMenuAgentId);
+      if (!openModelMenuKey) return;
+      const wrap = modelMenuRefs.current.get(openModelMenuKey);
       if (wrap && !wrap.contains(event.target as Node)) {
-        setOpenModelMenuAgentId(null);
+        setOpenModelMenuKey(null);
       }
     }
     function handleKey(event: globalThis.KeyboardEvent) {
       if (event.key !== 'Escape') return;
-      if (openModelMenuAgentId) { setOpenModelMenuAgentId(null); return; }
-      if (showAgentSettings) { setShowAgentSettings(false); return; }
-      if (showAddAgent) { setShowAddAgent(false); setNewAgentForm({ id: '', name: '', command: '', args: '', cwd: DEFAULT_CWD, yolo: true, env: '' }); return; }
-      if (showAddRemoteAgent) { setShowAddRemoteAgent(false); return; }
-      if (showAgentAddMenu) { setShowAgentAddMenu(false); return; }
+      if (openModelMenuKey) { event.stopImmediatePropagation(); setOpenModelMenuKey(null); return; }
+      if (showAgentSettings) { event.stopImmediatePropagation(); closeAgentSettings(); return; }
+      if (showAddAgent) { event.stopImmediatePropagation(); closeAddAgent(); return; }
+      if (showAddRemoteAgent) { event.stopImmediatePropagation(); closeAddRemoteAgent(); return; }
+      if (showAgentAddMenu) { event.stopImmediatePropagation(); setShowAgentAddMenu(false); return; }
     }
     window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleKey);
+    window.addEventListener('keydown', handleKey, { capture: true });
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('keydown', handleKey, { capture: true });
     };
-  }, [openModelMenuAgentId, showAgentSettings, showAddAgent, showAddRemoteAgent, showAgentAddMenu]);
+  }, [openModelMenuKey, showAgentSettings, showAddAgent, showAddRemoteAgent, showAgentAddMenu]);
 
   // Minimal AgentPanelState/Actions compat
   const formValues: Record<string, string> = {
@@ -309,7 +376,7 @@ export function useAgentPanelState({
 
     // Spec-compat fields
     formValues,
-    formError: null as string | null,
+    formError,
     isSubmitting: addAgentLoading,
 
     // Add agent menu
@@ -332,6 +399,7 @@ export function useAgentPanelState({
     newRemoteAgentForm,
     setNewRemoteAgentForm,
     openAddRemoteAgent,
+    closeAddRemoteAgent,
     createRemoteAgent,
 
     // Agent settings
@@ -343,19 +411,20 @@ export function useAgentPanelState({
     settingsEnvText,
     setSettingsEnvText,
     agentSettingsLoading,
+    agentAccessLoading,
     agentAccessList,
     newAccessEmail,
     setNewAccessEmail,
     openAgentSettings,
-    closeAgentSettings: () => setShowAgentSettings(false),
+    closeAgentSettings,
     saveAgentSettings,
     deleteAgent,
     addAccess,
     removeAccess,
 
     // UI-only model menu state
-    openModelMenuAgentId,
-    setOpenModelMenuAgentId,
+    openModelMenuKey,
+    setOpenModelMenuKey,
     modelMenuRefs,
 
     // Model settings actions

@@ -2,6 +2,7 @@ import {
   getGitHubAllowedEmails,
   isGitHubEmailAllowed,
   parseEmailList,
+  shouldUseSecureAuthCookies,
 } from '../lib/auth';
 import { authOptions } from '../app/api/auth/[...nextauth]/route';
 
@@ -40,6 +41,21 @@ expectEqual(
   isGitHubEmailAllowed('other@example.com', ['alice@example.com']),
   false,
   'denies an email outside the allowlist',
+);
+expectEqual(
+  shouldUseSecureAuthCookies('http://localhost:3010', 'development'),
+  false,
+  'allows auth cookies on an explicit HTTP development URL',
+);
+expectEqual(
+  shouldUseSecureAuthCookies('https://chat.example.com', 'production'),
+  true,
+  'keeps auth cookies secure on HTTPS',
+);
+expectEqual(
+  shouldUseSecureAuthCookies(undefined, 'production'),
+  true,
+  'defaults production auth cookies to secure',
 );
 
 async function testSignInCallback(): Promise<void> {
@@ -100,7 +116,44 @@ async function testSignInCallback(): Promise<void> {
   }
 }
 
-testSignInCallback().then(() => {
+async function testGitHubPrivateEmailJwt(): Promise<void> {
+  const jwt = authOptions.callbacks?.jwt;
+  if (!jwt) throw new Error('NextAuth jwt callback is not configured');
+
+  const originalFetch = global.fetch;
+  const originalAdminEmails = process.env.ADMIN_EMAILS;
+  try {
+    process.env.ADMIN_EMAILS = 'x12jiang@outlook.com';
+    global.fetch = async () => new Response(JSON.stringify([
+      { email: 'x12jiang@outlook.com', primary: true, verified: true },
+    ]), { status: 200 });
+
+    const token = await jwt({
+      token: { email: 'xujxu@users.noreply.github.com' },
+      user: { email: 'xujxu@users.noreply.github.com' },
+      account: { provider: 'github', access_token: 'test-token' },
+      profile: { email: null },
+    } as never);
+
+    expectEqual(
+      token.email,
+      'x12jiang@outlook.com',
+      'uses the verified primary GitHub email when the public profile email is private',
+    );
+    expectEqual(token.role, 'admin', 'assigns the role from the resolved GitHub email');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = originalAdminEmails;
+  }
+}
+
+async function main(): Promise<void> {
+  await testSignInCallback();
+  await testGitHubPrivateEmailJwt();
+}
+
+main().then(() => {
   console.log('auth allowlist tests passed');
 }).catch((error: unknown) => {
   console.error(error);

@@ -1144,23 +1144,44 @@ test.describe('Chat UI', () => {
     const chatId = `ui-message-punctuation-status-${Date.now()}`;
     const chatName = 'Message punctuation status';
     const partialText = 'partial answer with punctuation status';
+    const resumedAgents = new Set<string>();
+    const polledAgents = new Set<string>();
 
     await page.route('**/api/acp', async (route) => {
-      const body = route.request().postDataJSON() as any;
+      const body = route.request().postDataJSON() as { action?: string; agentId?: string; sessionId?: string };
       if (body?.action === 'list-agents') {
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
             ok: true,
-            agents: [{ id: 'alpha', name: 'Alpha Agent', command: 'mock', args: [], cwd: '', running: true }],
+            agents: ['alpha', 'beta'].map((id) => ({
+              id, name: `${id} Agent`, command: 'mock', args: [], cwd: '', running: true,
+            })),
           }),
         });
         return;
       }
-      if (body?.action === 'resume-session') {
+      if (body?.action === 'resume-session' || body?.action === 'poll') {
+        const agentId = body.agentId!;
+        if (body.action === 'resume-session') resumedAgents.add(agentId);
+        else polledAgents.add(agentId);
         await route.fulfill({
           contentType: 'application/json',
-          body: JSON.stringify({ ok: true, sessionId: body.sessionId, loaded: true, activeTurn: null, recoveredMessages: [] }),
+          body: JSON.stringify({
+            ok: true,
+            sessionId: `session-${agentId}`,
+            loaded: true,
+            recoveredMessages: [],
+            activeTurn: {
+              id: `turn-${agentId}`,
+              messageId: agentId === 'alpha' ? 'a1' : 'a2',
+              fullText: agentId === 'alpha' ? '' : partialText,
+              done: false,
+              phase: 'thinking',
+              statusText: '.',
+              events: [],
+            },
+          }),
         });
         return;
       }
@@ -1177,9 +1198,9 @@ test.describe('Chat UI', () => {
           { id: 'u1', type: 'user', content: 'trigger empty punctuation message status', ts: now },
           { id: 'a1', type: 'agent', content: '', agentId: 'alpha', pending: true, statusText: '.', ts: now + 1 },
           { id: 'u2', type: 'user', content: 'trigger content punctuation message status', ts: now + 2 },
-          { id: 'a2', type: 'agent', content: partialText, agentId: 'alpha', pending: true, statusText: '.', ts: now + 3 },
+          { id: 'a2', type: 'agent', content: partialText, agentId: 'beta', pending: true, statusText: '.', ts: now + 3 },
         ],
-        agentSessions: { alpha: 'session-alpha' },
+        agentSessions: { alpha: 'session-alpha', beta: 'session-beta' },
       };
       await fetch('/api/chats', {
         method: 'POST',
@@ -1195,6 +1216,8 @@ test.describe('Chat UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    await expect.poll(() => [...resumedAgents].sort()).toEqual(['alpha', 'beta']);
+    await expect.poll(() => [...polledAgents].sort()).toEqual(['alpha', 'beta']);
     await expect(chatArea.locator('.thinkingText').first()).toHaveText('Thinking');
     await expect(chatArea.locator('.thinkingText').first()).not.toHaveText('.');
 

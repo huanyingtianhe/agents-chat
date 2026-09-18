@@ -50,8 +50,8 @@ export function ChatPageClient() {
   const acp = useCallback((body: Record<string, unknown>) => acpApi({ ...body, userId }), [userId]);
   const composer = useComposerState();
   const { input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef, attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic, composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments, handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop } = composer;
-  const ui = usePageUIState({ mounted });
   const mobile = useMobileOverlayState();
+  const ui = usePageUIState({ mounted, isMobileLayout: mobile.isMobileLayout, onMobileNavigationClose: mobile.close });
   const { themeId, setThemeId, normalizedThemeId, themeStyle, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, sidebarDragRef, lightboxImage, setLightboxImage, showChatsPanel, setShowChatsPanel, openChatMenuId, setOpenChatMenuId, chatMenuButtonRefs, renamingChatId, setRenamingChatId, renameValue, setRenameValue, mentionSelectedIndex, setMentionSelectedIndex } = ui;
   const registry = useAgentRegistry({ acp });
   const { agents, agentsLoading, lastUsedAgent, chatLastUsedAgents, lastUsedAgentScope, rememberLastUsedAgent, reloadAgents } = registry;

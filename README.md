@@ -171,7 +171,7 @@ On Linux, stdout/stderr are also captured by journald (`journalctl -u agents-cha
 - **Chat history** — Persistent message history in SQLite (`.data/chats.db`) with sidebar run status, sorted newest-first and filtered to the signed-in user.
 - **Session resume** — Reloading a chat restores agent session context via `session/load`.
 - **Shared chats** — Generate a read-only share link for any conversation, with Open Graph image optimized for Teams previews.
-- **Mobile responsive** — Full-featured UI on phones and tablets with swipeable panels and touch-friendly controls.
+- **Mobile responsive** — Full-featured UI on phones and tablets with swipeable panels and touch-friendly controls. On mobile, the sidebar collapse button closes the navigation drawer; the header navigation button reopens the full Chats/Files tabs without changing the saved desktop collapse preference.
 - **Authentication** — Azure AD SSO, **GitHub OAuth**, or local credentials login; admin/user roles.
 
 ## Using the app
@@ -490,7 +490,8 @@ The **Playwright E2E** workflow runs on every PR targeting `main` and every push
 It builds and serves the production app with isolated CI credentials, runs desktop Chromium
 in four shards, and runs Android Chromium and iPhone WebKit as independent jobs. Desktop
 failures do not prevent mobile coverage from running. Mobile checks cover navigation and
-overlay state, narrow screens and landscape, keyboard/composer geometry, file previews,
+overlay state, sidebar collapse/reopen and desktop preference preservation across breakpoints,
+narrow screens and landscape, keyboard/composer geometry, file previews,
 and management panels. Failed jobs upload HTML reports, traces, screenshots, and server logs.
 Do not run stateful E2E tests against a production instance or its database.
 

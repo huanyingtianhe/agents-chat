@@ -67,6 +67,74 @@ test('keeps only one mobile overlay active', async ({ page }) => {
   await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(1);
 });
 
+for (const tab of ['Chats', 'Files']) {
+  test(`sidebar collapse closes and reopens the mobile ${tab} drawer`, async ({ page }) => {
+    const navigation = page.getByRole('button', { name: 'Open navigation' });
+    const sidebar = page.locator('.participantsSidebar');
+    const composer = page.locator('textarea.composerTextarea');
+    await composer.fill('Keep my draft when closing navigation');
+    await navigation.click();
+    await sidebar.getByRole('tab', { name: tab }).click();
+    await expect(sidebar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+
+    await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+
+    await expect(sidebar).not.toHaveClass(/mobilePanelVisible/);
+    await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
+    await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+    await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+    await expect.poll(() => page.evaluate(() => window.history.state?.agentsChatMobileOverlay ?? false)).toBe(false);
+    await expect(navigation).toBeFocused();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('acp_chat_sidebar_collapsed_v1'))).toBe('0');
+
+    await navigation.click();
+    await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
+    await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
+    await expect(sidebar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+    await expect(sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeVisible();
+    await expect(sidebar.locator('.collapsedSidebarControls')).toHaveCount(0);
+    await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+    await expect(composer).toHaveValue('Keep my draft when closing navigation');
+  });
+}
+
+test('mobile navigation ignores a saved desktop collapse preference without overwriting it', async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem('acp_chat_sidebar_collapsed_v1', '1'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('Existing mobile message')).toBeVisible();
+
+  const sidebar = page.locator('.participantsSidebar');
+  const collapse = sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true });
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
+  await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
+  await expect(sidebar.locator('.collapsedSidebarControls')).toHaveCount(0);
+  await expect(page.locator('.chatLayout')).not.toHaveClass(/sidebarCollapsed/);
+  await collapse.click();
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('acp_chat_sidebar_collapsed_v1'))).toBe('1');
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await setTestVisualViewport(page, 800, 0);
+  await expect(sidebar.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeVisible();
+  await expect(page.locator('.chatLayout')).toHaveClass(/sidebarCollapsed/);
+  await sidebar.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
+  await collapse.click();
+  await expect(sidebar.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setTestVisualViewport(page, 844, 0);
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
+  await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
+  await collapse.click();
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('acp_chat_sidebar_collapsed_v1'))).toBe('1');
+});
+
 test('account replaces every persistent-header mobile overlay', async ({ page }) => {
   const account = page.locator('.userNameButton');
   const overlays = [

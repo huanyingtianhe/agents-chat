@@ -1,0 +1,99 @@
+name: Mobile UX validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mobile-web-ux-only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile-ux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      NEXTAUTH_SECRET: isolated-mobile-ux-test-secret
+      NEXTAUTH_URL: http://localhost:3011
+      PLAYWRIGHT_BASE_URL: http://localhost:3011
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies and browsers
+        timeout-minutes: 5
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium webkit
+      - name: Build and check types
+        timeout-minutes: 5
+        run: |
+          npm run build
+          npx tsc --noEmit
+      - name: Start isolated app
+        timeout-minutes: 1
+        run: |
+          mkdir -p artifacts
+          node_modules/.bin/next start --hostname 127.0.0.1 --port 3011 >artifacts/server.log 2>&1 &
+          server_pid=$!
+          echo "$server_pid" > artifacts/server.pid
+          for attempt in $(seq 1 25); do
+            if curl --fail --silent http://localhost:3011/login >/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat artifacts/server.log
+              exit 1
+            fi
+            sleep 2
+          done
+          cat artifacts/server.log
+          exit 1
+      - name: iPhone WebKit mobile UX
+        timeout-minutes: 5
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=iphone-webkit --timeout=60000 --global-timeout=270000
+          --max-failures=1 --trace=retain-on-failure --reporter=line
+          --output=artifacts/iphone
+      - name: Android Chromium mobile UX
+        timeout-minutes: 4
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=android-chromium --timeout=60000 --global-timeout=210000
+          --max-failures=1 --trace=retain-on-failure --reporter=line
+          --output=artifacts/android
+      - name: Model picker and chat loading regressions
+        timeout-minutes: 4
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=desktop-chromium tests/agent-composer-default-model.spec.ts
+          tests/chat-selection-loading.spec.ts tests/interaction-coverage.spec.ts
+          --timeout=60000 --global-timeout=210000 --max-failures=1
+          --trace=retain-on-failure --reporter=line
+          --output=artifacts/desktop
+      - name: Stop isolated app
+        if: always()
+        run: |
+          if [ -f artifacts/server.pid ]; then
+            server_pid="$(cat artifacts/server.pid)"
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid"
+            fi
+          fi
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ux-validation
+          path: artifacts/
+          retention-days: 7

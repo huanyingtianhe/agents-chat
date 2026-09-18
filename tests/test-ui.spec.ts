@@ -4542,11 +4542,8 @@ test.describe('Chat UI', () => {
   });
 
   test('should stop polling a stalled active turn with no progress', async ({ page }) => {
-    await page.addInitScript(() => {
-      const initialNow = Date.now();
-      let callCount = 0;
-      Date.now = () => initialNow + (callCount++ * 2 * 60 * 1000);
-    });
+    const initialNow = Date.now();
+    await page.clock.setFixedTime(initialNow);
 
     const chatArea = page.locator('.chatContainer');
     const textarea = page.locator('textarea.composerTextarea');
@@ -4601,8 +4598,18 @@ test.describe('Chat UI', () => {
 
     const agentMessage = chatArea.locator('.message.agent', { hasText: 'Implemented in' }).last();
     await expect(agentMessage).toBeVisible({ timeout: 10000 });
+    await expect(agentMessage.locator('.streamingIndicator')).toBeVisible();
+    await expect.poll(() => pollCount).toBeGreaterThanOrEqual(3);
+
+    await page.clock.setFixedTime(initialNow + 10 * 60_000);
+    const pollsAtThreshold = pollCount;
+    await expect.poll(() => pollCount).toBeGreaterThan(pollsAtThreshold);
+    await expect(agentMessage.locator('.streamingIndicator')).toBeVisible();
+
+    await page.clock.setFixedTime(initialNow + 10 * 60_000 + 1);
     await expect(agentMessage.locator('.streamingIndicator')).toHaveCount(0, { timeout: 15000 });
-    expect(pollCount).toBeGreaterThan(2);
+    await expect(page.getByRole('button', { name: 'Stop generation' })).toHaveCount(0);
+    await expect(agentMessage).toContainText('Implemented in');
   });
 
   test('should restore pending request card from resumed active turn', async ({ page }) => {
@@ -4753,7 +4760,7 @@ test.describe('Empty Homepage', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -4784,7 +4791,7 @@ test.describe('Delete Active Chat', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -4815,7 +4822,7 @@ test.describe('Chat Rename', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
     await ensureActiveChat(page);
   });
@@ -4909,7 +4916,7 @@ test.describe('Agent Filter Tabs', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.emptyHomepage', { timeout: 10000 });
   });
 
@@ -5193,7 +5200,7 @@ test.describe('Theme', () => {
       expectedSelectionStyle,
     ]);
 
-    await page.getByRole('button', { name: /Files/ }).click();
+    await page.getByRole('tab', { name: /Files/ }).click();
     await selectFilesAgent(page, 'selection-agent');
     await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
     await expect(page.locator('.mdLiveEditable')).toBeVisible();
@@ -5243,7 +5250,7 @@ test.describe('Comment Review Chat', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await deleteAllChats(page);
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 10000 });
   });
 

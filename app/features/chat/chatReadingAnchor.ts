@@ -20,7 +20,7 @@ function textNodes(message: HTMLElement): Text[] {
   const walker = document.createTreeWalker(message, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement;
-      return parent?.closest(BODY) && !parent.closest(CONTROLS) && node.textContent?.trim()
+      return parent?.closest(BODY) && !parent.closest(CONTROLS) && node.textContent
         ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
@@ -29,14 +29,14 @@ function textNodes(message: HTMLElement): Text[] {
   return nodes;
 }
 
-function mediaElements(message: HTMLElement): HTMLElement[] {
-  return Array.from(message.querySelectorAll<HTMLElement>(MEDIA))
+function mediaElements(message: HTMLElement): Element[] {
+  return Array.from(message.querySelectorAll(MEDIA))
     .filter((element) => element.closest(BODY) && !element.closest(CONTROLS));
 }
 
-function innerBounds(element: HTMLElement, container: HTMLElement): Bounds {
+function innerBounds(element: Element, container: HTMLElement): Bounds {
   const bounds: Bounds = { top: -Infinity, bottom: Infinity, left: -Infinity, right: Infinity };
-  for (let parent: HTMLElement | null = element; parent && parent !== container; parent = parent.parentElement) {
+  for (let parent: Element | null = element; parent && parent !== container; parent = parent.parentElement) {
     const style = getComputedStyle(parent);
     if (style.visibility !== 'visible' || style.display === 'none') return { top: 0, bottom: 0, left: 0, right: 0 };
     const rect = parent.getBoundingClientRect();
@@ -65,10 +65,59 @@ function intersects(rect: DOMRect, bounds: Bounds): boolean {
     && rect.right > bounds.left && rect.left < bounds.right;
 }
 
+function visibleOffset(node: Text, bounds: Bounds, firstOnLine: boolean, partial = false): number {
+  let low = 0;
+  let high = node.length - 1;
+  let end = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const rect = characterRect(node, middle);
+    if (partial ? rect.top < bounds.bottom : rect.bottom <= bounds.bottom + 0.01) {
+      end = middle;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  const rtl = node.parentElement && getComputedStyle(node.parentElement).direction === 'rtl';
+  while (end >= 0) {
+    while (end >= 0 && /\s/.test(node.data[end])) end--;
+    if (end < 0) break;
+    const last = characterRect(node, end);
+    if (last.bottom <= bounds.top) break;
+    low = 0;
+    high = end;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (characterRect(node, middle).bottom < last.bottom - 0.1) low = middle + 1;
+      else high = middle;
+    }
+    const start = low;
+    high = end;
+    let selected = -1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const rect = characterRect(node, middle);
+      if (firstOnLine) {
+        if (rtl ? rect.left < bounds.right : rect.right > bounds.left) {
+          selected = middle;
+          high = middle - 1;
+        } else low = middle + 1;
+      } else if (rtl ? rect.right > bounds.left : rect.left < bounds.right) {
+        selected = middle;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    while (selected >= start && selected <= end && /\s/.test(node.data[selected])) selected += firstOnLine ? 1 : -1;
+    if (selected >= start && selected <= end && intersects(characterRect(node, selected), bounds)) return selected;
+    end = start - 1;
+  }
+  return -1;
+}
+
 export function captureReadingAnchor(container: HTMLElement): ReadingAnchor | null {
   const viewport = chatViewport(container);
   let chosen: ReadingAnchor | null = null;
   let lowest = -Infinity;
+  let partialAnchor: ReadingAnchor | null = null;
   let fallback: ReadingAnchor | null = null;
   const messages = Array.from(container.querySelectorAll<HTMLElement>('[data-message-id]'));
   for (const message of messages) {
@@ -85,6 +134,7 @@ export function captureReadingAnchor(container: HTMLElement): ReadingAnchor | nu
     for (const node of textNodes(message)) {
       const parent = node.parentElement;
       if (!parent) continue;
+      if (!node.data.trim()) { baseOffset += node.length; continue; }
       const clip = innerBounds(parent, container);
       const bounds = {
         top: Math.max(viewport.top, clip.top), bottom: Math.min(viewport.bottom, clip.bottom),
@@ -93,23 +143,21 @@ export function captureReadingAnchor(container: HTMLElement): ReadingAnchor | nu
       const range = document.createRange();
       range.selectNodeContents(node);
       if (intersects(range.getBoundingClientRect(), bounds)) {
-        let low = 0;
-        let high = node.length - 1;
-        let offset = -1;
-        while (low <= high) {
-          const middle = Math.floor((low + high) / 2);
-          const rect = characterRect(node, middle);
-          if (rect.bottom <= bounds.bottom + 0.01) {
-            offset = middle;
-            low = middle + 1;
-          } else high = middle - 1;
-        }
-        while (offset >= 0 && /\s/.test(node.data[offset])) offset--;
+        const firstOnLine = !!parent.closest('pre');
+        const offset = visibleOffset(node, bounds, firstOnLine);
         if (offset >= 0) {
           const rect = characterRect(node, offset);
           if (intersects(rect, bounds) && rect.bottom >= lowest) {
             lowest = rect.bottom;
             chosen = { kind: 'text', messageId, offset: baseOffset + offset, bottomGap: viewport.bottom - rect.bottom };
+          }
+        } else {
+          const partialOffset = visibleOffset(node, bounds, firstOnLine, true);
+          if (partialOffset >= 0) {
+            partialAnchor = {
+              kind: 'text', messageId, offset: baseOffset + partialOffset,
+              bottomGap: viewport.bottom - characterRect(node, partialOffset).bottom,
+            };
           }
         }
       }
@@ -129,7 +177,7 @@ export function captureReadingAnchor(container: HTMLElement): ReadingAnchor | nu
       };
     });
   }
-  return chosen ?? fallback;
+  return chosen ?? partialAnchor ?? fallback;
 }
 
 export function resolveReadingAnchor(container: HTMLElement, anchor: ReadingAnchor): number | null {

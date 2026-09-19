@@ -50,6 +50,8 @@ export function createChatScrollController(
   }
 
   function captureUserPosition() {
+    if (correctionFrame) cancelAnimationFrame(correctionFrame);
+    correctionFrame = 0;
     following = atBottom();
     anchor = following ? null : captureReadingAnchor(container);
     geometry = measure();
@@ -111,7 +113,7 @@ export function createChatScrollController(
       expectedTop = null;
       return;
     }
-    if (correctionFrame || Math.abs(container.scrollTop - lastTop) <= 0.25) return;
+    if (Math.abs(container.scrollTop - lastTop) <= 0.25) return;
     captureUserPosition();
   }
 

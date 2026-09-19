@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  clampScrollTop, correctedScrollTop, isNearBottom,
+  clampScrollTop, correctedScrollTop, geometryChanged, isNearBottom,
 } from '../app/features/chat/chatScrollGeometry.ts';
 
 test('restores a bottom-relative point instead of a scroll percentage', () => {
@@ -24,4 +24,12 @@ test('retains the existing four CSS pixel bottom tolerance', () => {
   assert.equal(isNearBottom(1500, 2400, 800), false);
   assert.equal(isNearBottom(1605, 2400, 800), true);
   assert.equal(isNearBottom(0, 200, 800), true);
+});
+
+test('detects wrapping, viewport and content geometry independently', () => {
+  const before = { width: 390, height: 650, contentHeight: 6000 };
+  assert.equal(geometryChanged(before, { ...before }), false);
+  assert.equal(geometryChanged(before, { ...before, width: 844 }), true);
+  assert.equal(geometryChanged(before, { ...before, height: 250 }), true);
+  assert.equal(geometryChanged(before, { ...before, contentHeight: 6200 }), true);
 });

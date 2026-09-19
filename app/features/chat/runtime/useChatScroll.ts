@@ -41,9 +41,13 @@ export function useChatScroll(chatId: string) {
   }, []);
 
   const scrollToLatest = useCallback(() => controllerRef.current?.jumpToLatest(), []);
+  const forgetChatScroll = useCallback((removedChatId: string) => {
+    snapshotsRef.current.delete(removedChatId);
+    if (restoreRef.current?.chatId === removedChatId) restoreRef.current = null;
+  }, []);
 
   return {
     chatContainerRef, attachChatContainer, showScrollToBottom,
-    handleBeforeFileTabChange, prepareChatLoad, scrollToLatest,
+    handleBeforeFileTabChange, prepareChatLoad, scrollToLatest, forgetChatScroll,
   };
 }

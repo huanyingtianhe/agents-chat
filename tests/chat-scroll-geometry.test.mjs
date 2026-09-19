@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  clampScrollTop, correctedScrollTop, geometryChanged, isNearBottom,
+  clampScrollTop, correctedScrollTop, geometryChanged, isLayoutScroll, isNearBottom,
 } from '../app/features/chat/chatScrollGeometry.ts';
 
 test('restores a bottom-relative point instead of a scroll percentage', () => {
@@ -32,4 +32,12 @@ test('detects wrapping, viewport and content geometry independently', () => {
   assert.equal(geometryChanged(before, { ...before, width: 844 }), true);
   assert.equal(geometryChanged(before, { ...before, height: 250 }), true);
   assert.equal(geometryChanged(before, { ...before, contentHeight: 6200 }), true);
+});
+
+test('only attributes preserved or clamped scroll offsets to layout', () => {
+  assert.equal(isLayoutScroll(2400, 1200, 1200), true);
+  assert.equal(isLayoutScroll(800, 800, 2400), true);
+  assert.equal(isLayoutScroll(1250, 625, 1250), false);
+  assert.equal(isLayoutScroll(1980, 2778, 6000), false);
+  assert.equal(isLayoutScroll(100, 0, 0), true);
 });

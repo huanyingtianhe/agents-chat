@@ -287,6 +287,21 @@ test('maintains the anchor during multiple composer-height changes', async ({ pa
   }
 });
 
+test('does not overwrite a new reading position before resize observation is delivered', async ({ page }) => {
+  const chat = page.locator('.chatContainer');
+  const requested = await chat.evaluate((element) => {
+    document.querySelector<HTMLElement>('.page')!.style.setProperty('--app-viewport-height', '600px');
+    element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
+    return element.scrollTop;
+  });
+  await settleLayout(page);
+  await expect.poll(() => chat.evaluate((element) => element.scrollTop)).toBe(requested);
+  const point = await readHistoricalPoint(page);
+  await page.setViewportSize(landscape);
+  await settleLayout(page);
+  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+});
+
 test('keeps historical text fixed during streaming then follows an explicit jump', async ({ page }) => {
   await page.locator('textarea.composerTextarea').fill('@alpha Start reading stream');
   await page.getByRole('button', { name: 'Send message' }).click();

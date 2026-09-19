@@ -1,5 +1,5 @@
 import { captureReadingAnchor, chatViewport, resolveReadingAnchor, type ReadingAnchor } from '../chatReadingAnchor';
-import { clampScrollTop, correctedScrollTop, geometryChanged, isNearBottom, type ScrollGeometry } from '../chatScrollGeometry';
+import { clampScrollTop, correctedScrollTop, geometryChanged, isLayoutScroll, isNearBottom, type ScrollGeometry } from '../chatScrollGeometry';
 
 export type ChatScrollSnapshot = {
   following: boolean;
@@ -66,8 +66,13 @@ export function createChatScrollController(
   function correctLayout() {
     correctionFrame = 0;
     if (disposed || suspended || multiTouch || userIntent || container.clientHeight === 0) return;
-    jumping = false;
     const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    // WebKit may deliver the scroll event after the resize callback.
+    if (!jumping && !isLayoutScroll(lastTop, container.scrollTop, maximum)) {
+      captureUserPosition();
+      return;
+    }
+    jumping = false;
     if (following) writeTop(maximum);
     else if (anchor) {
       const bottom = resolveReadingAnchor(container, anchor);
@@ -113,8 +118,10 @@ export function createChatScrollController(
       captureUserPosition();
       return;
     }
-    if (geometryChanged(geometry, measure())) {
-      scheduleCorrection();
+    const current = measure();
+    if (geometryChanged(geometry, current)) {
+      if (isLayoutScroll(lastTop, container.scrollTop, current.contentHeight - current.height)) scheduleCorrection();
+      else captureUserPosition();
       return;
     }
     if (jumping) {

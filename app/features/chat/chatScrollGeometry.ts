@@ -18,6 +18,10 @@ export function geometryChanged(previous: ScrollGeometry, next: ScrollGeometry):
     || previous.contentHeight !== next.contentHeight;
 }
 
+export function isLayoutScroll(previousTop: number, currentTop: number, maximum: number): boolean {
+  return Math.abs(currentTop - clampScrollTop(previousTop, maximum)) <= 1;
+}
+
 export function correctedScrollTop(
   top: number,
   pointBottom: number,

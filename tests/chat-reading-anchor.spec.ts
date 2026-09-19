@@ -9,8 +9,20 @@ const longParagraph = Array.from({ length: 1400 }, (_, i) => `reading${String(i)
 const paragraphSelector = '.message.agent .markdownBody p';
 
 async function settleLayout(page: Page) {
-  await page.evaluate(() => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    let previous = '';
+    let stable = 0;
+    let frames = 0;
+    const sample = () => {
+      const chat = document.querySelector<HTMLElement>('.chatContainer');
+      const geometry = chat ? [chat.clientWidth, chat.clientHeight, chat.scrollHeight, chat.scrollTop].join(',') : '';
+      stable = geometry && geometry === previous ? stable + 1 : 0;
+      previous = geometry;
+      if (stable >= 4) resolve();
+      else if (++frames >= 120) reject(new Error('Chat layout did not settle'));
+      else requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
   }));
 }
 
@@ -63,13 +75,15 @@ async function installReadingFixture(page: Page) {
 }
 
 async function captureHistoricalPoint(page: Page, fraction = 0.5, selector = paragraphSelector) {
-  await page.locator(selector).first().evaluate((paragraph, position) => {
+  const delta = await page.locator(selector).first().evaluate((paragraph, position) => {
     const chat = paragraph.closest<HTMLElement>('.chatContainer');
     if (!chat) throw new Error('Missing chat container');
     const rect = paragraph.getBoundingClientRect();
     if (rect.height < chat.clientHeight * 2) throw new Error('Paragraph is not long enough for internal anchoring');
-    chat.scrollTop += rect.top + rect.height * position - chat.getBoundingClientRect().top - chat.clientHeight;
+    return rect.top + rect.height * position - chat.getBoundingClientRect().top - chat.clientHeight;
   }, fraction);
+  const chat = page.locator('.chatContainer');
+  await chat.evaluate((element, distance) => { element.scrollTop += distance; }, delta);
   await settleLayout(page);
   return readHistoricalPoint(page, selector);
 }
@@ -81,7 +95,7 @@ async function readHistoricalPoint(page: Page, selector = paragraphSelector) {
     const viewport = chat.getBoundingClientRect();
     const bottom = viewport.top + chat.clientTop + chat.clientHeight;
     const pre = paragraph.closest('pre');
-    const clip = pre?.getBoundingClientRect() ?? viewport;
+    const clip = (pre ?? paragraph.closest('table'))?.getBoundingClientRect() ?? viewport;
     const range = document.createRange();
     const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
     let offset = -1;
@@ -146,6 +160,24 @@ test.beforeEach(async ({ page }) => {
   await settleLayout(page);
 });
 
+test.afterEach(async ({ page }, testInfo) => {
+  if (page.isClosed()) return;
+  const geometry = await page.evaluate(() => {
+    const chat = document.querySelector<HTMLElement>('.chatContainer');
+    return {
+      viewport: { width: innerWidth, height: innerHeight, scale: visualViewport?.scale },
+      chat: chat ? {
+        top: chat.scrollTop, height: chat.clientHeight, width: chat.clientWidth,
+        contentHeight: chat.scrollHeight,
+        bottomDistance: chat.scrollHeight - chat.clientHeight - chat.scrollTop,
+      } : null,
+    };
+  });
+  await testInfo.attach('final-reading-geometry', {
+    body: JSON.stringify(geometry, null, 2), contentType: 'application/json',
+  });
+});
+
 test('keeps latest messages at the bottom through orientation round trips', async ({ page }) => {
   const chat = page.locator('.chatContainer');
   await chat.evaluate((element) => { element.scrollTop = element.scrollHeight; });
@@ -207,6 +239,22 @@ test('updates the anchor after keyboard scrolling rather than restoring stale hi
   const point = await readHistoricalPoint(page);
   expect(point.offset).not.toBe(original.offset);
   await page.setViewportSize(landscape);
+  await settleLayout(page);
+  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+});
+
+test('accepts real wheel input while a viewport transition is settling', async ({ page, browserName, isMobile }) => {
+  test.skip(browserName === 'webkit' && isMobile, 'Playwright does not support mouse wheel in mobile WebKit');
+  const original = await captureHistoricalPoint(page, 0.65);
+  await page.setViewportSize(landscape);
+  const box = await page.locator('.chatContainer').boundingBox();
+  if (!box) throw new Error('Missing scroll viewport');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -200);
+  await settleLayout(page);
+  const point = await readHistoricalPoint(page);
+  expect(point.offset).not.toBe(original.offset);
+  await page.setViewportSize(portrait);
   await settleLayout(page);
   await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
 });
@@ -326,11 +374,13 @@ test('anchors visible code rather than a horizontally clipped line ending', asyn
   }
 });
 
-test('keeps text inside a wrapping table cell bottom-anchored', async ({ page }) => {
-  fixture.replaceBody(`| Reading cell |\n| --- |\n| ${longParagraph} |`);
+test('keeps the same text in a tall horizontally scrollable table bottom-anchored', async ({ page }) => {
+  const table = '| Reading cell | Details |\n| --- | --- |\n'
+    + Array.from({ length: 120 }, (_, i) => `| Reading row ${i} | ${'Wide table content '.repeat(8)} |`).join('\n');
+  fixture.replaceBody(table);
   await page.reload();
-  const selector = '.message.agent .markdownBody td';
-  await expect(page.locator(selector).first()).toHaveText(longParagraph);
+  const selector = '.message.agent .markdownBody table';
+  await expect(page.locator(selector).first()).toContainText('Reading row 119');
   await settleLayout(page);
   const point = await captureHistoricalPoint(page, 0.5, selector);
   for (const size of [landscape, portrait]) {
@@ -338,4 +388,70 @@ test('keeps text inside a wrapping table cell bottom-anchored', async ({ page })
     await settleLayout(page);
     await expect.poll(() => historicalPointError(page, point, selector)).toBeLessThanOrEqual(2);
   }
+});
+
+test('restores the historical reading point after visiting a file', async ({ page }) => {
+  const point = await captureHistoricalPoint(page);
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('tab', { name: 'Files', exact: true }).click();
+  await page.getByRole('button', { name: 'Files agent' }).click();
+  await page.getByRole('option', { name: 'Alpha Agent' }).click();
+  await page.getByRole('button', { name: 'README.md' }).click();
+  await expect(page.locator('.mobileMarkdownViewer')).toBeVisible();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('tab', { name: 'Chats', exact: true }).click();
+  await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 380, y: 100 } });
+  await expect(page.locator('.chatContainer')).toBeVisible();
+  await settleLayout(page);
+  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+});
+
+test('pauses application corrections during multi-touch and rebases afterward', async ({ page }) => {
+  await captureHistoricalPoint(page);
+  const chat = page.locator('.chatContainer');
+  const previous = await chat.evaluate((element) => element.scrollTop);
+  await page.evaluate(() => {
+    const gesture = new Event('touchstart');
+    Object.defineProperty(gesture, 'touches', { value: [{ clientY: 200 }, { clientY: 300 }] });
+    window.dispatchEvent(gesture);
+    document.querySelector<HTMLElement>('.page')!.style.setProperty('--app-viewport-height', '600px');
+  });
+  await settleLayout(page);
+  await expect.poll(() => chat.evaluate((element) => element.scrollTop)).toBe(previous);
+  await page.evaluate(() => {
+    const gesture = new Event('touchend');
+    Object.defineProperty(gesture, 'touches', { value: [] });
+    window.dispatchEvent(gesture);
+  });
+  const point = await readHistoricalPoint(page);
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('.page')!.style.setProperty('--app-viewport-height', `${innerHeight}px`);
+  });
+  await settleLayout(page);
+  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+});
+
+test('preserves reading position after a cancelled scrollbar pointer interaction', async ({ page }) => {
+  const point = await captureHistoricalPoint(page);
+  await page.locator('.chatContainer').dispatchEvent('pointerdown', { pointerType: 'mouse' });
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'mouse' })));
+  await page.setViewportSize(landscape);
+  await settleLayout(page);
+  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+});
+
+test('keeps a surviving message position after collapsing its long body', async ({ page }) => {
+  await captureHistoricalPoint(page);
+  const message = page.locator('[data-message-id="reading-long"]');
+  await message.getByRole('button', { name: 'Collapse', exact: true }).click();
+  await expect(message.getByRole('button', { name: 'Expand', exact: true })).toBeVisible();
+  await settleLayout(page);
+  const position = await message.evaluate((element) => {
+    const chat = element.closest<HTMLElement>('.chatContainer')!;
+    const rect = element.getBoundingClientRect();
+    const bounds = chat.getBoundingClientRect();
+    return { visible: rect.bottom > bounds.top && rect.top < bounds.bottom, atLatest: chat.scrollHeight - chat.clientHeight - chat.scrollTop <= 4 };
+  });
+  expect(position.visible).toBe(true);
+  expect(position.atLatest).toBe(false);
 });

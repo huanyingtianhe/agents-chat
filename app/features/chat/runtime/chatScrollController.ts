@@ -31,13 +31,14 @@ export function createChatScrollController(
   let multiTouch = false;
   let touchY: number | null = null;
   let scrollbarDrag = false;
+  let jumping = false;
 
   const measure = (): ScrollGeometry => ({
     width: container.clientWidth, height: container.clientHeight, contentHeight: container.scrollHeight,
   });
   let geometry = measure();
   const atBottom = () => isNearBottom(container.scrollTop, container.scrollHeight, container.clientHeight);
-  const notify = () => onBottomChange(atBottom());
+  const notify = () => onBottomChange(jumping || atBottom());
 
   function writeTop(top: number) {
     if (Math.abs(container.scrollTop - top) > 0.25) {
@@ -53,6 +54,7 @@ export function createChatScrollController(
     if (correctionFrame) cancelAnimationFrame(correctionFrame);
     correctionFrame = 0;
     following = atBottom();
+    jumping = false;
     anchor = following ? null : captureReadingAnchor(container);
     geometry = measure();
     lastTop = container.scrollTop;
@@ -64,6 +66,7 @@ export function createChatScrollController(
   function correctLayout() {
     correctionFrame = 0;
     if (disposed || suspended || multiTouch || userIntent || container.clientHeight === 0) return;
+    jumping = false;
     const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
     if (following) writeTop(maximum);
     else if (anchor) {
@@ -88,6 +91,11 @@ export function createChatScrollController(
 
   function markUserIntent() {
     if (disposed || suspended || multiTouch) return;
+    if (jumping) {
+      jumping = false;
+      container.scrollTo({ top: container.scrollTop, behavior: 'instant' });
+      captureUserPosition();
+    }
     userIntent = true;
     if (correctionFrame) cancelAnimationFrame(correctionFrame);
     correctionFrame = 0;
@@ -107,6 +115,12 @@ export function createChatScrollController(
     }
     if (geometryChanged(geometry, measure())) {
       scheduleCorrection();
+      return;
+    }
+    if (jumping) {
+      lastTop = container.scrollTop;
+      if (atBottom()) jumping = false;
+      notify();
       return;
     }
     if (expectedTop !== null && Math.abs(container.scrollTop - expectedTop) <= 1) {
@@ -132,7 +146,8 @@ export function createChatScrollController(
       if (correctionFrame) cancelAnimationFrame(correctionFrame);
       correctionFrame = 0;
     }
-    touchY = event.touches.length === 1 ? event.touches[0].clientY : null;
+    touchY = event.touches.length === 1 && event.target instanceof Node && container.contains(event.target)
+      ? event.touches[0].clientY : null;
   }
 
   function onTouchMove(event: TouchEvent) {
@@ -172,12 +187,14 @@ export function createChatScrollController(
   container.addEventListener('scroll', onScroll, { passive: true });
   container.addEventListener('wheel', onWheel, { passive: true });
   container.addEventListener('keydown', onKeyDown);
-  container.addEventListener('touchstart', onTouchStart, { passive: true });
-  container.addEventListener('touchmove', onTouchMove, { passive: true });
-  container.addEventListener('touchend', onTouchEnd, { passive: true });
-  container.addEventListener('touchcancel', onTouchEnd, { passive: true });
+  window.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+  window.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
+  window.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+  window.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
   container.addEventListener('pointerdown', onPointerDown, { passive: true });
   window.addEventListener('pointerup', onPointerUp, { passive: true });
+  window.addEventListener('pointercancel', onPointerUp, { passive: true });
+  window.addEventListener('blur', onPointerUp);
   if (initial && !following && !anchor) container.scrollTop = initial.scrollTop;
   correctLayout();
 
@@ -188,7 +205,12 @@ export function createChatScrollController(
       anchor = null;
       suspended = false;
       userIntent = false;
-      correctLayout();
+      if (correctionFrame) cancelAnimationFrame(correctionFrame);
+      correctionFrame = 0;
+      expectedTop = null;
+      jumping = !atBottom();
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      notify();
     },
     suspend() {
       suspended = true;
@@ -204,12 +226,14 @@ export function createChatScrollController(
       container.removeEventListener('scroll', onScroll);
       container.removeEventListener('wheel', onWheel);
       container.removeEventListener('keydown', onKeyDown);
-      container.removeEventListener('touchstart', onTouchStart);
-      container.removeEventListener('touchmove', onTouchMove);
-      container.removeEventListener('touchend', onTouchEnd);
-      container.removeEventListener('touchcancel', onTouchEnd);
+      window.removeEventListener('touchstart', onTouchStart, true);
+      window.removeEventListener('touchmove', onTouchMove, true);
+      window.removeEventListener('touchend', onTouchEnd, true);
+      window.removeEventListener('touchcancel', onTouchEnd, true);
       container.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+      window.removeEventListener('blur', onPointerUp);
     },
   };
 }

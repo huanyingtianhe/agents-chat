@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  clampScrollTop, correctedScrollTop, geometryChanged, isLayoutScroll, isNearBottom,
+  clampScrollTop, correctedScrollTop, geometryChanged, isIndependentScroll, isLayoutScroll, isNearBottom,
 } from '../app/features/chat/chatScrollGeometry.ts';
 
 test('restores a bottom-relative point instead of a scroll percentage', () => {
@@ -40,4 +40,13 @@ test('only attributes preserved or clamped scroll offsets to layout', () => {
   assert.equal(isLayoutScroll(1250, 625, 1250), false);
   assert.equal(isLayoutScroll(1980, 2778, 6000), false);
   assert.equal(isLayoutScroll(100, 0, 0), true);
+});
+
+test('distinguishes deliberate motion during height changes from multi-stage reflow clamping', () => {
+  const previous = { width: 390, height: 700, contentHeight: 2000 };
+  assert.equal(isIndependentScroll(previous, { ...previous, height: 650 }, 1300, 650), true);
+  assert.equal(isIndependentScroll(previous, { ...previous }, 1300, 650), true);
+  assert.equal(isIndependentScroll(previous, { ...previous, height: 800 }, 1300, 1200), false);
+  assert.equal(isIndependentScroll(previous, { width: 844, height: 250, contentHeight: 1300 }, 1300, 600), false);
+  assert.equal(isIndependentScroll(previous, { ...previous, contentHeight: 1000 }, 1300, 150), false);
 });

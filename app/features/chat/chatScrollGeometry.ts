@@ -22,6 +22,14 @@ export function isLayoutScroll(previousTop: number, currentTop: number, maximum:
   return Math.abs(currentTop - clampScrollTop(previousTop, maximum)) <= 1;
 }
 
+export function isIndependentScroll(
+  previous: ScrollGeometry, next: ScrollGeometry, previousTop: number, currentTop: number,
+): boolean {
+  // Rewrapping/content edits may clamp through intermediate extents before either event arrives.
+  return previous.width === next.width && previous.contentHeight === next.contentHeight
+    && !isLayoutScroll(previousTop, currentTop, next.contentHeight - next.height);
+}
+
 export function correctedScrollTop(
   top: number,
   pointBottom: number,

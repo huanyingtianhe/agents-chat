@@ -76,6 +76,7 @@ jobs:
             tar -czf artifacts/standalone-preview.tar.gz -C .next/standalone .
           fi
       - name: Start isolated application
+        id: start-app
         run: |
           mkdir -p artifacts
           printf '%s\n' "$GITHUB_SHA" > artifacts/revision.txt
@@ -95,6 +96,15 @@ jobs:
           done
           cat artifacts/server.log
           exit 1
+      - name: Check chat scroll geometry
+        run: node --test tests/chat-scroll-geometry.test.mjs
+      - name: Check chat reading position
+        if: ${{ !cancelled() && steps.start-app.outcome == 'success' }}
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=${{ matrix.project }} tests/chat-reading-anchor.spec.ts
+          --workers=1 --timeout=60000 --global-timeout=480000
+          --trace=retain-on-failure --reporter=line --output=artifacts/reading-anchor
       - name: Collect typography behavior evidence
         run: >-
           npx playwright test --config tests/playwright.config.ts

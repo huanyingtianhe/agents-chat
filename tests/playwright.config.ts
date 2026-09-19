@@ -5,6 +5,7 @@ const mobileSpecs = [
   '**/mobile-composer-viewport.spec.ts',
 ];
 const typographySpecs = ['**/markdown-typography.spec.ts'];
+const readingSpecs = ['**/chat-reading-anchor.spec.ts'];
 
 export default defineConfig({
   testDir: '.',
@@ -27,12 +28,12 @@ export default defineConfig({
     },
     {
       name: 'android-chromium',
-      testMatch: [...mobileSpecs, ...typographySpecs],
+      testMatch: [...mobileSpecs, ...typographySpecs, ...readingSpecs],
       use: { ...devices['Pixel 7'] },
     },
     {
       name: 'iphone-webkit',
-      testMatch: [...mobileSpecs, ...typographySpecs],
+      testMatch: [...mobileSpecs, ...typographySpecs, ...readingSpecs],
       use: { ...devices['iPhone 14 Pro Max'] },
     },
   ],

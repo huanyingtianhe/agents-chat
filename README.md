@@ -26,6 +26,20 @@ Open [https://localhost:3010](https://localhost:3010).
 
 > **Note:** `npm run dev` enables HTTPS via `--experimental-https`. Accept the self-signed cert on first load.
 
+## Mobile browser compatibility
+
+Markdown uses a document-wide text-adjustment policy to keep its font
+sizes stable across portrait and landscape. Native pinch zoom remains
+available.
+
+**Known limitation:** In the observed iPhone Chrome environment, pinching
+larger, returning to original scale, releasing, then rotating can leave
+the whole page unexpectedly zoomed. This also reproduced on an isolated
+HTML page without the chat runtime; the paired Safari trial stayed at
+original scale. The typography fix does not correct this native page-zoom
+behavior. Safari is a verified temporary alternative for that observed
+case, not a guarantee across every browser or OS version.
+
 ## Production
 
 For persistent deployment, use one of the platform-specific scripts below. Both handle build + restart + health check in one command.

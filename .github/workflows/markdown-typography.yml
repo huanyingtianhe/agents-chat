@@ -1,0 +1,141 @@
+name: Markdown typography validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_origin:
+        description: Public origin used in prerendered metadata (not a secret)
+        required: false
+        type: string
+        default: http://localhost:3011
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - '.browserslistrc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.ts'
+      - '.github/workflows/markdown-typography.yml'
+  push:
+    branches: [fix/ios-markdown-typography]
+    paths-ignore: ['docs/**', 'README.md']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdown-typography-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  typography:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: iphone-webkit
+            browser: webkit
+          - project: android-chromium
+            browser: chromium
+          - project: desktop-chromium
+            browser: chromium
+    env:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      NEXTAUTH_SECRET: isolated-typography-ci-secret
+      NEXTAUTH_URL: http://localhost:3011
+      PLAYWRIGHT_BASE_URL: http://localhost:3011
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies and browser
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Build and check types
+        env:
+          NEXTAUTH_URL: ${{ inputs.build_origin || 'http://localhost:3011' }}
+        run: |
+          npm run build
+          npx tsc --noEmit
+      - name: Prepare revision-identifiable standalone build
+        run: |
+          mkdir -p artifacts .next/standalone/.next .next/standalone/public
+          cp -R .next/static .next/standalone/.next/
+          cp -R public/. .next/standalone/public/
+          printf '%s\n' "$GITHUB_SHA" > .next/standalone/public/validation-revision.txt
+          cp .next/BUILD_ID artifacts/next-build-id.txt
+          if [ "${{ matrix.project }}" = "desktop-chromium" ]; then
+            tar -czf artifacts/standalone-preview.tar.gz -C .next/standalone .
+          fi
+      - name: Start isolated application
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' "$GITHUB_SHA" > artifacts/revision.txt
+          npm ls @playwright/test > artifacts/playwright-version.txt
+          HOSTNAME=127.0.0.1 PORT=3011 node .next/standalone/server.js > artifacts/server.log 2>&1 &
+          server_pid=$!
+          echo "$server_pid" > artifacts/server.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --max-time 3 http://localhost:3011/login >/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat artifacts/server.log
+              exit 1
+            fi
+            sleep 2
+          done
+          cat artifacts/server.log
+          exit 1
+      - name: Collect typography behavior evidence
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=${{ matrix.project }} tests/markdown-typography.spec.ts
+          --grep-invert @policy --workers=1 --timeout=60000 --global-timeout=480000
+          --trace=retain-on-failure --reporter=line --output=artifacts/behavior
+      - name: Check typography policy
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=${{ matrix.project }} tests/markdown-typography.spec.ts
+          --grep @policy --workers=1 --timeout=60000 --global-timeout=90000
+          --trace=retain-on-failure --reporter=line --output=artifacts/policy
+      - name: Mobile regression coverage
+        if: matrix.project != 'desktop-chromium'
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=${{ matrix.project }} tests/mobile-responsive.spec.ts
+          tests/mobile-composer-viewport.spec.ts --workers=1
+          --timeout=60000 --global-timeout=420000 --max-failures=1
+          --trace=retain-on-failure --reporter=line --output=artifacts/regression
+      - name: Desktop regression coverage
+        if: matrix.project == 'desktop-chromium'
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          --project=desktop-chromium tests/interaction-coverage.spec.ts
+          tests/chat-selection-loading.spec.ts tests/message-copy-with-format.spec.ts
+          --workers=1 --timeout=60000 --global-timeout=300000 --max-failures=1
+          --trace=retain-on-failure --reporter=line --output=artifacts/regression
+      - name: Stop isolated application
+        if: always()
+        run: |
+          if [ -f artifacts/server.pid ]; then
+            server_pid="$(cat artifacts/server.pid)"
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid"
+            fi
+          fi
+      - name: Preserve revision-specific evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typography-${{ github.sha }}-${{ matrix.project }}
+          path: artifacts/
+          retention-days: 14

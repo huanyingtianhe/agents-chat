@@ -334,12 +334,13 @@ test('anchors a visible point inside a tall image', async ({ page }) => {
   fixture.replaceBody('![Tall reading diagram](/reading-tall.svg)');
   await page.reload();
   const image = page.getByAltText('Tall reading diagram');
-  await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalHeight)).toBe(3000);
+  await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalHeight)).toBeGreaterThan(0);
   await settleLayout(page);
   await image.evaluate((element) => {
     const chat = element.closest<HTMLElement>('.chatContainer');
     if (!chat) throw new Error('Missing image chat');
     const rect = element.getBoundingClientRect();
+    if (rect.height < chat.clientHeight * 2) throw new Error('Image is not tall enough to exercise an internal reading point');
     chat.scrollTop += rect.top + rect.height * 0.55 - chat.getBoundingClientRect().top - chat.clientHeight;
   });
   await settleLayout(page);
@@ -393,13 +394,13 @@ test('keeps the same text in a tall horizontally scrollable table bottom-anchore
 test('restores the historical reading point after visiting a file', async ({ page }) => {
   const point = await captureHistoricalPoint(page);
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files', exact: true }).click();
+  await page.getByRole('tab', { name: 'Files' }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.getByRole('button', { name: 'README.md' }).click();
   await expect(page.locator('.mobileMarkdownViewer')).toBeVisible();
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Chats', exact: true }).click();
+  await page.getByRole('tab', { name: 'Chats' }).click();
   await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 380, y: 100 } });
   await expect(page.locator('.chatContainer')).toBeVisible();
   await settleLayout(page);

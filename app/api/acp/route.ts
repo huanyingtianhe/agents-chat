@@ -22,6 +22,8 @@ import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
 import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
 import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
 import { createLogger } from '@/lib/logger';
+import { resolvePreparedPrompt } from '@/lib/acp/preparedPrompt';
+import { ChatSyncError } from '@/lib/chatSyncProtocol';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -1583,7 +1585,7 @@ async function compareAndRecover(
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
+    let body = await req.json().catch(() => ({}));
     const action = body?.action as string | undefined;
     const agentId = body?.agentId as string | undefined;
 
@@ -2092,6 +2094,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'send') {
+      if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+      if (body.userId !== undefined && body.userId !== userId) {
+        return NextResponse.json({ ok: false, error: 'account_changed' }, { status: 403 });
+      }
+      if (body.payloadRef !== undefined) {
+        try { body = resolvePreparedPrompt(userId, body); }
+        catch (error) {
+          if (error instanceof ChatSyncError) return NextResponse.json({ ok: false, error: error.code }, { status: error.status });
+          throw error;
+        }
+      }
+      if (typeof body.chatId === 'string' && !await getChat(userId, body.chatId)) {
+        return NextResponse.json({ ok: false, error: 'chat_deleted_or_missing' }, { status: 410 });
+      }
       const text = String(body?.text ?? '');
       let attachments: PromptAttachment[] = [];
       try {

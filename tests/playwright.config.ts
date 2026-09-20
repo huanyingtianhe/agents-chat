@@ -6,7 +6,7 @@ const mobileSpecs = [
 ];
 const typographySpecs = ['**/markdown-typography.spec.ts'];
 const readingSpecs = ['**/chat-reading-anchor.spec.ts'];
-const persistenceSpecs = ['**/chat-persistence.spec.ts'];
+const persistenceSpecs = ['**/chat-persistence.spec.ts', '**/chat-outbox.spec.ts'];
 
 export default defineConfig({
   testDir: '.',

@@ -8,7 +8,7 @@ import { makeId, PromptSendFailedError } from './chatRunLoop';
 import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
 import { createPersistenceHandlers, type ChatSaveResult } from './chatPersistenceService';
-import { createIncrementalChatSaver } from './incrementalChatSaver';
+import { useChatOutbox } from './useChatOutbox';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
@@ -27,6 +27,7 @@ import {
 } from './useInitialChatRestore';
 
 export type UseChatRuntimeParams = {
+  userId: string;
   acp: (body: Record<string, unknown>) => Promise<any>;
   agentsRef: React.MutableRefObject<Agent[]>;
   agentsLoadingRef: React.MutableRefObject<boolean>;
@@ -54,6 +55,7 @@ export type PanelCallbacks = {
 };
 
 export function useChatRuntime({
+  userId,
   acp,
   agentsRef,
   agentsLoadingRef,
@@ -100,7 +102,18 @@ export function useChatRuntime({
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
-  const [chatSaver] = useState(createIncrementalChatSaver);
+  const { saver: chatSaver, notice: outboxNotice } = useChatOutbox(userId, authStatus, (chat, replaceIds = []) => {
+    const existing = chatMessagesRef.current[chat.id] || [];
+    const replace = new Set(replaceIds);
+    const merged = new Map(existing.filter(message => !replace.has(message.id)).map(message => [message.id, message]));
+    for (const message of chat.messages) if (!merged.has(message.id)) merged.set(message.id, message);
+    setMessagesForChat(chat.id, [...merged.values()].sort((a, b) => a.ts - b.ts));
+    setChatHistory(previous => normalizeChatHistory([
+      ...previous.filter(entry => entry.id !== chat.id),
+      { id: chat.id, name: chat.name, ts: chat.ts, agentSessions: chat.agentSessions },
+    ]));
+  });
+  const stagingSendRef = useRef(false);
 
   /* ── Cross-service callback refs ── */
   const maybeAdvanceOrchestrationRef = useRef<(id: string) => Promise<void>>(async () => {});
@@ -345,8 +358,9 @@ export function useChatRuntime({
     sendAttachments: ChatAttachment[],
     inputHistoryIndexRef: React.MutableRefObject<number>,
     inputDraftRef: React.MutableRefObject<string>,
+    onStaged?: () => void,
   ) {
-    if ((!text && sendAttachments.length === 0) || agentsRef.current.length === 0) return;
+    if (stagingSendRef.current || (!text && sendAttachments.length === 0) || agentsRef.current.length === 0) return;
     const textForAgent = text || 'Please review the attached file(s).';
     if (!currentChatIdRef.current) {
       if (!await persistHandlers.createNewChat(chatAgentFilterRef.current)) return;
@@ -363,7 +377,7 @@ export function useChatRuntime({
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
     const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
-    setInputProgrammatic('');
+    stagingSendRef.current = true;
     const allHist = inputHistoryRef.current;
     if (!allHist[sendChatId]) allHist[sendChatId] = [];
     const chatHist = allHist[sendChatId];
@@ -373,7 +387,11 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
-      const saved = await persistHandlers.saveChatToHistory(sendChatId);
+      const saved = await persistHandlers.saveChatToHistory(sendChatId, false, () => {
+        setInputProgrammatic('');
+        onStaged?.();
+        stagingSendRef.current = false;
+      });
       if (!saved.ok) throw new Error(saved.error);
       const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
       const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
@@ -454,6 +472,8 @@ export function useChatRuntime({
       }
     } catch (err) {
       markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
+    } finally {
+      stagingSendRef.current = false;
     }
   }
 
@@ -602,6 +622,7 @@ export function useChatRuntime({
       const target = history.find((chat) => chat.id === data.lastChatId) || history[0];
       if (!target) return null;
       return {
+        outboxNotice,
         chatId: target.id,
         chatName: target.name || target.id,
       };

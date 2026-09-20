@@ -138,6 +138,16 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   };
 
   await page.route('**/api/chats**', async (route) => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON();
+      if (body.action === 'save-sync') {
+        return route.fulfill({ json: {
+          ok: true,
+          versions: Object.fromEntries(body.operation.chat.messages.map((message: { id: string }) =>
+            [message.id, (body.operation.expectedVersions[message.id] || 0) + 1])),
+        } });
+      }
+    }
     const id = new URL(route.request().url()).searchParams.get('id');
     const selectedChat = id === secondChat.id ? secondChat : id === thirdChat.id ? thirdChat : chat;
     await route.fulfill({

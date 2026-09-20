@@ -56,6 +56,8 @@ export type AgentUserRequestSubmission = {
 };
 
 export type ChatMessage = {
+  version?: number;
+  serverManaged?: boolean;
   id: string;
   type: 'user' | 'agent' | 'system';
   content: string;

@@ -8,9 +8,13 @@ on:
     paths:
       - 'app/features/chat/**'
       - 'app/api/chats/**'
+      - 'app/api/chat-transfers/**'
       - 'app/api/acp/**'
       - 'lib/chatStore.ts'
       - 'lib/chatDeltaValidation.ts'
+      - 'lib/chatSync*.ts'
+      - 'lib/chatTransferStore.ts'
+      - 'lib/acp/preparedPrompt.ts'
       - 'tests/chat-*'
       - '.github/workflows/chat-persistence.yml'
   workflow_dispatch:
@@ -77,7 +81,7 @@ jobs:
       - name: Large history, API, failures, and chat selection
         run: >-
           npx playwright test --config tests/playwright.config.ts
-          tests/chat-persistence.spec.ts tests/chat-selection-loading.spec.ts
+          tests/chat-persistence.spec.ts tests/chat-selection-loading.spec.ts tests/chat-outbox.spec.ts
           --project=desktop-chromium --workers=1
           --timeout=60000 --global-timeout=480000 --max-failures=3
           --trace=retain-on-failure --reporter=line

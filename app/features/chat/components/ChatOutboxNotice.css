@@ -1,0 +1,27 @@
+.chatOutbox {
+  position: fixed;
+  z-index: 110;
+  right: 20px;
+  bottom: 92px;
+  width: min(420px, calc(100vw - 40px));
+  max-height: 60vh;
+  overflow: auto;
+  padding: 12px 16px;
+  color: var(--text-primary, #e6e6e6);
+  background: var(--bg-secondary, #202124);
+  border: 1px solid var(--border-color, #555);
+  border-left: 3px solid #d59b3c;
+  border-radius: 8px;
+  box-shadow: 0 6px 22px #0003;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chatOutbox summary { cursor: pointer; }
+.chatOutbox summary > span { float: right; opacity: .75; margin-left: 12px; }
+.chatOutbox p { margin: 8px 0; overflow-wrap: anywhere; }
+.chatOutbox article { border-top: 1px solid var(--border-color, #555); margin-top: 12px; padding-top: 12px; }
+.chatOutbox pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 11px; }
+.chatOutboxActions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chatOutbox button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 5px; padding: 5px 8px; cursor: pointer; }
+.chatOutbox button:disabled { opacity: .5; cursor: wait; }
+.chatOutboxError { color: #e7ae65; }

@@ -49,7 +49,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const next = messages.filter(message => message.id !== id);
     if (error) {
       console.error('Failed to save chat', { chatId, error });
-      next.push({ id, type: 'system', content: `${error} Unsaved messages remain in this tab; do not reload before retrying.`, ts: Date.now() });
+      next.push({ id, type: 'system', content: `${error} Review the local drafts panel. If browser storage failed, keep this tab open and copy the message.`, ts: Date.now() });
       if (!ctx.currentChatIdRef.current) {
         ctx.setShareDialog({ variant: 'error', title: 'Failed to save chat', detail: error });
       }
@@ -104,7 +104,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     }
   }
 
-  async function saveChatToHistory(chatId: string, _preserveOrder = false): Promise<ChatSaveResult> {
+  async function saveChatToHistory(chatId: string, _preserveOrder = false, onStaged?: () => void): Promise<ChatSaveResult> {
     if (!chatId) return { ok: true, savedAt: Date.now() };
     const currentMessages = ctx.chatMessagesRef.current[chatId]
       || (chatId === ctx.currentChatIdRef.current ? ctx.messagesRef.current : []);
@@ -127,7 +127,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
     const chatData = { id: chatId, name, ts: savedAt, messages: currentMessages, agentSessions, agentId };
     try {
-      await ctx.chatSaver.save(chatData);
+      await ctx.chatSaver.save(chatData, onStaged);
       if (chatId === ctx.currentChatIdRef.current) {
         await postChatJson({ action: 'set-last-chat', chatId });
       }
@@ -387,7 +387,12 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
 
   async function deleteChatById(chatId: string, onDone?: () => void) {
     try {
-      await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      const response = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+        method: 'DELETE', signal: AbortSignal.timeout(30_000),
+      });
+      const result = await response.json();
+      if (!response.ok || result.ok !== true) throw new Error(result.error || `Delete failed (HTTP ${response.status})`);
+      await ctx.chatSaver.markDeleted(chatId);
       ctx.setChatHistory(prev => prev.filter(c => c.id !== chatId));
       if (chatId === ctx.currentChatIdRef.current) {
         ctx.currentChatIdRef.current = '';
@@ -397,7 +402,10 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         clearChatMessages({ clearAgentFilter: false });
         ctx.currentAgentSessionsRef.current = {};
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      ctx.setShareDialog({ variant: 'error', title: 'Failed to delete chat', detail: String(error) });
+      return;
+    }
     onDone?.();
   }
 

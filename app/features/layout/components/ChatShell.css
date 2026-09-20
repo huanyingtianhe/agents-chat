@@ -220,6 +220,13 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+.chatPageRoot .chatScrollContent {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 0;
+  gap: inherit;
+}
 .chatPageRoot .workflowFollowUpCard {
   margin: 12px 0 4px;
   padding: 12px 14px;

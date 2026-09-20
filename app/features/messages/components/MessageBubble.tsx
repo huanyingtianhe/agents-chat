@@ -86,7 +86,7 @@ export const MessageBubble = memo(function MessageBubble({
   };
 
   return (
-    <div className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
+    <div data-message-id={message.id} className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
       {message.type !== 'user' && (
         <div className="messageHeader">
           <span className="agentName">

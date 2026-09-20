@@ -6,6 +6,7 @@ import { acpApi } from './chatApi';
 import { getDefaultAgentId, getExistingAgentId, getMentionedAgentIds, SCHEDULER_AGENT_ID } from './chatHelpers';
 import { useAgentRegistry } from './runtime/useAgentRegistry';
 import { useChatRuntime } from './runtime/useChatRuntime';
+import { useChatScroll } from './runtime/useChatScroll';
 import { useComposerState } from './runtime/useComposerState';
 import { useSlashCommands } from './runtime/useSlashCommands';
 import { usePageUIState } from './runtime/usePageUIState';
@@ -69,18 +70,13 @@ export function ChatPageClient() {
   const chatAgentFilterRef = useRef(registry.selectedAgentFilter); chatAgentFilterRef.current = registry.selectedAgentFilter;
   const getSelectedModelIdRef = useRef<(agentId: string) => string>(() => '');
   const getSelectedModelIdForAgent = useCallback((agentId: string) => getSelectedModelIdRef.current(agentId), []);
-  const chatContainerRef = useRef<HTMLElement | null>(null);
   const chatLoadingRef = useRef<HTMLDivElement | null>(null);
   const chatSelection = useChatSelectionTransition();
-  const chatScrollPositionsRef = useRef(new Map<string, number>());
-  const pendingChatScrollRestoreRef = useRef<string | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const lastChatScrollTopRef = useRef(0);
   const fileCommentsControllerRef = useRef<Pick<UseFileCommentsResult, 'resetForFileOpen'> | null>(null);
   const runtime = useChatRuntime({ acp, agentsRef, agentsLoadingRef, chatAgentFilterRef, getSelectedModelIdForAgent, setInputProgrammatic, effectiveLastUsedAgentRef, rememberLastUsedAgent, authStatus, reloadAgents });
   const { messages, chatHistory, currentChatId, activeSidebarChatId, chatName, runVersion, shareDialog, expandedMessages, initialChatRestore, retryInitialChatRestore, cancelInitialChatRestore, orchestrationMode, pendingWorkflowPlan, dismissedFollowUpOrchId, setDismissedFollowUpOrchId, dismissedWorkflowBarOrchId, setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId, setShareDialog, setExpandedMessages, setOrchestrationMode, setPendingWorkflowPlan, currentChatIdRef, sessionRunsRef, currentAgentSessionsRef, inputHistoryRef, orchestrationsRef, addMessage, updateMessage, notifyRunStateChanged, dispatchToAgent, saveCurrentChatToHistory, clearChatMessages, shareCurrentChat, handleStop, retryFailedSend, sendWorkflowFollowUpReply, answerAgentUserRequest, dismissAgentUserRequest, fileCommentCallbacksRef, panelCallbacksRef, loadChat: runtimeLoadChat, createNewChat: runtimeCreateNewChat, renameChatById: runtimeRenameChatById, deleteChatById: runtimeDeleteChatById, handleSend: runtimeHandleSend, loadChatIntoCache, getChatSidebarStatus } = runtime;
   const [showWorkflowPicker, setShowWorkflowPicker] = useState(false);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const { chatContainerRef, attachChatContainer, showScrollToBottom, handleBeforeFileTabChange, prepareChatLoad, scrollToLatest, forgetChatScroll } = useChatScroll(currentChatId);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [chatSearchResults, setChatSearchResults] = useState<{ id: string; name: string; ts: number; agentId?: string }[] | null>(null);
   const [chatSearchLoading, setChatSearchLoading] = useState(false);
@@ -136,16 +132,6 @@ export function ChatPageClient() {
   };
   panelCallbacksRef.current = { setSelectedAgentFilter: registry.setSelectedAgentFilter, setShowChatsPanel, setShowAgentsPanel, setOpenChatMenuId, setRenamingChatId, setRenameValue };
 
-  const handleBeforeFileTabChange = useCallback((tab: 'chats' | 'files') => {
-    if (tab === 'files') {
-      if (currentChatId && chatContainerRef.current) {
-        chatScrollPositionsRef.current.set(currentChatId, chatContainerRef.current.scrollTop);
-      }
-      shouldStickToBottomRef.current = false;
-    } else {
-      pendingChatScrollRestoreRef.current = currentChatId || null;
-    }
-  }, [currentChatId]);
   const fileWorkspace = useFileWorkspaceState({ agents, agentsLoading, mounted, schedulerAgentId: SCHEDULER_AGENT_ID, onBeforeTabChange: handleBeforeFileTabChange, onFileOpened: async ({ agentId, filePath, restoreScrollTop }) => {
     await fileCommentsControllerRef.current?.resetForFileOpen(agentId, filePath, restoreScrollTop);
     if (mobile.isMobileLayout) mobile.close();
@@ -215,43 +201,6 @@ export function ChatPageClient() {
   useEffect(() => { const handleEsc = (e: globalThis.KeyboardEvent) => { if (e.key !== 'Escape') return; if (lightboxImage) setLightboxImage(null); else if (shareDialog) setShareDialog(null); }; window.addEventListener('keydown', handleEsc); return () => window.removeEventListener('keydown', handleEsc); }, [lightboxImage, shareDialog, setLightboxImage, setShareDialog]);
   useEffect(() => { if (chatFilterAgents.length && registry.selectedAgentFilter && !chatFilterAgents.some((agent) => agent.id === registry.selectedAgentFilter)) registry.setSelectedAgentFilter(null); }, [registry.selectedAgentFilter, chatFilterAgents]);
   useEffect(() => { if (!mounted || !currentChatId) return; for (const agentId of composerTargetAgentIds) if ((agents.find((agent) => agent.id === agentId)?.models || []).length === 0 && !registry.ensuringAgentModels[agentId]) void registry.ensureAgentModels(agentId, { currentChatId, currentAgentSessionsRef, setChatHistory }); }, [mounted, currentChatId, composerTargetAgentIds.join('|'), agents]);
-  useEffect(() => { const el = chatContainerRef.current; if (el && shouldStickToBottomRef.current) { el.scrollTop = el.scrollHeight; lastChatScrollTopRef.current = el.scrollTop; } }, [messages]);
-  useEffect(() => {
-    if (leftSidebarTab !== 'chats') return;
-    const chatId = pendingChatScrollRestoreRef.current;
-    const savedScrollTop = chatId ? chatScrollPositionsRef.current.get(chatId) : undefined;
-    if (savedScrollTop === undefined) {
-      pendingChatScrollRestoreRef.current = null;
-      return;
-    }
-    const frame = requestAnimationFrame(() => {
-      const container = chatContainerRef.current;
-      if (!container) return;
-      container.scrollTop = Math.max(0, Math.min(savedScrollTop, container.scrollHeight - container.clientHeight));
-      lastChatScrollTopRef.current = container.scrollTop;
-      shouldStickToBottomRef.current = false;
-      setShowScrollToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 4);
-      pendingChatScrollRestoreRef.current = null;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [leftSidebarTab, currentChatId]);
-  useEffect(() => { const el = chatContainerRef.current; if (!el) return; const onScroll = () => updateChatStickiness(el); onScroll(); el.addEventListener('scroll', onScroll, { passive: true }); return () => el.removeEventListener('scroll', onScroll); }, []);
-
-  function updateChatStickiness(container: HTMLElement) {
-    const previous = lastChatScrollTopRef.current;
-    const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const nearBottom = distance <= 4;
-    shouldStickToBottomRef.current = container.scrollTop < previous - 1 ? false : nearBottom;
-    setShowScrollToBottom(!nearBottom);
-    lastChatScrollTopRef.current = container.scrollTop;
-  }
-  function scrollToLatest() {
-    const container = chatContainerRef.current;
-    if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-    shouldStickToBottomRef.current = true;
-    setShowScrollToBottom(false);
-  }
   function switchAgentFilter(agentId: string | null) { if (agentId === registry.selectedAgentFilter) return; cancelInitialChatRestore(); void saveCurrentChatToHistory(); registry.setSelectedAgentFilter(agentId); currentChatIdRef.current = ''; setCurrentChatId(''); setActiveSidebarChatId(''); setChatName('New Chat'); clearChatMessages({ clearAgentFilter: false }); currentAgentSessionsRef.current = {}; }
   async function loadChat(chatId: string) {
     setOpenChatMenuId(null);
@@ -265,18 +214,16 @@ export function ChatPageClient() {
     cancelInitialChatRestore();
     const selectedName = chatHistory.find((chat) => chat.id === chatId)?.name || chatId;
     const token = chatSelection.begin(chatId, selectedName);
-    shouldStickToBottomRef.current = true;
-    setShowScrollToBottom(false);
+    prepareChatLoad();
     if (mobile.isMobileLayout) mobile.close();
     requestAnimationFrame(() => chatLoadingRef.current?.focus({ preventScroll: true }));
 
     try {
-      const result = await runtimeLoadChat(chatId, token.isCurrent);
+      await runtimeLoadChat(chatId, token.isCurrent);
       if (!chatSelection.finish(token)) return;
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const container = chatContainerRef.current;
         if (!container) return;
-        if (result === 'loaded') container.scrollTop = container.scrollHeight;
         container.focus({ preventScroll: true });
       }));
     } catch {
@@ -285,8 +232,8 @@ export function ChatPageClient() {
   }
   async function createNewChat() { cancelInitialChatRestore(); setOpenChatMenuId(null); await runtimeCreateNewChat(registry.selectedAgentFilter); }
   async function renameChatById(chatId: string, newName: string) { await runtimeRenameChatById(chatId, newName, () => { setRenamingChatId(null); setRenameValue(''); }); }
-  async function deleteChatById(chatId: string) { chatScrollPositionsRef.current.delete(chatId); await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }
-  async function handleSend() { let text = (inputRef.current || composerRef.current?.value || '').trim(); const sendAttachments = attachments; if ((!text && sendAttachments.length === 0) || agents.length === 0) return; if (pastedLinksRef.current.length > 0) { for (const { text: linkText, href } of pastedLinksRef.current) { const idx = text.indexOf(linkText); if (idx !== -1) { text = text.substring(0, idx) + `[${linkText}](${href})` + text.substring(idx + linkText.length); } } pastedLinksRef.current = []; } shouldStickToBottomRef.current = true; clearAttachments(); await runtimeHandleSend(text, sendAttachments, inputHistoryIndexRef, inputDraftRef); }
+  async function deleteChatById(chatId: string) { forgetChatScroll(chatId); await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }
+  async function handleSend() { let text = (inputRef.current || composerRef.current?.value || '').trim(); const sendAttachments = attachments; if ((!text && sendAttachments.length === 0) || agents.length === 0) return; if (pastedLinksRef.current.length > 0) { for (const { text: linkText, href } of pastedLinksRef.current) { const idx = text.indexOf(linkText); if (idx !== -1) { text = text.substring(0, idx) + `[${linkText}](${href})` + text.substring(idx + linkText.length); } } pastedLinksRef.current = []; } scrollToLatest(); clearAttachments(); await runtimeHandleSend(text, sendAttachments, inputHistoryIndexRef, inputDraftRef); }
   function selectMention(agentId: string) { const currentInput = inputRef.current, atIndex = currentInput.lastIndexOf('@'); setInputProgrammatic(`${currentInput.slice(0, atIndex)}@${agentId} `); setMentionSelectedIndex(0); }
   function insertSlashCommand(command: { name: string }) { setInputProgrammatic(`/${command.name} `); setSlashSelectedIndex(0); composerRef.current?.focus(); }
   async function copyShareDialogLink() { if (!shareDialog?.url) return; try { await navigator.clipboard.writeText(shareDialog.url); setShareDialog((prev) => prev ? { ...prev, copied: true, detail: 'Copied to clipboard.' } : prev); } catch { setShareDialog((prev) => prev ? { ...prev, copied: false, detail: 'Could not copy automatically. Select the link and copy it manually.' } : prev); } }
@@ -336,7 +283,17 @@ export function ChatPageClient() {
   return <div className="chatPageRoot"><ChatShell themeStyle={themeStyle} themeId={normalizedThemeId} sidebarWidth={sidebarWidth} sidebarCollapsed={sidebarCollapsed} agentsSidebarOpen={showAgentsPanel || showNodesPanel || showSchedulesPanel} onSidebarResizeStart={(e) => { e.preventDefault(); setOpenChatMenuId(null); sidebarDragRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }} mobileOverlay={mobile.activeOverlay} isMobileLayout={mobile.isMobileLayout} onMobileOverlayClose={mobile.close}
     header={<PageHeader authLabel={session?.user ? (session.user.name || '?') : ''} isAdmin={isAdmin} userEmail={session?.user?.email} userImage={session?.user?.image} onSignOut={() => void signOut()} themeMenu={<ThemeMenu activeThemeId={themeId} onSelectTheme={setThemeId} />} showChatsPanel={showChatsPanel} showAgentsPanel={showAgentsPanel} showNodesPanel={showNodesPanel} showSchedulesPanel={showSchedulesPanel} onToggleChats={(trigger) => { if (mobile.isMobileLayout) mobile.toggle('navigation', trigger); else { switchLeftSidebarTab('chats'); setShowChatsPanel((p) => !p); setShowAgentsPanel(false); setShowNodesPanel(false); setShowSchedulesPanel(false); } }} onToggleAgents={(trigger) => { if (mobile.isMobileLayout) mobile.toggle('agents', trigger); else { setShowAgentsPanel((p) => !p); setShowChatsPanel(false); setShowNodesPanel(false); setShowSchedulesPanel(false); } }} onToggleNodes={(trigger) => { if (mobile.isMobileLayout) mobile.toggle('nodes', trigger); else { setShowNodesPanel((p) => { if (!p) void loadNodes(); return !p; }); setShowAgentsPanel(false); setShowChatsPanel(false); setShowSchedulesPanel(false); } }} onToggleSchedules={(trigger) => { if (mobile.isMobileLayout) mobile.toggle('schedules', trigger); else { setShowSchedulesPanel((p) => !p); setShowAgentsPanel(false); setShowNodesPanel(false); setShowChatsPanel(false); } }} activeThemeId={themeId} normalizedThemeId={normalizedThemeId} onSelectTheme={setThemeId} lastUsedAgentScope={lastUsedAgentScope} onSelectLastUsedAgentScope={registry.setLastUsedAgentScope} mobileOverlay={mobile.activeOverlay} isMobileLayout={mobile.isMobileLayout} onMobileOverlayOpen={mobile.open} onMobileOverlayToggle={mobile.toggle} onMobileOverlayClose={mobile.close} />}
     sidebar={<aside className={`participantsSidebar ${(mobile.isMobileLayout ? mobile.activeOverlay === 'navigation' : showChatsPanel) ? 'mobilePanelVisible' : ''}`} aria-label="Chats and files navigation" role={mobile.isMobileLayout ? 'dialog' : undefined} aria-modal={mobile.isMobileLayout || undefined} aria-hidden={mobile.isMobileLayout && mobile.activeOverlay !== 'navigation' || undefined} inert={mobile.isMobileLayout && mobile.activeOverlay !== 'navigation' || undefined}><div className="participantsHeader">{sidebarCollapsed ? <div className="collapsedSidebarControls"><button className="sidebarExpandBtn" onClick={() => setSidebarCollapsed(false)} title="Expand sidebar" aria-label="Expand sidebar"><svg className="sidebarToggleIcon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="13" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M6 2v12" stroke="currentColor" strokeWidth="1.4" /></svg></button><button className={`collapsedSidebarTabButton ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('chats'); setSidebarCollapsed(false); }} title="Show chats" aria-label="Show chats"><svg className="collapsedSidebarTabIcon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h10a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H7l-3.2 2.4a.5.5 0 0 1-.8-.4V10H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg></button><button className={`collapsedSidebarTabButton ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => { setLeftSidebarTab('files'); setSidebarCollapsed(false); }} title="Show files" aria-label="Show files"><svg className="collapsedSidebarTabIcon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5.2L12.5 5v8.5H4z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /><path d="M9.2 2.5V5H12.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg></button></div> : <><div className="leftSidebarTabs" role="tablist" aria-label="Navigation sections"><button role="tab" aria-selected={leftSidebarTab === 'chats'} className={`leftSidebarTab ${leftSidebarTab === 'chats' ? 'active' : ''}`} onClick={() => switchLeftSidebarTab('chats')}>💬 Chats</button><button role="tab" aria-selected={leftSidebarTab === 'files'} className={`leftSidebarTab ${leftSidebarTab === 'files' ? 'active' : ''}`} onClick={() => setLeftSidebarTab('files')}>📄 Files</button></div><button className="sidebarCollapseBtn" onClick={() => setSidebarCollapsed(true)} title="Collapse sidebar" aria-label="Collapse sidebar"><svg className="sidebarToggleIcon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="13" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M6 2v12" stroke="currentColor" strokeWidth="1.4" /></svg></button></>}</div>{!sidebarCollapsed && leftSidebarTab === 'chats' && <div className="participantsList"><div className="chatAgentFilterRow" aria-label="Filter chats by primary agent"><div className="chatAgentFilterPickerSlot"><SelectPicker options={[{ value: '', label: 'All agents' }, ...chatFilterAgents.map((a) => ({ value: a.id, label: a.name || a.id }))]} value={registry.selectedAgentFilter ?? ''} ariaLabel="Filter chats by primary agent" onChange={(v) => switchAgentFilter(v || null)} /></div></div><ChatSidebarList chatHistory={chatHistory} currentChatId={currentChatId} activeSidebarChatId={activeSidebarChatId} chatName={chatName} chatAgentFilter={registry.selectedAgentFilter} chatFilterAgents={chatFilterAgents} mounted={mounted} openChatMenuId={openChatMenuId} renamingChatId={renamingChatId} renameValue={renameValue} themeStyle={themeStyle} chatMenuButtonRefs={chatMenuButtonRefs} actionMenuWidth={CHAT_ACTION_MENU_WIDTH} actionMenuHeight={CHAT_ACTION_MENU_HEIGHT} getChatSidebarStatus={getChatSidebarStatus} onCreateChat={() => void createNewChat()} onLoadChat={(chatId) => void loadChat(chatId)} onOpenChatMenu={setOpenChatMenuId} onRenameValueChange={setRenameValue} onCancelRename={() => { setRenamingChatId(null); setRenameValue(''); }} onStartRename={(chat, isCurrent) => { setRenameValue(isCurrent ? chatName : chat.name); setRenamingChatId(chat.id); }} onRenameChat={(chatId, value) => void renameChatById(chatId, value)} onShareChat={(chatId) => void shareCurrentChat(chatId)} onDeleteChat={(chatId) => void deleteChatById(chatId)} chatSearchQuery={chatSearchQuery} onChatSearchQueryChange={setChatSearchQuery} chatSearchResults={chatSearchResults} chatSearchLoading={chatSearchLoading} /></div>}{!sidebarCollapsed && leftSidebarTab === 'files' && <FileWorkspacePanel variant="tree" workspace={fileWorkspace} agents={agents} schedulerAgentId={SCHEDULER_AGENT_ID} />}</aside>}
-    messages={initialChatLoading ? <ChatLoadingView ref={chatLoadingRef} chatName={initialChatLabel} /> : initialChatFailed ? <ChatLoadErrorView chatName={initialChatRestore.chatName} error={initialChatRestore.error} onRetry={() => void retryInitialChatRestore()} /> : chatSelection.loadingSelection ? <ChatLoadingView ref={chatLoadingRef} chatName={chatSelection.loadingSelection.chatName} /> : leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile ? <FileWorkspacePanel workspace={fileWorkspace} comments={fileCommentsController} selection={fileCommentsController.selection} mobileReadOnly={mobile.isMobileLayout} /> : !currentChatId ? <div className="emptyHomepage"><div className="emptyHomepageContent"><div className="emptyHomepageLogo">💬</div><h2 className="emptyHomepageTitle">Agents Chat</h2><p className="emptyHomepageSubtitle">Start a new conversation with your agents</p><button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>+ New Chat{registry.selectedAgentFilter ? ` with ${chatFilterAgents.find((a) => a.id === registry.selectedAgentFilter)?.name || registry.selectedAgentFilter}` : ''}</button></div></div> : <div className="chatMessagesArea"><section className="chatContainer" ref={chatContainerRef} tabIndex={-1} onScroll={(e) => updateChatStickiness(e.currentTarget)} onWheel={(e) => { if (e.deltaY < 0) shouldStickToBottomRef.current = false; }}><MessageList messages={visibleMessages} agents={agents} expandedMessages={expandedMessages} failedSendByMessageId={failedSendByMessageId} onToggleExpanded={toggleMessageExpanded} onRetryFailedSend={retryFailedSend} onOpenImage={setLightboxImage} onAnswerAgentUserRequest={answerAgentUserRequest} onDismissAgentUserRequest={dismissAgentUserRequest} />{showFollowUpHint && workflowFollowUp ? <WorkflowFollowUpCard agentIds={workflowFollowUp.awaitingAgentIds} agents={agents} onReply={(text) => sendWorkflowFollowUpReply(text, workflowFollowUp.awaitingAgentIds, workflowFollowUp.orchestrationId)} onDismiss={() => setDismissedFollowUpOrchId(workflowFollowUp.orchestrationId)} /> : null}</section>{showScrollToBottom ? <button type="button" className="jumpToLatestButton" onClick={scrollToLatest} aria-label="Jump to latest messages" title="Jump to latest messages">↓</button> : null}</div>}
+    messages={initialChatLoading ? <ChatLoadingView ref={chatLoadingRef} chatName={initialChatLabel} /> : initialChatFailed ? <ChatLoadErrorView chatName={initialChatRestore.chatName} error={initialChatRestore.error} onRetry={() => void retryInitialChatRestore()} /> : chatSelection.loadingSelection ? <ChatLoadingView ref={chatLoadingRef} chatName={chatSelection.loadingSelection.chatName} /> : leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile ? <FileWorkspacePanel workspace={fileWorkspace} comments={fileCommentsController} selection={fileCommentsController.selection} mobileReadOnly={mobile.isMobileLayout} /> : !currentChatId ? <div className="emptyHomepage"><div className="emptyHomepageContent"><div className="emptyHomepageLogo">💬</div><h2 className="emptyHomepageTitle">Agents Chat</h2><p className="emptyHomepageSubtitle">Start a new conversation with your agents</p><button className="emptyHomepageNewChat" onClick={() => void createNewChat()}>+ New Chat{registry.selectedAgentFilter ? ` with ${chatFilterAgents.find((a) => a.id === registry.selectedAgentFilter)?.name || registry.selectedAgentFilter}` : ''}</button></div></div> : (
+      <div className="chatMessagesArea">
+        <section className="chatContainer" ref={attachChatContainer} tabIndex={-1}>
+          <div className="chatScrollContent">
+            <MessageList messages={visibleMessages} agents={agents} expandedMessages={expandedMessages} failedSendByMessageId={failedSendByMessageId} onToggleExpanded={toggleMessageExpanded} onRetryFailedSend={retryFailedSend} onOpenImage={setLightboxImage} onAnswerAgentUserRequest={answerAgentUserRequest} onDismissAgentUserRequest={dismissAgentUserRequest} />
+            {showFollowUpHint && workflowFollowUp ? <WorkflowFollowUpCard agentIds={workflowFollowUp.awaitingAgentIds} agents={agents} onReply={(text) => sendWorkflowFollowUpReply(text, workflowFollowUp.awaitingAgentIds, workflowFollowUp.orchestrationId)} onDismiss={() => setDismissedFollowUpOrchId(workflowFollowUp.orchestrationId)} /> : null}
+          </div>
+        </section>
+        {showScrollToBottom ? <button type="button" className="jumpToLatestButton" onClick={scrollToLatest} aria-label="Jump to latest messages" title="Jump to latest messages">↓</button> : null}
+      </div>
+    )}
     composer={!initialChatLoading && !initialChatFailed && !chatSelection.loadingSelection && currentChatId && !(leftSidebarTab === 'files' && mdEditorOpen && mdSelectedFile) ? <ChatComposer composerRef={composerRef} fileInputRef={fileInputRef} input={input} attachments={attachments} attachmentError={attachmentError} isDraggingAttachment={isDraggingAttachment} mentionAgents={filteredAgents} mentionSelectedIndex={mentionSelectedIndex} slashCommands={filteredSlashCommands} slashSelectedIndex={slashSelectedIndex} targetControls={targetControls} isSending={isCurrentChatSending} sendDisabled={agents.length === 0} onMentionSelect={selectMention} onSlashCommandSelect={insertSlashCommand} onFilesSelected={(files) => void addFilesToComposer(files)} onRemoveAttachment={removeAttachment} onPreviewAttachment={setLightboxImage} onPaste={handleAttachmentPaste} onKeyDown={handleComposerKeyDown} onInput={composerInputHandler} onDragOver={handleComposerDragOver} onDragLeave={handleComposerDragLeave} onDrop={handleComposerDrop} onSend={() => void handleSend()} onStop={() => void handleStop()} /> : null}
     rightPanel={<><AgentsPanel panelState={agentPanelState} mobileModal={mobile.isMobileLayout} onClose={() => { if (mobile.isMobileLayout) mobile.close(); else setShowAgentsPanel(false); }} agents={agentSidebarItems} agentsLoading={agentsLoading} isAdmin={isAdmin} nodesData={nodesData} selectedAgentFilter={registry.selectedAgentFilter} selectedAgentModels={registry.selectedAgentModels} ensuringAgentModels={registry.ensuringAgentModels} setSelectedModelForAgent={registry.setSelectedModelForAgent} reloadAgents={reloadAgents} /><NodesPanel panelState={nodePanelState} mobileModal={mobile.isMobileLayout} mobileRestricted={mobile.isMobileLayout} onClose={() => { if (mobile.isMobileLayout) mobile.close(); else setShowNodesPanel(false); }} /><SchedulesPanel isOpen={showSchedulesPanel} mobileModal={mobile.isMobileLayout} mobileRestricted={mobile.isMobileLayout} onClose={() => { if (mobile.isMobileLayout) mobile.close(); else setShowSchedulesPanel(false); }} agents={agentSidebarItems.map(a => ({ id: a.id, name: a.name || a.id }))} /></>}
     statusBar={<StatusBar statusText={`${agents.length} agent${agents.length !== 1 ? 's' : ''} configured`} targetText={`${messages.filter((m) => m.type === 'user').length} messages`} isRunning={agents.length > 0} gitContextSlot={gitContextControls} planSlot={activeWorkflow ? <PlanProgressBar orchestration={activeWorkflow} variant="inline" /> : null} />}

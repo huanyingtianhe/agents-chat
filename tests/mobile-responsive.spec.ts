@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test';
+import { settleChatLayout } from './helpers/chatLayout';
 import {
   installMobileChatFixture,
   loginMobileFixture,
@@ -225,12 +226,15 @@ test('preserves composer and current chat state while opening and closing naviga
   });
   await expect(page.locator('.attachmentChip')).toContainText('mobile-note.txt');
   await expect(page.getByText('Existing mobile message')).toBeVisible();
+  await settleChatLayout(page);
   const chatContainer = page.locator('.chatContainer');
   const preservedScrollTop = await chatContainer.evaluate((element) => {
     element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
     return element.scrollTop;
   });
   expect(preservedScrollTop).toBeGreaterThan(0);
+  await settleChatLayout(page);
+  await expect.poll(() => chatContainer.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');

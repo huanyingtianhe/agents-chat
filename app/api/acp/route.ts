@@ -8,7 +8,6 @@ import { getToken } from 'next-auth/jwt';
 import {
   getChat,
   reconcileStalePendingMessagesForAgent,
-  saveChat,
   updateChatMessage,
   StoredMessage,
   updateChatAgentSession,
@@ -1565,15 +1564,13 @@ async function compareAndRecover(
       const replyText = agentAfter[agentAfter.length - 1].text;
       const ts = Date.now();
       const recovered = [{ type: 'agent' as const, content: replyText, agentId, ts }];
-      chat.messages.push({
+      await updateChatMessage(userId, chatId, {
         id: `recovered-${ts}`,
         type: 'agent',
         content: replyText,
         agentId,
         ts,
       });
-      chat.ts = ts;
-      await saveChat(userId, chat);
       log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
       return { recoveredMessages: recovered };
     }

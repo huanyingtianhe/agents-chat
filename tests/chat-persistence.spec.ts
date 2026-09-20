@@ -172,7 +172,7 @@ test('waits for a confirmed save before sending to the agent', async ({ page }) 
     expect(fixture.sent).toEqual([]);
     release();
     await expect.poll(() => fixture.sent.length).toBe(1);
-    expect(fixture.savedBeforeSend).toEqual([true]);
+    await expect.poll(() => fixture.savedBeforeSend).toEqual([true]);
   } finally {
     release();
     await page.goto('about:blank');

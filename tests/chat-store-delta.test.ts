@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { isStoredChatDelta } from '../lib/chatDeltaValidation';
 
 async function main() {
   const originalCwd = process.cwd();
@@ -13,6 +14,14 @@ async function main() {
     const user = { id: 'u1', type: 'user' as const, content: 'Question', ts: 1 };
     const agent = { id: 'a1', type: 'agent' as const, content: 'Answer', ts: 2, parts, pending: false };
     const chat = { id: 'chat', name: 'Large chat', ts: 1, messages: [user, agent], agentSessions: { alpha: 'session' } };
+    assert.equal(isStoredChatDelta(chat), true);
+    for (const invalid of [
+      { ...chat, ts: '1' },
+      { ...chat, messages: [{ ...user, type: ['user'] }] },
+      { ...chat, messages: [{ ...user, content: null }] },
+      { ...chat, messages: [{ ...user, attachments: [{}] }] },
+      { ...chat, removedMessageIds: [null] },
+    ]) assert.equal(isStoredChatDelta(invalid), false);
     await saveChat('owner', chat);
     const nextUser = { ...user, id: 'u2', ts: 3, content: 'New question' };
     await saveChatDelta('owner', { ...chat, messages: [nextUser], agentSessions: {} });

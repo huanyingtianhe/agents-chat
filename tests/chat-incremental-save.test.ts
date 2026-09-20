@@ -77,6 +77,22 @@ async function main() {
   const attachmentSizedMessage = { ...question, content: 'x'.repeat(600 * 1024) };
   await saver.save({ ...metadata, messages: [...history, attachmentSizedMessage] });
   assert.equal(requests.at(-1)?.chat.messages[0].content.length, 600 * 1024);
+
+  let failSecondBatch = true;
+  const batchedIds: string[][] = [];
+  const partialSaver = createIncrementalChatSaver(async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    batchedIds.push(body.chat.messages.map((message: ChatMessage) => message.id));
+    if (failSecondBatch && batchedIds.length === 2) return new Response('', { status: 503 });
+    return Response.json({ ok: true });
+  });
+  await assert.rejects(partialSaver.save({ ...metadata, messages: many }), /503/);
+  const confirmedIds = batchedIds[0];
+  failSecondBatch = false;
+  await partialSaver.save({ ...metadata, messages: many });
+  const retriedIds = batchedIds.slice(2).flat();
+  assert.equal(retriedIds.some(id => confirmedIds.includes(id)), false);
+  assert.deepEqual([...confirmedIds, ...retriedIds], many.map(message => message.id));
   console.log('incremental chat saver tests passed');
 }
 

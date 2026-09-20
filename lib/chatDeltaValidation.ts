@@ -6,7 +6,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isMessage(value: unknown): value is StoredMessage {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id
-    || !['user', 'agent', 'system'].includes(String(value.type))
+    || (value.type !== 'user' && value.type !== 'agent' && value.type !== 'system')
     || typeof value.content !== 'string' || typeof value.ts !== 'number' || !Number.isFinite(value.ts)) return false;
   for (const key of ['agentId', 'relation', 'sendError', 'resendMessage', 'statusText', 'ptyPhase']) {
     if (value[key] !== undefined && typeof value[key] !== 'string') return false;

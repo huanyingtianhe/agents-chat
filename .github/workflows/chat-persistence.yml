@@ -81,7 +81,7 @@ jobs:
       - name: Large history, API, failures, and chat selection
         run: >-
           npx playwright test --config tests/playwright.config.ts
-          tests/chat-persistence.spec.ts tests/chat-selection-loading.spec.ts tests/chat-outbox.spec.ts
+          tests/chat-persistence.spec.ts tests/chat-selection-loading.spec.ts tests/chat-outbox.spec.ts tests/chat-sync-api.spec.ts
           --project=desktop-chromium --workers=1
           --timeout=60000 --global-timeout=480000 --max-failures=3
           --trace=retain-on-failure --reporter=line

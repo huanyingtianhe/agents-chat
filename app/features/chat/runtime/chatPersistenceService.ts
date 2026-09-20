@@ -149,6 +149,11 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     return saveChatToHistory(ctx.currentChatIdRef.current, preserveOrder);
   }
 
+  function canLeaveSavedDraft(chatId: string) {
+    const messages = ctx.chatMessagesRef.current[chatId] || ctx.messagesRef.current;
+    return ctx.chatSaver.isDurable(chatId, messages);
+  }
+
   function clearChatMessages(opts?: { clearAgentFilter?: boolean }) {
     const initial: ChatMessage[] = [{
       id: 'welcome', type: 'system',
@@ -171,7 +176,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     ctx.setActiveSidebarChatId(chatId);
     const saveResult = await saveCurrentChatToHistory(true);
     if (!isCurrentSelection()) return 'superseded';
-    if (!saveResult.ok) {
+    if (!saveResult.ok && !canLeaveSavedDraft(currentChatId)) {
       ctx.setActiveSidebarChatId(currentChatId);
       return 'failed';
     }
@@ -312,7 +317,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
   }
 
   async function createNewChat(chatAgentFilter?: string | null) {
-    if (!(await saveCurrentChatToHistory()).ok) return null;
+    if (!(await saveCurrentChatToHistory()).ok && !canLeaveSavedDraft(ctx.currentChatIdRef.current)) return null;
     const newName = 'New Chat';
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };

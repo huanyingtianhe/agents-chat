@@ -10,7 +10,7 @@ export type OutboxRemoteChat = { id: string; name: string; ts: number; messages:
 
 export function useChatOutbox(
   userId: string, authStatus: string,
-  onRecovered: (chat: OutboxRemoteChat, replaceIds?: string[]) => void,
+  onRecovered: (chat: OutboxRemoteChat | null, replaceIds?: string[], deletedChatId?: string) => void,
 ) {
   const [entries, setEntries] = useState<ChatOutboxEntry[]>([]);
   const [error, setError] = useState('');
@@ -77,7 +77,7 @@ export function useChatOutbox(
       if (chat) {
         saver.hydrate(chat.id, chat.messages);
         recovered.current(chat, discarded.flatMap(item => item.operation.chat.messages.map(message => message.id)));
-      }
+      } else recovered.current(null, undefined, entry.operation.chat.id);
       setError('');
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
@@ -93,6 +93,7 @@ export function useChatOutbox(
         agentSessions: original?.agentSessions || {},
       });
       const discarded = await saver.discard(entry.operation.operationId);
+      if (!original) recovered.current(null, undefined, entry.operation.chat.id);
       const chat = await readChat(chatId);
       if (chat) {
         saver.hydrate(chat.id, chat.messages);

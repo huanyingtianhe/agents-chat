@@ -50,9 +50,10 @@ export function commitChatOperation(userId: string, operation: ChatOperation): C
         throw new ChatSyncError('dependency_pending');
       }
     }
-    const versions: Record<string, number> = {};
+    const versions: Record<string, number> = Object.create(null);
     for (const incoming of delta.messages) {
       const saved = messages.get(incoming.id);
+      if (saved && saved.type !== incoming.type) throw new ChatSyncError(`message_conflict:${incoming.id}`);
       if (saved?.type === 'agent' && saved.serverManaged !== false) {
         // The browser owns presentation metadata, never ACP output or its tools.
         messages.set(saved.id, {
@@ -66,7 +67,6 @@ export function commitChatOperation(userId: string, operation: ChatOperation): C
         || operation.expectedVersions[incoming.id] !== (saved ? saved.version || 0 : null)) {
         throw new ChatSyncError(`message_conflict:${incoming.id}`);
       }
-      if (saved && saved.type !== incoming.type) throw new ChatSyncError(`message_conflict:${incoming.id}`);
       const version = (saved?.version || 0) + 1;
       const next: StoredMessage = { ...incoming, version, serverManaged: false };
       if (saved?.pending === false && incoming.pending === true) {
@@ -91,7 +91,7 @@ export function commitChatOperation(userId: string, operation: ChatOperation): C
       name: chat?.name && chat.name !== 'New Chat' ? chat.name : delta.name,
       messages: [...messages.values()].sort((a, b) => a.ts - b.ts),
     });
-    const result: ChatCommitResult = { ok: true, versions };
+    const result: ChatCommitResult = { ok: true, versions: { ...versions } };
     db.prepare('INSERT INTO chat_operations VALUES (?, ?, ?, ?, ?)')
       .run(userId, operation.operationId, digest, JSON.stringify(result), Date.now());
     return result;

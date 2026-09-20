@@ -7,8 +7,13 @@ import './ChatOutboxNotice.css';
 
 type Props = ReturnType<typeof useChatOutbox>['notice'];
 
+function preview(text: string) {
+  return text.length > 8000 ? `${text.slice(0, 8000)}\n\n[Preview shortened. Download the draft for its complete content.]` : text;
+}
+
 export function ChatOutboxNotice({ entries, error, busy, onRetry, onDiscard, onSaveCopy, readChat }: Props) {
   const [remote, setRemote] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState(false);
   if (!entries.length && !error) return null;
   async function compare(entry: ChatOutboxEntry) {
     try {
@@ -30,8 +35,9 @@ export function ChatOutboxNotice({ entries, error, busy, onRetry, onDiscard, onS
   }
   return (
     <aside className="chatOutbox" data-testid="chat-outbox" aria-label="Unsynced chat drafts">
-      <details>
+      <details onToggle={event => setExpanded(event.currentTarget.open)}>
         <summary><strong>{entries.length ? `${entries.length} local draft${entries.length === 1 ? '' : 's'}` : 'Chat sync needs attention'}</strong><span>{busy ? 'Saving...' : 'Review & recover'}</span></summary>
+        {expanded && <>
         <p>Drafts stay in this browser until confirmed by the server. Recovery never starts an agent task.</p>
         {error && <p role="status" className="chatOutboxError">{error}</p>}
         <button type="button" disabled={busy} onClick={() => void onRetry()}>Retry saving drafts</button>
@@ -41,10 +47,10 @@ export function ChatOutboxNotice({ entries, error, busy, onRetry, onDiscard, onS
             <p>{entry.error || 'Waiting for server confirmation'}</p>
             <details>
               <summary>Local version</summary>
-              <pre>{entry.operation.chat.messages.map(message => message.content).join('\n\n')}</pre>
+              <pre>{preview(entry.operation.chat.messages.map(message => message.content).join('\n\n'))}</pre>
               <p>{entry.operation.chat.messages.reduce((total, message) => total + (message.attachments?.length || 0), 0)} attachments preserved in draft</p>
             </details>
-            {remote[entry.operation.operationId] && <details open><summary>Server version</summary><pre>{remote[entry.operation.operationId]}</pre></details>}
+            {remote[entry.operation.operationId] && <details open><summary>Server version</summary><pre>{preview(remote[entry.operation.operationId])}</pre></details>}
             <div className="chatOutboxActions">
               <button type="button" disabled={busy} onClick={() => void compare(entry)}>View server version</button>
               <button type="button" onClick={() => download(entry)}>Download draft</button>
@@ -53,6 +59,7 @@ export function ChatOutboxNotice({ entries, error, busy, onRetry, onDiscard, onS
             </div>
           </article>
         ))}
+        </>}
       </details>
     </aside>
   );

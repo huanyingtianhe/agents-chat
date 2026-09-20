@@ -123,7 +123,7 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
   async function save(snapshot: ChatSnapshot, onStaged?: () => void): Promise<void> {
     const { messages, ...metadata } = snapshot;
     const required = new Set<string>();
-    const current = messages.filter(message => message.type !== 'system' || message.ts === 0).map(clientMessage);
+    const current = messages.filter(message => message.type !== 'system').map(clientMessage);
     const stage = stages.then(async () => {
       await ready();
       if (blockedChats.has(snapshot.id)) throw new ChatSyncError('chat_deleted', 410);
@@ -145,8 +145,8 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       for (let index = 0; index < batches.length; index++) {
         const batch = batches[index];
         const removedMessageIds = index === 0 ? removed : [];
-        const expectedVersions: Record<string, number | null> = {};
-        const dependencies: Record<string, string> = {};
+        const expectedVersions: Record<string, number | null> = Object.create(null);
+        const dependencies: Record<string, string> = Object.create(null);
         for (const id of [...batch.map(message => message.id), ...removedMessageIds]) {
           const previous = baseline.get(id);
           expectedVersions[id] = previous?.version ?? null;
@@ -244,7 +244,13 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
     options.onChange?.();
   }
 
-  return { hydrate, save, saveCopy, ready, retryPending, discard, markDeleted, list: () => outbox.list() };
+  function isDurable(chatId: string, messages: ChatMessage[]): boolean {
+    const baseline = baselines.get(chatId);
+    return !!baseline && messages.filter(message => message.type !== 'system').every(message =>
+      baseline.get(message.id)?.value === JSON.stringify(clientMessage(message)));
+  }
+
+  return { hydrate, save, saveCopy, ready, retryPending, discard, markDeleted, isDurable, list: () => outbox.list() };
 }
 
 export type IncrementalChatSaver = ReturnType<typeof createIncrementalChatSaver>;

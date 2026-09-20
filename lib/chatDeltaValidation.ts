@@ -36,6 +36,7 @@ export function isStoredChatDelta(value: unknown): value is StoredChatDelta {
     && isRecord(value.agentSessions) && Object.values(value.agentSessions).every(session =>
       typeof session === 'string' || (Array.isArray(session) && session.every(id => typeof id === 'string')))
     && Array.isArray(value.messages) && value.messages.every(isMessage)
+    && new Set(value.messages.map(message => message.id)).size === value.messages.length
     && (value.removedMessageIds === undefined || (Array.isArray(value.removedMessageIds)
       && value.removedMessageIds.every(id => typeof id === 'string' && !!id)));
 }

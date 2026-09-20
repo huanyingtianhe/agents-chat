@@ -102,7 +102,23 @@ export function useChatRuntime({
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
-  const { saver: chatSaver, notice: outboxNotice } = useChatOutbox(userId, authStatus, (chat, replaceIds = []) => {
+  const { saver: chatSaver, notice: outboxNotice } = useChatOutbox(userId, authStatus, (chat, replaceIds = [], deletedChatId) => {
+    if (!chat) {
+      if (deletedChatId) {
+        delete chatMessagesRef.current[deletedChatId];
+        setChatHistory(previous => previous.filter(entry => entry.id !== deletedChatId));
+        if (currentChatIdRef.current === deletedChatId) {
+          currentChatIdRef.current = '';
+          currentAgentSessionsRef.current = {};
+          setCurrentChatId('');
+          setActiveSidebarChatId('');
+          setChatName('New Chat');
+          messagesRef.current = [];
+          setMessages([]);
+        }
+      }
+      return;
+    }
     const existing = chatMessagesRef.current[chat.id] || [];
     const replace = new Set(replaceIds);
     const merged = new Map(existing.filter(message => !replace.has(message.id)).map(message => [message.id, message]));

@@ -187,7 +187,7 @@ for (const failure of ['413', 'network'] as const) {
       await send(page, 'Keep my unsaved question');
       await expect(page.locator('.userSendFailureCard')).toBeVisible();
       if (failure === '413') await expect(page.locator('.userSendFailureCard')).toContainText('HTTP 413');
-      await expect(page.getByText('Keep my unsaved question', { exact: true })).toBeVisible();
+      await expect(page.getByRole('main').getByText('Keep my unsaved question', { exact: true })).toBeVisible();
       expect(fixture.sent).toEqual([]);
       expect((await fixture.loadStored()).messages.filter(message => message.type === 'user')).toHaveLength(1);
       fixture.fail(null);
@@ -195,7 +195,7 @@ for (const failure of ['413', 'network'] as const) {
       await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
       await expect(page.locator('.userSendFailureCard')).toHaveCount(0);
       await page.reload();
-      await expect(page.getByText('Keep my unsaved question', { exact: true })).toBeVisible();
+      await expect(page.getByRole('main').getByText('Keep my unsaved question', { exact: true })).toBeVisible();
       expect(fixture.sent).toEqual(['Keep my unsaved question']);
       expect(fixture.savedBeforeSend).toEqual([true]);
       expect(fixture.pageErrors).toEqual([]);

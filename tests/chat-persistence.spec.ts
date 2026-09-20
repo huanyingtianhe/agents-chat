@@ -420,6 +420,7 @@ for (const workflowReply of [false, true]) test(`refresh during an in-flight sav
     expect(fixture.pageErrors).toEqual([]);
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
     await expect.poll(() => fixture.sent).toEqual(['Keep the in-flight draft']);
+    await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
   } finally {
     release();
     await page.goto('about:blank');
@@ -478,6 +479,7 @@ test('local staging only clears the submitted revision and attachments', async (
     });
     await release();
     await expect.poll(() => fixture.sent.length).toBe(1);
+    await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
     await expect(page.locator('textarea.composerTextarea')).toHaveValue('Next unsent revision');
     await expect(page.getByText('next.txt', { exact: true })).toBeVisible();
     const stored = await fixture.loadStored();
@@ -528,6 +530,7 @@ test('an attachment-only conflict copy can be explicitly sent with its fallback 
     const copy = page.locator('.message.user').filter({ hasText: 'Recovered draft saved' });
     await copy.getByRole('button', { name: 'Retry', exact: true }).click();
     await expect.poll(() => fixture.sent).toEqual(['Please review the attached file(s).']);
+    await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
     const stored = await fixture.loadStored();
     expect(stored.messages.filter(message => message.type === 'user' && message.content === '').at(-1)?.attachments?.[0].name)
       .toBe('attachment-only.txt');
@@ -560,6 +563,7 @@ test('retrying a recovery copy after its acknowledgement is lost creates only on
 });
 
 test('resumes a partially uploaded draft after reload without reuploading confirmed chunks or dispatching', async ({ page }) => {
+  test.setTimeout(100_000);
   const fixture = await installPersistenceFixture(page);
   const firstChunks = new Map<string, number>();
   let interrupt = true;
@@ -577,8 +581,9 @@ test('resumes a partially uploaded draft after reload without reuploading confir
     expect(firstChunks.size).toBeGreaterThan(0);
     interrupt = false;
     await fixture.reload();
-    await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === text)).toBe(true);
-    await expect(page.getByTestId('chat-outbox')).toHaveCount(0);
+    await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === text), { timeout: 80_000 }).toBe(true);
+    // A reload may strand the dependent failure-status operation's 60-second tab lease.
+    await expect(page.getByTestId('chat-outbox')).toHaveCount(0, { timeout: 80_000 });
     expect([...firstChunks.values()].every(count => count === 1)).toBe(true);
     expect(fixture.sent).toEqual([]);
   } finally {

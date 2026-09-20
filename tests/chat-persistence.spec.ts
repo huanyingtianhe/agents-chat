@@ -13,7 +13,9 @@ type TestChat = {
 
 async function installPersistenceFixture(page: Page, interruptGitContext = false) {
   await installMobileChatFixture(page);
-  await loginMobileFixture(page);
+  // Do not create mock-chat recovery drafts before switching to the real persistence API.
+  await page.route('**/api/chats**', route => route.fulfill({ json: { ok: true, chats: [], lastChatId: '' } }));
+  await loginMobileFixture(page, { emptyHistory: true });
   await page.goto('about:blank');
   const request = page.context().request;
   const chat: TestChat = {
@@ -351,9 +353,10 @@ test('conflicting drafts preserve both versions and can be saved as a new messag
     await expect(page.locator('.userSendFailureCard')).toBeVisible();
     await panel.locator('summary').first().click();
     await expect(panel).toContainText('message_conflict');
-    await panel.getByRole('button', { name: 'View server version' }).first().click();
-    await expect(panel).toContainText('Version saved by another device');
-    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    const draft = panel.locator('article').filter({ has: page.getByText(fixture.chat.name, { exact: true }) });
+    await draft.getByRole('button', { name: 'View server version' }).click();
+    await expect(draft).toContainText('Version saved by another device');
+    await draft.getByRole('button', { name: 'Save as new message' }).click();
     await expect.poll(async () => (await fixture.loadStored()).messages.filter(message =>
       message.content === 'Keep my local version' || message.content === 'Version saved by another device').length).toBe(2);
     expect(fixture.sent).toEqual([]);

@@ -382,7 +382,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   };
 }
 
-export async function loginMobileFixture(page: Page): Promise<void> {
+export async function loginMobileFixture(page: Page, options: { emptyHistory?: boolean } = {}): Promise<void> {
   await page.goto('/login');
   const username = page.getByPlaceholder('Admin username');
   const password = page.getByPlaceholder('Password');
@@ -393,5 +393,5 @@ export async function loginMobileFixture(page: Page): Promise<void> {
     await expect(submit).toBeEnabled();
   }).toPass({ timeout: 30_000 });
   await submit.click();
-  await expect(page.locator('.message.user')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(options.emptyHistory ? '.emptyHomepage' : '.message.user')).toBeVisible({ timeout: 30_000 });
 }

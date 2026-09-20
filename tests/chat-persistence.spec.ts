@@ -177,6 +177,29 @@ async function send(page: Page, text: string) {
   await page.locator('textarea.composerTextarea').press('Enter');
 }
 
+async function holdOutboxWrites(page: Page) {
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('agents-chat-outbox', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction('operations', 'readwrite');
+      const store = transaction.objectStore('operations');
+      let holding = true;
+      window.addEventListener('release-outbox-writes', () => { holding = false; }, { once: true });
+      const keepAlive = () => {
+        const request = store.get(['test-gate', 'test-gate']);
+        request.onsuccess = () => { if (holding) keepAlive(); };
+      };
+      transaction.oncomplete = () => database.close();
+      transaction.onabort = () => { database.close(); reject(transaction.error); };
+      keepAlive();
+      resolve();
+    };
+  }));
+  return () => page.evaluate(() => window.dispatchEvent(new Event('release-outbox-writes')));
+}
+
 test('saves and reloads user messages with over 5 MB of history and large ACP tools', async ({ page }) => {
   const fixture = await installPersistenceFixture(page);
   try {
@@ -423,5 +446,32 @@ test('a deleted conversation cannot be resurrected and its draft can be copied t
     await page.goto('about:blank');
     await request.delete(`/api/chats?id=${fixture.chat.id}`);
     if (recoveredId) await request.delete(`/api/chats?id=${recoveredId}`);
+  }
+});
+
+test('local staging only clears the submitted revision and attachments', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  const release = await holdOutboxWrites(page);
+  try {
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'submitted.txt', mimeType: 'text/plain', buffer: Buffer.from('submitted'),
+    });
+    await send(page, 'Submitted revision');
+    await page.locator('textarea.composerTextarea').fill('Next unsent revision');
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'next.txt', mimeType: 'text/plain', buffer: Buffer.from('keep me'),
+    });
+    await release();
+    await expect.poll(() => fixture.sent.length).toBe(1);
+    await expect(page.locator('textarea.composerTextarea')).toHaveValue('Next unsent revision');
+    await expect(page.getByText('next.txt', { exact: true })).toBeVisible();
+    const stored = await fixture.loadStored();
+    expect(stored.messages.some(message => message.content === 'Next unsent revision')).toBe(false);
+    const submitted = stored.messages.find(message => message.content === 'Submitted revision');
+    expect(submitted?.attachments?.map(attachment => attachment.name)).toEqual(['submitted.txt']);
+  } finally {
+    await release();
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
   }
 });

@@ -510,7 +510,10 @@ export function useChatRuntime({
     if (!trimmed || awaitingAgentIds.length === 0) return;
     const sendChatId = currentChatIdRef.current;
     if (!sendChatId) return;
-    const userMessageId = addMessage({ type: 'user', content: trimmed }, sendChatId);
+    const userMessageId = addMessage({
+      type: 'user', content: trimmed, sendStatus: 'pending',
+      resendAgentIds: awaitingAgentIds, resendMessage: trimmed,
+    }, sendChatId);
     const saved = await persistHandlers.saveChatToHistory(sendChatId);
     if (!saved.ok) {
       markUserMessageSendFailed(sendChatId, userMessageId, saved.error, awaitingAgentIds, trimmed);
@@ -523,40 +526,47 @@ export function useChatRuntime({
     // reply back into the same node so the engine can resume: flip awaiting
     // nodes to 'running' and re-dispatch with workflowNodeId so finalizeRun
     // updates the right node and triggers maybeAdvanceOrchestration.
-    const orch = orchestrationsRef.current[orchestrationId];
-    if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
-      const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
-      const awaitingNodes = orch.workflowPlan.nodes.filter(
-        (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
-      );
-      // Literal "skip" reply: mark awaiting nodes skipped and advance.
-      // Dependents will cascade-skip via the engine's normal logic.
-      if (awaitingNodes.length > 0 && trimmed.toLowerCase() === 'skip') {
-        for (const n of awaitingNodes) {
-          statuses[n.id] = 'skipped';
-          orch.results = orch.results || {};
-          if (!orch.results[n.id]) orch.results[n.id] = '⏭ Skipped by user';
+    try {
+      const orch = orchestrationsRef.current[orchestrationId];
+      if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
+        const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+        const awaitingNodes = orch.workflowPlan.nodes.filter(
+          (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
+        );
+        // Literal "skip" reply: mark awaiting nodes skipped and advance.
+        // Dependents will cascade-skip via the engine's normal logic.
+        if (awaitingNodes.length > 0 && trimmed.toLowerCase() === 'skip') {
+          for (const n of awaitingNodes) {
+            statuses[n.id] = 'skipped';
+            orch.results = orch.results || {};
+            if (!orch.results[n.id]) orch.results[n.id] = '⏭ Skipped by user';
+          }
+          notifyRunStateChanged();
+          void orchHandlers.maybeAdvanceOrchestration(orchestrationId);
+          await confirmUserMessageDispatch(sendChatId, userMessageId);
+          return;
         }
-        notifyRunStateChanged();
-        void orchHandlers.maybeAdvanceOrchestration(orchestrationId);
-        return;
+        if (awaitingNodes.length > 0) {
+          for (const n of awaitingNodes) statuses[n.id] = 'running';
+          notifyRunStateChanged();
+          await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+            n.agent, trimmed, orchestrationId, 'worker',
+            { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
+          )));
+          await confirmUserMessageDispatch(sendChatId, userMessageId);
+          return;
+        }
       }
-      if (awaitingNodes.length > 0) {
-        for (const n of awaitingNodes) statuses[n.id] = 'running';
-        notifyRunStateChanged();
-        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
-          n.agent, trimmed, orchestrationId, 'worker',
-          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
-        )));
-        return;
-      }
+      // Fallback (no live orchestration — e.g. msg- id from history scan):
+      // plain dispatch to the asking agent(s), no orchestration tracking.
+      await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+        agentId, trimmed, `followup-${makeId()}`, 'worker',
+        { chatId: sendChatId, relation: 'Workflow follow-up' },
+      )));
+      await confirmUserMessageDispatch(sendChatId, userMessageId);
+    } catch (error) {
+      markUserMessageSendFailed(sendChatId, userMessageId, error instanceof Error ? error.message : String(error), awaitingAgentIds, trimmed);
     }
-    // Fallback (no live orchestration — e.g. msg- id from history scan):
-    // plain dispatch to the asking agent(s), no orchestration tracking.
-    await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
-      agentId, trimmed, `followup-${makeId()}`, 'worker',
-      { chatId: sendChatId, relation: 'Workflow follow-up' },
-    )));
   }
 
   async function handleStop() {

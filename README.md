@@ -68,6 +68,7 @@ pending saves, **never agent execution**. Use the message's **Retry** action
 explicitly when you want to send a recovered question to an agent.
 Interrupted sends retain a pending-confirmation state even in chats with existing
 agent sessions; recovery exposes Retry with a warning to check existing replies.
+This includes replies sent from the workflow follow-up card.
 Only the submitted composer revision and attachments are cleared after local
 staging, so typing the next message while storage is busy does not erase it.
 Navigation cancels active save requests without discarding unconfirmed drafts.
@@ -79,6 +80,9 @@ attachments), discard, and **Save as new message**.
 Recovery copies reuse a durable operation associated with the source draft,
 including when their acknowledgement is lost. Attachment-only copies retain
 their retry prompt and original agent selection.
+Switching accounts isolates both drafts and recovery error/busy state; delayed
+callbacks from the previous account cannot consume drafts or replace the current
+conversation with their response.
 Different message IDs merge; conflicting edits to the same ID are retained locally rather than silently
 overwriting another device. Deleted chats have persistent tombstones: delayed
 saves cannot resurrect them, and recovered copies use a new chat ID. Same-browser

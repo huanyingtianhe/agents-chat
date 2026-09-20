@@ -47,6 +47,7 @@ jobs:
           npx --yes --package=tsx@4.20.6 tsx --test
           tests/chat-incremental-save.test.ts
           tests/chat-store-delta.test.ts
+          tests/chat-sync-store.test.ts
           tests/chat-store-message-merge.test.ts
           tests/chat-store-stale-reconciliation.test.ts
           tests/chat-selection-load-guard.test.ts

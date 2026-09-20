@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createIncrementalChatSaver } from '../app/features/chat/runtime/incrementalChatSaver';
 import { createMemoryChatOutbox } from '../app/features/chat/runtime/chatOutboxStore';
-import { requestJson } from '../app/features/chat/runtime/chatTransferClient';
+import { commitOperation, requestJson } from '../app/features/chat/runtime/chatTransferClient';
 import type { ChatMessage } from '../app/features/chat/chatTypes';
 import type { ChatOperation } from '../lib/chatSyncStore';
+import { mock as nodeMock } from 'node:test';
 
 function server() {
   const calls: ChatOperation[] = [];
@@ -120,6 +121,35 @@ async function main() {
   assert.equal((await outbox.list()).length, 0);
 
   await assert.rejects(requestJson('/api/chats', {}, () => new Promise(() => {}), 5), /timed out/);
+  await assert.rejects(commitOperation(mock.calls[0], async () => Response.json({ ok: true, versions: {} })),
+    /Invalid chat commit acknowledgement/, 'a missing per-message version must not clear the local draft');
+  const timed = server();
+  let hanging = true;
+  let started!: () => void;
+  const startedRequest = new Promise<void>(resolve => { started = resolve; });
+  const timedSaver = createIncrementalChatSaver(async (url, init) => {
+    if (hanging) { started(); return new Promise(() => {}); }
+    return timed.request(url, init);
+  });
+  nodeMock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const saving = timedSaver.save({ ...metadata, messages: [question] });
+    await startedRequest;
+    const rejection = assert.rejects(saving, /timed out/);
+    nodeMock.timers.tick(30_001);
+    await rejection;
+    hanging = false;
+    await timedSaver.save({ ...metadata, messages: [question] });
+    assert.equal((await timedSaver.list()).length, 0, 'a timed-out request must not poison the save queue');
+  } finally { nodeMock.timers.reset(); }
+
+  await restarted.refreshFromServer(metadata.id, [{ ...lost, content: 'Newer remote edit', version: 9 }]);
+  await restarted.save({ ...metadata, messages: [{ ...lost, content: 'Next local edit' }] });
+  assert.equal(mock.calls.at(-1)?.expectedVersions[question.id], 9, 'refresh acknowledges newer remote edits after old receipts');
+  assert.deepEqual(await restarted.refreshFromServer(metadata.id, [{ ...lost, version: 3 }]), [],
+    'a GET started before a concurrent commit must not regress the confirmed baseline');
+  await restarted.save({ ...metadata, messages: [{ ...lost, content: 'Edit after a stale GET' }] });
+  assert.equal(mock.calls.at(-1)?.expectedVersions[question.id], 10);
   const partial = server();
   partial.state.failAt = 2;
   const partialSaver = createIncrementalChatSaver(partial.request);

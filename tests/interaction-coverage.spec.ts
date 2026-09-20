@@ -1,4 +1,5 @@
 import { expect, Page, test } from '@playwright/test';
+import { applyFixtureChatSave, chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -58,9 +59,11 @@ test.beforeEach(async ({ page }) => {
     }
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
-      if (body?.chat) chats.set(body.chat.id, body.chat);
+      const delta = body.operation?.chat || body.chat;
+      const saved = applyFixtureChatSave(body, delta && chats.get(delta.id));
+      if (saved) chats.set(saved.id, saved);
       if (body?.action === 'set-last-chat') lastChatId = body.chatId || '';
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+      await route.fulfill({ json: chatSaveAcknowledgement(body) });
       return;
     }
     if (request.method() === 'DELETE') {

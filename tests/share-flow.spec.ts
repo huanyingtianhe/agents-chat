@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { StoredChat } from '../lib/chatStore';
+import { applyFixtureChatSave, chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -29,7 +31,7 @@ test('creates, copies, closes, renders, and continues a shared conversation', as
     ],
     agentSessions: {},
   };
-  const chats = new Map<string, Chat>([[source.id, source]]);
+  const chats = new Map<string, StoredChat>([[source.id, source]]);
   let lastChatId = source.id;
   const shareRequests: Record<string, unknown>[] = [];
   const shareId = 'share-e2e-fixed';
@@ -73,8 +75,10 @@ test('creates, copies, closes, renders, and continues a shared conversation', as
     }
     const body = request.postDataJSON();
     if (body?.action === 'set-last-chat') lastChatId = body.chatId;
-    if (body?.chat) chats.set(body.chat.id, body.chat);
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    const delta = body.operation?.chat || body.chat;
+    const saved = applyFixtureChatSave(body, delta && chats.get(delta.id));
+    if (saved) chats.set(saved.id, saved);
+    await route.fulfill({ json: chatSaveAcknowledgement(body) });
   });
   await page.route('**/api/share**', async (route) => {
     const request = route.request();

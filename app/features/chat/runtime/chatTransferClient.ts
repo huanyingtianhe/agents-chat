@@ -1,11 +1,23 @@
 import { CHAT_REQUEST_TIMEOUT_MS, ChatSyncError, isRecord, MAX_TRANSFER_BYTES, sha256, TRANSFER_CHUNK_BYTES } from '@/lib/chatSyncProtocol';
 import type { ChatCommitResult, ChatOperation } from '@/lib/chatSyncStore';
 
+let pageLeaving = false;
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => { pageLeaving = true; });
+  window.addEventListener('pageshow', () => { pageLeaving = false; });
+}
+
 export async function requestJson(
   url: string, body: unknown, request: typeof fetch = fetch,
   timeoutMs = CHAT_REQUEST_TIMEOUT_MS,
 ): Promise<Record<string, unknown>> {
+  if (pageLeaving) throw new ChatSyncError('Page navigation interrupted the request. The draft will retry after reopening.', 408);
   const controller = new AbortController();
+  const onPageHide = () => controller.abort();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', onPageHide, { once: true });
+    window.addEventListener('pagehide', onPageHide, { once: true });
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -33,6 +45,10 @@ export async function requestJson(
     })()]);
   } finally {
     clearTimeout(timer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', onPageHide);
+      window.removeEventListener('pagehide', onPageHide);
+    }
   }
 }
 
@@ -69,7 +85,9 @@ export async function commitOperation(operation: ChatOperation, request: typeof 
     body = { action: 'save-sync', transferId: operation.operationId, chatId: operation.chat.id };
   }
   const result = await requestJson('/api/chats', body, request);
-  if (!isRecord(result.versions) || !Object.values(result.versions).every(version => Number.isSafeInteger(version))) {
+  const versions = result.versions;
+  if (!isRecord(versions) || !Object.values(versions).every(version => Number.isSafeInteger(version) && Number(version) >= 0)
+    || operation.chat.messages.some(message => !Object.hasOwn(versions, message.id))) {
     throw new Error('Invalid chat commit acknowledgement');
   }
   if (body !== direct) {

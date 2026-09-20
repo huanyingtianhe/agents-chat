@@ -85,7 +85,7 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       while (waiting.size) {
         const entry = [...waiting.values()].find(candidate =>
           !Object.values(candidate.operation.dependencies || {}).some(id => waiting.has(id)));
-        if (!entry) break;
+        if (!entry) throw new Error('Local draft dependencies are invalid. Download the drafts before clearing browser storage.');
         const { operation } = entry;
         waiting.delete(operation.operationId);
         if (entry.state !== 'pending') {
@@ -263,7 +263,24 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       baseline.get(message.id)?.value === JSON.stringify(clientMessage(message)));
   }
 
-  return { hydrate, save, saveCopy, ready, retryPending, discard, markDeleted, isDurable, list: () => outbox.list() };
+  async function refreshFromServer(chatId: string, messages: ChatMessage[]): Promise<string[]> {
+    await stages;
+    const pendingIds = new Set((await outbox.list()).filter(entry => entry.operation.chat.id === chatId)
+      .flatMap(entry => [...entry.operation.chat.messages.map(message => message.id), ...(entry.operation.chat.removedMessageIds || [])]));
+    const baseline = baselines.get(chatId) || new Map<string, Baseline>();
+    const confirmedIds: string[] = [];
+    for (const message of messages) {
+      const version = message.version || 0;
+      if (!pendingIds.has(message.id) && version >= (baseline.get(message.id)?.version || 0)) {
+        baseline.set(message.id, { value: JSON.stringify(clientMessage(message)), version });
+        if (message.type === 'user') confirmedIds.push(message.id);
+      }
+    }
+    baselines.set(chatId, baseline);
+    return confirmedIds;
+  }
+
+  return { hydrate, save, saveCopy, ready, retryPending, discard, markDeleted, isDurable, refreshFromServer, list: () => outbox.list() };
 }
 
 export type IncrementalChatSaver = ReturnType<typeof createIncrementalChatSaver>;

@@ -45,11 +45,14 @@ export function useChatOutbox(
       for (const id of new Set(before.map(entry => entry.operation.chat.id))) {
         const chat = await readChat(id);
         if (scope.current !== userId) return;
-        if (chat) recovered.current(chat);
+        if (chat) {
+          const confirmedIds = await saver.refreshFromServer(chat.id, chat.messages);
+          if (scope.current === userId) recovered.current(chat, confirmedIds);
+        }
       }
-      setError(failure);
+      if (scope.current === userId) setError(failure);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (scope.current === userId) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       working.current = false;
       setBusy(false);
@@ -80,12 +83,14 @@ export function useChatOutbox(
       const chat = await readChat(entry.operation.chat.id);
       if (scope.current !== userId) throw new Error('Account changed. Reopen the draft using its original account.');
       const discarded = await saver.discard(entry.operation.operationId);
+      if (scope.current !== userId) return;
       if (chat) {
-        saver.hydrate(chat.id, chat.messages);
+        await saver.refreshFromServer(chat.id, chat.messages);
+        if (scope.current !== userId) return;
         recovered.current(chat, discarded.flatMap(item => item.operation.chat.messages.map(message => message.id)));
       } else recovered.current(null, undefined, entry.operation.chat.id);
       setError('');
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { if (scope.current === userId) setError(String(cause)); }
     finally { setBusy(false); }
   }
 
@@ -99,15 +104,19 @@ export function useChatOutbox(
         id: chatId, name: original?.name || 'Recovered drafts',
         agentSessions: original?.agentSessions || {},
       });
+      if (scope.current !== userId) return;
       const discarded = await saver.discard(entry.operation.operationId);
+      if (scope.current !== userId) return;
       if (!original) recovered.current(null, undefined, entry.operation.chat.id);
       const chat = await readChat(chatId);
+      if (scope.current !== userId) return;
       if (chat) {
-        saver.hydrate(chat.id, chat.messages);
+        await saver.refreshFromServer(chat.id, chat.messages);
+        if (scope.current !== userId) return;
         recovered.current(chat, discarded.flatMap(item => item.operation.chat.messages.map(message => message.id)));
       }
       setError('');
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { if (scope.current === userId) setError(String(cause)); }
     finally { setBusy(false); }
   }
 

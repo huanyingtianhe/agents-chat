@@ -48,8 +48,8 @@ test('reconciles stale pending output after a successful session resume', async 
   });
   await page.route('**/api/chats**', async (route) => {
     if (route.request().method() === 'POST') {
-      const body = route.request().postDataJSON() as { chat?: { id?: string } };
-      if (body.chat?.id === chatId) reconciliationSaves++;
+      const body = route.request().postDataJSON() as { chat?: { id?: string }; operation?: { chat: { id: string } } };
+      if ((body.operation?.chat || body.chat)?.id === chatId) reconciliationSaves++;
     }
     await route.continue();
   });

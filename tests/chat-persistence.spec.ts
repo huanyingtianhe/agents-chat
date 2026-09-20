@@ -345,3 +345,24 @@ test('conflicting drafts preserve both versions and can be saved as a new messag
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
   }
 });
+
+test('refresh during an in-flight save preserves the draft and does not dispatch', async ({ page }) => {
+  test.setTimeout(100_000);
+  const fixture = await installPersistenceFixture(page);
+  const release = fixture.holdSave();
+  try {
+    await send(page, 'Keep the in-flight draft');
+    await expect.poll(() => fixture.saveSizes.length).toBeGreaterThan(0);
+    expect(fixture.sent).toEqual([]);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    release();
+    await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === 'Keep the in-flight draft'),
+      { timeout: 80_000 }).toBe(true);
+    expect(fixture.sent).toEqual([]);
+    expect(fixture.pageErrors).toEqual([]);
+  } finally {
+    release();
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});

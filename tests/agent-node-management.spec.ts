@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -86,6 +87,7 @@ async function installIsolatedBackend(page: Page) {
   };
 
   await page.route('**/api/chats**', async (route) => {
+    if (route.request().method() === 'POST') return route.fulfill({ json: chatSaveAcknowledgement(route.request().postDataJSON()) });
     const request = route.request();
     const id = new URL(request.url()).searchParams.get('id');
     if (request.method() === 'GET') {

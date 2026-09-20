@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test';
+import { chatSaveAcknowledgement } from './chatSaveFixture';
 
 export const TEST_AGENT = {
   id: 'alpha',
@@ -141,11 +142,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON();
       if (body.action === 'save-sync') {
-        return route.fulfill({ json: {
-          ok: true,
-          versions: Object.fromEntries(body.operation.chat.messages.map((message: { id: string }) =>
-            [message.id, (body.operation.expectedVersions[message.id] || 0) + 1])),
-        } });
+        return route.fulfill({ json: chatSaveAcknowledgement(body) });
       }
     }
     const id = new URL(route.request().url()).searchParams.get('id');

@@ -3727,7 +3727,7 @@ test.describe('Chat UI', () => {
     await page.addInitScript(() => {
       const realSetTimeout = window.setTimeout.bind(window);
       window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
-        realSetTimeout(handler, Math.min(Number(timeout) || 0, 20), ...args)) as typeof window.setTimeout;
+        realSetTimeout(handler, Number(timeout) === 30_000 ? timeout : Math.min(Number(timeout) || 0, 20), ...args)) as typeof window.setTimeout;
     });
 
     const chatArea = page.locator('.chatContainer');
@@ -3974,19 +3974,20 @@ test.describe('Chat UI', () => {
     await expect(chatArea.locator(`.message.user:has-text("${userText}")`)).toBeVisible({ timeout: 15000 });
     await expect(chatArea.locator(`.thinkingPartText:has-text("${thinkingText}")`)).toBeVisible({ timeout: 15000 });
 
-    await expect.poll(() => chatPosts.some((body) => body?.chat?.messages?.some((message: any) => message.type === 'user' && message.content === userText)), { timeout: 10000 }).toBe(true);
-    const chatSaveCountAfterUserMessage = chatPosts.filter((body) => body?.chat).length;
+    const chatSaves = () => chatPosts.map(body => body.operation?.chat || body.chat).filter(Boolean);
+    await expect.poll(() => chatSaves().some(chat => chat.messages?.some((message: any) => message.type === 'user' && message.content === userText)), { timeout: 10000 }).toBe(true);
+    const chatSaveCountAfterUserMessage = chatSaves().length;
     await page.waitForTimeout(2500);
-    expect(chatPosts.filter((body) => body?.chat).length).toBe(chatSaveCountAfterUserMessage);
+    expect(chatSaves().length).toBe(chatSaveCountAfterUserMessage);
 
     expect(pollCount).toBeGreaterThan(0);
     finishTurn = true;
     await expect(chatArea.locator(`.message.agent:has-text("${finalText}")`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('button[aria-label="Stop generation"]')).toBeHidden({ timeout: 15000 });
-    await expect.poll(() => chatPosts.filter((body) => body?.chat).length, { timeout: 10000 })
+    await expect.poll(() => chatSaves().length, { timeout: 10000 })
       .toBe(chatSaveCountAfterUserMessage + 1);
-    const finalSave = chatPosts.filter((body) => body?.chat).at(-1);
-    expect(finalSave.chat.messages.some((message: any) => message.type === 'agent' && message.content === finalText)).toBe(true);
+    const finalSave = chatSaves().at(-1);
+    expect(finalSave.messages.some((message: any) => message.type === 'agent' && message.content === finalText)).toBe(true);
 
     console.log('PASS: streaming thinking parts render without frontend stream saves');
   });

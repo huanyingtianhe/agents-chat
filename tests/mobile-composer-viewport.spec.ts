@@ -1,4 +1,6 @@
 import { expect, Page, test } from '@playwright/test';
+import type { StoredChat } from '../lib/chatStore';
+import { applyFixtureChatSave, chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 import {
   installTestVisualViewport,
   setTestVisualViewport,
@@ -24,7 +26,7 @@ async function login(page: Page) {
 test('keeps composer controls above iPhone browser chrome and keyboard', async ({ page }) => {
   await installTestVisualViewport(page);
 
-  const chats = new Map<string, Record<string, unknown>>();
+  const chats = new Map<string, StoredChat>();
   let lastChatId = '';
   await page.route('**/api/chats**', async (route) => {
     const request = route.request();
@@ -56,8 +58,12 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
     }
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
-      if (body?.chat) chats.set(body.chat.id, body.chat);
+      const delta = body.operation?.chat || body.chat;
+      const saved = applyFixtureChatSave(body, delta && chats.get(delta.id));
+      if (saved) chats.set(saved.id, saved);
       if (body?.action === 'set-last-chat') lastChatId = body.chatId || '';
+      await route.fulfill({ json: chatSaveAcknowledgement(body) });
+      return;
     }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });

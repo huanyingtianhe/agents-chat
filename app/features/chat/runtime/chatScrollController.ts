@@ -24,7 +24,7 @@ export function createChatScrollController(
   let lastTop = container.scrollTop;
   let expectedTop: number | null = null;
   let correctionFrame = 0;
-  let intentFrame = 0;
+  let intentTimeout: ReturnType<typeof setTimeout> | undefined;
   let userIntent = false;
   let suspended = false;
   let disposed = false;
@@ -104,18 +104,30 @@ export function createChatScrollController(
     userIntent = true;
     if (correctionFrame) cancelAnimationFrame(correctionFrame);
     correctionFrame = 0;
-    if (intentFrame) cancelAnimationFrame(intentFrame);
-    intentFrame = requestAnimationFrame(() => {
-      intentFrame = 0;
-      userIntent = false;
-      if (geometryChanged(geometry, measure())) scheduleCorrection();
-    });
+    deferIntentEnd();
+  }
+
+  function endUserIntent() {
+    clearTimeout(intentTimeout);
+    intentTimeout = undefined;
+    userIntent = false;
+    if (geometryChanged(geometry, measure())) scheduleCorrection();
+  }
+
+  function deferIntentEnd() {
+    clearTimeout(intentTimeout);
+    // Compositor scroll events can arrive after animation frames. Keep intent through
+    // the gesture; the quiet-period fallback also releases input at a scroll boundary.
+    intentTimeout = setTimeout(endUserIntent, 150);
   }
 
   function onScroll() {
     if (disposed || suspended || multiTouch) return;
     if (userIntent || scrollbarDrag) {
+      const activeIntent = userIntent;
       captureUserPosition();
+      userIntent = activeIntent;
+      if (activeIntent) deferIntentEnd();
       return;
     }
     const current = measure();
@@ -192,6 +204,7 @@ export function createChatScrollController(
   const mutationObserver = new MutationObserver(scheduleCorrection);
   mutationObserver.observe(container, { childList: true, subtree: true, characterData: true });
   container.addEventListener('scroll', onScroll, { passive: true });
+  container.addEventListener('scrollend', endUserIntent, { passive: true });
   container.addEventListener('wheel', onWheel, { passive: true });
   container.addEventListener('keydown', onKeyDown);
   window.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
@@ -212,6 +225,7 @@ export function createChatScrollController(
       anchor = null;
       suspended = false;
       userIntent = false;
+      clearTimeout(intentTimeout);
       if (correctionFrame) cancelAnimationFrame(correctionFrame);
       correctionFrame = 0;
       expectedTop = null;
@@ -229,8 +243,9 @@ export function createChatScrollController(
       resizeObserver.disconnect();
       mutationObserver.disconnect();
       cancelAnimationFrame(correctionFrame);
-      cancelAnimationFrame(intentFrame);
+      clearTimeout(intentTimeout);
       container.removeEventListener('scroll', onScroll);
+      container.removeEventListener('scrollend', endUserIntent);
       container.removeEventListener('wheel', onWheel);
       container.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('touchstart', onTouchStart, true);

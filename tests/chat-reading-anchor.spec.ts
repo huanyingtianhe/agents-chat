@@ -234,6 +234,7 @@ test('accepts real wheel input while a viewport transition is settling', async (
   if (!box) throw new Error('Missing scroll viewport');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -200);
+  await expect.poll(async () => (await readHistoricalPoint(page)).offset).toBeLessThan(original.offset - 20);
   await settleLayout(page);
   const point = await readHistoricalPoint(page);
   expect(point.offset).not.toBe(original.offset);

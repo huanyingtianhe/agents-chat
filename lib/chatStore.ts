@@ -398,6 +398,8 @@ export async function reconcileStalePendingMessagesForAgent(
       return {
         ...message,
         content: message.content.trim() ? message.content : '⏹ Interrupted',
+        version: (message.version || 0) + 1,
+        serverManaged: true,
         pending: false,
         statusText: 'Interrupted',
         ptyPhase: undefined,

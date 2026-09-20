@@ -37,7 +37,21 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
   const sent: string[] = [];
   const savedBeforeSend: boolean[] = [];
   const pageErrors: string[] = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
+  let reloading = false;
+  const apiUrl = new URL('/api/chats', process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010').href;
+  page.on('pageerror', error => {
+    // WebKit forwards JavaScript-source console diagnostics as pageerror, even for caught fetch failures.
+    if (reloading && page.context().browser()?.browserType().name() === 'webkit'
+      && error.stack?.startsWith(`Fetch API cannot load ${apiUrl} due to access control checks.\n`)) return;
+    pageErrors.push(error.message);
+  });
+  page.on('console', message => {
+    if (message.text().startsWith('persistence-uncaught:')) pageErrors.push(message.text());
+  });
+  await page.addInitScript(() => {
+    window.addEventListener('error', event => console.error('persistence-uncaught:', event.message));
+    window.addEventListener('unhandledrejection', event => console.error('persistence-uncaught:', String(event.reason)));
+  });
   let failure: '413' | 'network' | 'lost-response' | 'conflict' | null = null;
   let saveGate: Promise<void> | null = null;
   let activeReply = '';
@@ -142,6 +156,11 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
   await expect(page.getByText('Historical question', { exact: true })).toBeVisible();
   return {
     chat, saveSizes, sent, savedBeforeSend, pageErrors, loadStored,
+    async reload() {
+      reloading = true;
+      try { await page.reload({ waitUntil: 'domcontentloaded' }); }
+      finally { reloading = false; }
+    },
     fail(value: typeof failure) { failure = value; },
     holdSave() {
       let release!: () => void;
@@ -166,7 +185,7 @@ test('saves and reloads user messages with over 5 MB of history and large ACP to
     const stored = await fixture.loadStored();
     expect(stored.messages[1].parts).toEqual(fixture.chat.messages[1].parts);
     expect(JSON.stringify(stored.messages[3].parts).length).toBeGreaterThan(2 * 1024 * 1024);
-    await page.reload();
+    await fixture.reload();
     await expect(page.getByText('New question after a large history', { exact: true })).toBeVisible();
     await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
     expect(fixture.savedBeforeSend).toEqual([true]);
@@ -192,9 +211,10 @@ for (const failure of ['413', 'network'] as const) {
       expect((await fixture.loadStored()).messages.filter(message => message.type === 'user')).toHaveLength(1);
       fixture.fail(null);
       await page.getByRole('button', { name: 'Retry', exact: true }).click();
+      await expect.poll(() => fixture.sent.length, { timeout: 15_000 }).toBe(1);
       await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
       await expect(page.locator('.userSendFailureCard')).toHaveCount(0);
-      await page.reload();
+      await fixture.reload();
       await expect(page.getByRole('main').getByText('Keep my unsaved question', { exact: true })).toBeVisible();
       expect(fixture.sent).toEqual(['Keep my unsaved question']);
       expect(fixture.savedBeforeSend).toEqual([true]);
@@ -229,7 +249,7 @@ test('reports a failed auxiliary chat read without an unhandled rejection', asyn
     await expect(page.locator('.composerGitContextStatus')).toContainText('Failed to load git context');
     await send(page, 'Continue after a failed context read');
     await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
-    await page.reload();
+    await fixture.reload();
     await expect(page.getByText('Continue after a failed context read', { exact: true })).toBeVisible();
     expect(fixture.pageErrors).toEqual([]);
   } finally {
@@ -296,7 +316,7 @@ test('recovers an offline draft after reload without automatically executing it'
     await expect(page.locator('.userSendFailureCard')).toBeVisible();
     await expect(page.getByTestId('chat-outbox')).toBeVisible();
     fixture.fail(null);
-    await page.reload();
+    await fixture.reload();
     await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === 'Recover this draft after reload')).toBe(true);
     expect(fixture.sent).toEqual([]);
     await expect(page.getByText('Recover this draft after reload', { exact: true })).toBeVisible();
@@ -354,7 +374,7 @@ test('refresh during an in-flight save preserves the draft and does not dispatch
     await send(page, 'Keep the in-flight draft');
     await expect.poll(() => fixture.saveSizes.length).toBeGreaterThan(0);
     expect(fixture.sent).toEqual([]);
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await fixture.reload();
     release();
     await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === 'Keep the in-flight draft'),
       { timeout: 80_000 }).toBe(true);

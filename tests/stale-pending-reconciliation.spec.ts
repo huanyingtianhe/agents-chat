@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { StoredChat } from '../lib/chatStore';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -17,7 +18,7 @@ test('reconciles stale pending output after a successful session resume', async 
   let reconciliationSaves = 0;
 
   await page.route('**/api/acp', async (route) => {
-    const body = route.request().postDataJSON() as { action?: string; sessionId?: string };
+    const body = route.request().postDataJSON() as { action?: string; sessionId?: string; chatId?: string };
     if (body.action === 'list-agents') {
       await route.fulfill({
         contentType: 'application/json',
@@ -29,6 +30,16 @@ test('reconciles stale pending output after a successful session resume', async 
       return;
     }
     if (body.action === 'resume-session') {
+      if (body.chatId === chatId) {
+        const request = page.context().request;
+        const data: { chat: StoredChat } = await (await request.get(`/api/chats?id=${chatId}`)).json();
+        const messages = data.chat.messages.filter(message => message.type === 'agent' && message.pending)
+          .map(message => ({ ...message, content: message.content || '⏹ Interrupted', pending: false, statusText: 'Interrupted' }));
+        // The real resume endpoint reconciles server-owned output before responding.
+        if (messages.length) expect((await request.post('/api/chats', {
+          data: { action: 'save-delta', chat: { ...data.chat, messages } },
+        })).ok()).toBeTruthy();
+      }
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({

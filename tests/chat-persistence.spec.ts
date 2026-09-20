@@ -392,17 +392,24 @@ test('conflicting drafts preserve both versions and can be saved as a new messag
   }
 });
 
-test('refresh during an in-flight save preserves an existing-session draft and allows explicit retry', async ({ page }) => {
+for (const workflowReply of [false, true]) test(`refresh during an in-flight save preserves an existing-session draft and allows explicit retry (workflow reply: ${workflowReply})`, async ({ page }) => {
   test.setTimeout(100_000);
   const fixture = await installPersistenceFixture(page);
   fixture.chat.agentSessions.alpha = 'existing-session';
+  if (workflowReply) {
+    fixture.chat.messages[1].content = 'Which option should I use?';
+    fixture.chat.messages[1].relation = 'Workflow node first';
+  }
   expect((await page.context().request.post('/api/chats', {
-    data: { action: 'save-delta', chat: { ...fixture.chat, messages: [] } },
+    data: { action: 'save-delta', chat: { ...fixture.chat, messages: workflowReply ? [fixture.chat.messages[1]] : [] } },
   })).ok()).toBeTruthy();
   await fixture.reload();
   const release = fixture.holdSave();
   try {
-    await send(page, 'Keep the in-flight draft');
+    if (workflowReply) {
+      await page.locator('.workflowFollowUpCardInput').fill('Keep the in-flight draft');
+      await page.getByRole('button', { name: 'Send reply', exact: true }).click();
+    } else await send(page, 'Keep the in-flight draft');
     await expect.poll(() => fixture.saveSizes.length).toBeGreaterThan(0);
     expect(fixture.sent).toEqual([]);
     await fixture.reload();

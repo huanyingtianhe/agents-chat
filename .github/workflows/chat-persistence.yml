@@ -105,7 +105,7 @@ jobs:
         run: >-
           npx playwright test --config tests/playwright.config.ts tests/chat-persistence.spec.ts
           --project=iphone-webkit --workers=1 --repeat-each=3
-          --grep='network save failure|failed auxiliary chat read'
+          --grep='network save failure|failed auxiliary chat read|refresh during an in-flight save'
           --timeout=60000 --global-timeout=240000 --max-failures=2
           --trace=retain-on-failure --reporter=line
           --output=artifacts/webkit-network

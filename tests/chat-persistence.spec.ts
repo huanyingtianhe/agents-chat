@@ -366,3 +366,39 @@ test('refresh during an in-flight save preserves the draft and does not dispatch
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
   }
 });
+
+test('a deleted conversation cannot be resurrected and its draft can be copied to a new chat', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  const request = page.context().request;
+  const before = await (await request.get('/api/chats')).json();
+  const existingIds = new Set(before.chats.map((chat: { id: string }) => chat.id));
+  let recoveredId = '';
+  try {
+    fixture.fail('network');
+    await send(page, 'Keep this draft after remote deletion');
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    expect((await request.delete(`/api/chats?id=${fixture.chat.id}`)).ok()).toBeTruthy();
+    fixture.fail(null);
+    const panel = page.getByTestId('chat-outbox');
+    await panel.locator('summary').first().click();
+    await panel.getByRole('button', { name: 'Retry saving drafts' }).click();
+    await expect(panel).toContainText('chat_deleted');
+    expect((await request.get(`/api/chats?id=${fixture.chat.id}`)).status()).toBe(404);
+    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    await expect.poll(async () => {
+      const data = await (await request.get('/api/chats')).json();
+      recoveredId = data.chats.find((chat: { id: string; name: string }) =>
+        !existingIds.has(chat.id) && chat.name === 'Recovered drafts')?.id || '';
+      return recoveredId;
+    }).not.toBe('');
+    const restored = await (await request.get(`/api/chats?id=${recoveredId}`)).json();
+    expect(restored.chat.messages.filter((message: ChatMessage) =>
+      message.content === 'Keep this draft after remote deletion')).toHaveLength(1);
+    expect(fixture.sent).toEqual([]);
+    expect((await request.get(`/api/chats?id=${fixture.chat.id}`)).status()).toBe(404);
+  } finally {
+    await page.goto('about:blank');
+    await request.delete(`/api/chats?id=${fixture.chat.id}`);
+    if (recoveredId) await request.delete(`/api/chats?id=${recoveredId}`);
+  }
+});

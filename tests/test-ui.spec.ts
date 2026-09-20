@@ -3726,8 +3726,11 @@ test.describe('Chat UI', () => {
   test('removes stale inline request cards after polling bails out on repeated errors', async ({ page }) => {
     await page.addInitScript(() => {
       const realSetTimeout = window.setTimeout.bind(window);
-      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
-        realSetTimeout(handler, Number(timeout) === 30_000 ? timeout : Math.min(Number(timeout) || 0, 20), ...args)) as typeof window.setTimeout;
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+        const delay = Number(timeout) || 0;
+        const pollDelay = delay === 800 || (delay >= 1000 && delay <= 9000 && delay % 1000 === 0);
+        return realSetTimeout(handler, pollDelay ? 20 : timeout, ...args);
+      }) as typeof window.setTimeout;
     });
 
     const chatArea = page.locator('.chatContainer');

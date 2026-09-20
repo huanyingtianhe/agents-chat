@@ -159,6 +159,23 @@ async function main() {
   const retryStart = partial.calls.length;
   await partialSaver.save({ ...metadata, messages: many });
   assert.equal(partial.calls.slice(retryStart).some(operation => confirmed.has(operation.operationId)), false);
+
+  const sharedServer = server();
+  const sharedOutbox = createMemoryChatOutbox();
+  let releaseShared!: () => void;
+  sharedServer.state.gate = new Promise<void>(resolve => { releaseShared = resolve; });
+  const tabOne = createIncrementalChatSaver(sharedServer.request, { outbox: sharedOutbox });
+  const savingInTabOne = tabOne.save({ ...metadata, messages: [question] });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const tabTwo = createIncrementalChatSaver(sharedServer.request, { outbox: sharedOutbox });
+  await assert.rejects(tabTwo.retryPending(), /Another tab/);
+  assert.equal(sharedServer.calls.length, 1, 'another saver must respect the active outbox lease');
+  releaseShared();
+  await savingInTabOne;
+  await tabTwo.retryPending();
+  await tabTwo.save({ ...metadata, messages: [{ ...question, content: 'Edit from the second tab' }] });
+  assert.equal(sharedServer.calls.at(-1)?.expectedVersions[question.id], 1);
+  assert.equal(sharedServer.calls.length, 2);
   console.log('incremental chat saver tests passed');
 }
 void main();

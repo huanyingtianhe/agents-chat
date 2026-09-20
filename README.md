@@ -66,6 +66,9 @@ operation ID. Successful commits and their receipts are atomic, so a lost
 acknowledgement does not duplicate messages. Refresh/online recovery retries
 pending saves, **never agent execution**. Use the message's **Retry** action
 explicitly when you want to send a recovered question to an agent.
+Navigation cancels active save requests without discarding unconfirmed drafts.
+Recovery adopts newer server revisions and ignores stale reads that would move
+the confirmed message version backwards.
 
 The local drafts panel provides server/local comparison, JSON download (including
 attachments), discard, and **Save as new message**. Different message IDs merge;

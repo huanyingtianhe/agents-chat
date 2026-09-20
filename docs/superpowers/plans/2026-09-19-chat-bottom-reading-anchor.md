@@ -205,3 +205,17 @@ PROD was not updated: it remains build `3tQ5Gip6b6QMwUDh4HZvF`, the previous
 typography-only release. The typography PR was not changed and no scroll-fix PR
 was opened. Physical iPhone confirmation is still pending a separately
 authorized deployment; passing Playwright WebKit is not physical-device proof.
+
+### Subsequent deployment and physical acceptance
+
+On 2026-09-20, the user authorized production deployment of the validated
+`013844d` artifact. Build `LvyqwH4tHliNBhFm3ygAy` was deployed; public client
+assets matched the artifact, the service was responsive, and the previous
+build/database backups were retained under
+`.data/deployments/reading-anchor-013844d/`.
+
+The user subsequently confirmed physical-device testing passed and requested
+integration into `huanyingtianhe/agents-chat#50`. The PR branch was fast-forwarded
+to this implementation, with documentation updated to reflect its expanded
+scope. No runtime changes were made after the accepted candidate, and native
+whole-page zoom remains a separate known limitation.

@@ -1,5 +1,14 @@
 # iOS Typography PR and Native Zoom Closure
 
+## Scope update (2026-09-20)
+
+This document records the original typography-only scope. After separately
+approving, deploying and physically accepting the bottom-reading-anchor fix,
+the user authorized including that fix in the same PR. The original runtime
+scope restrictions below are superseded only for the chat scrolling changes
+described in `2026-09-19-chat-bottom-reading-anchor-design.md`. Native page-zoom
+recovery and all earlier diagnostic experiments remain excluded.
+
 ## Approved Product Decision
 
 The user approved delivering the verified Markdown typography fix without

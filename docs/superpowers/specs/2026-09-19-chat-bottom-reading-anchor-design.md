@@ -1,5 +1,13 @@
 # Chat bottom reading anchor across viewport changes
 
+## Acceptance and integration update (2026-09-20)
+
+The approved candidate `013844da241291cab4de5ff4d4dd115f45cde4e7` was deployed
+with separate authorization as build `LvyqwH4tHliNBhFm3ygAy`. The user reported
+that physical-device testing passed and requested adding the changes to
+`huanyingtianhe/agents-chat#50`. This supersedes the original separate-branch/
+typography-only PR integration boundary below, not the native-zoom exclusions.
+
 ## Scope and baseline
 
 Preserve the user's reading position throughout portrait -> landscape -> portrait

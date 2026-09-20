@@ -32,6 +32,11 @@ Markdown uses a document-wide text-adjustment policy to keep its font
 sizes stable across portrait and landscape. Native pinch zoom remains
 available.
 
+Chat reading position is anchored to the bottom of the visible conversation
+across orientation changes. Following the latest messages stays at the bottom;
+when reading history, the same visible text or image position remains near the
+composer. Scrolling manually establishes a new reading position.
+
 **Known limitation:** In the observed iPhone Chrome environment, pinching
 larger, returning to original scale, releasing, then rotating can leave
 the whole page unexpectedly zoomed. This also reproduced on an isolated

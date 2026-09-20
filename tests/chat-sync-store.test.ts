@@ -94,6 +94,9 @@ async function main() {
     const reservation = {
       ...promptChunk, total: 256, bytes: 64 * 1024 * 1024, data: Buffer.alloc(262144).toString('base64'),
     };
+    assert.throws(() => putTransferChunk('quota-user', {
+      ...reservation, id: 'above-limit', bytes: 64 * 1024 * 1024 + 1, total: 257,
+    }), /upload_size_invalid/);
     for (let index = 0; index < 4; index++) putTransferChunk('quota-user', { ...reservation, id: `reserved-${index}` });
     assert.throws(() => putTransferChunk('quota-user', { ...reservation, id: 'over-quota' }), /upload_quota_exceeded/);
     getDb().prepare('UPDATE chat_transfers SET created_at = 0 WHERE user_id = ?').run('quota-user');

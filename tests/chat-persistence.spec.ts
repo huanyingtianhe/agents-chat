@@ -464,73 +464,6 @@ test('local staging only clears the submitted revision and attachments', async (
       name: 'submitted.txt', mimeType: 'text/plain', buffer: Buffer.from('submitted'),
     });
 
-    test('IndexedDB write failure retains the composer text and attachment and never dispatches', async ({ page }) => {
-      const fixture = await installPersistenceFixture(page);
-      try {
-        await page.locator('input[type="file"]').setInputFiles({
-          name: 'keep.txt', mimeType: 'text/plain', buffer: Buffer.from('keep the attachment'),
-        });
-        await page.evaluate(() => {
-          IDBObjectStore.prototype.add = function () { throw new DOMException('Storage is full', 'QuotaExceededError'); };
-        });
-        await send(page, 'Keep the unsaved composer');
-        await expect(page.getByRole('main')).toContainText('QuotaExceededError');
-        await expect(page.locator('textarea.composerTextarea')).toHaveValue('Keep the unsaved composer');
-        await expect(page.locator('.composerShell').getByText('keep.txt', { exact: true })).toBeVisible();
-        expect(fixture.sent).toEqual([]);
-        expect((await fixture.loadStored()).messages.some(message => message.content === 'Keep the unsaved composer')).toBe(false);
-      } finally {
-        await page.goto('about:blank');
-        await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
-      }
-    });
-
-    test('an attachment-only conflict copy can be explicitly sent with its fallback prompt', async ({ page }) => {
-      const fixture = await installPersistenceFixture(page);
-      try {
-        fixture.fail('conflict');
-        await page.locator('input[type="file"]').setInputFiles({
-          name: 'attachment-only.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment-only content'),
-        });
-        await page.locator('textarea.composerTextarea').press('Enter');
-        await expect(page.locator('.userSendFailureCard')).toBeVisible();
-        const panel = page.getByTestId('chat-outbox');
-        await panel.locator('summary').first().click();
-        await panel.getByRole('button', { name: 'Save as new message' }).first().click();
-        await expect(panel).toHaveCount(0);
-        const copy = page.locator('.message.user').filter({ hasText: 'Recovered draft saved' });
-        await copy.getByRole('button', { name: 'Retry', exact: true }).click();
-        await expect.poll(() => fixture.sent).toEqual(['Please review the attached file(s).']);
-        const stored = await fixture.loadStored();
-        expect(stored.messages.filter(message => message.type === 'user' && message.content === '').at(-1)?.attachments?.[0].name)
-          .toBe('attachment-only.txt');
-      } finally {
-        await page.goto('about:blank');
-        await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
-      }
-    });
-
-    test('retrying a recovery copy after its acknowledgement is lost creates only one copy', async ({ page }) => {
-      const fixture = await installPersistenceFixture(page);
-      try {
-        fixture.fail('conflict');
-        await send(page, 'One recovered copy');
-        await expect(page.locator('.userSendFailureCard')).toBeVisible();
-        const panel = page.getByTestId('chat-outbox');
-        await panel.locator('summary').first().click();
-        fixture.fail('lost-response');
-        await panel.getByRole('button', { name: 'Save as new message' }).first().click();
-        await expect(panel.getByRole('button', { name: 'Save as new message' }).first()).toBeEnabled();
-        await expect.poll(async () => (await fixture.loadStored()).messages.filter(message => message.content === 'One recovered copy').length).toBe(1);
-        await panel.getByRole('button', { name: 'Save as new message' }).first().click();
-        await expect(panel).toHaveCount(0);
-        expect((await fixture.loadStored()).messages.filter(message => message.content === 'One recovered copy')).toHaveLength(1);
-        expect(fixture.sent).toEqual([]);
-      } finally {
-        await page.goto('about:blank');
-        await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
-      }
-    });
     await send(page, 'Submitted revision');
     await page.locator('textarea.composerTextarea').fill('Next unsent revision');
     await page.locator('input[type="file"]').setInputFiles({
@@ -546,6 +479,137 @@ test('local staging only clears the submitted revision and attachments', async (
     expect(submitted?.attachments?.map(attachment => attachment.name)).toEqual(['submitted.txt']);
   } finally {
     await release();
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('IndexedDB write failure retains the composer text and attachment and never dispatches', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  try {
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'keep.txt', mimeType: 'text/plain', buffer: Buffer.from('keep the attachment'),
+    });
+    await page.evaluate(() => {
+      IDBObjectStore.prototype.add = function () { throw new DOMException('Storage is full', 'QuotaExceededError'); };
+    });
+    await send(page, 'Keep the unsaved composer');
+    await expect(page.getByRole('main')).toContainText('QuotaExceededError');
+    await expect(page.locator('textarea.composerTextarea')).toHaveValue('Keep the unsaved composer');
+    await expect(page.locator('.composerShell').getByText('keep.txt', { exact: true })).toBeVisible();
+    expect(fixture.sent).toEqual([]);
+    expect((await fixture.loadStored()).messages.some(message => message.content === 'Keep the unsaved composer')).toBe(false);
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('an attachment-only conflict copy can be explicitly sent with its fallback prompt', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  try {
+    fixture.fail('conflict');
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'attachment-only.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment-only content'),
+    });
+    await page.locator('textarea.composerTextarea').press('Enter');
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    const panel = page.getByTestId('chat-outbox');
+    await panel.locator('summary').first().click();
+    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    await expect(panel).toHaveCount(0);
+    const copy = page.locator('.message.user').filter({ hasText: 'Recovered draft saved' });
+    await copy.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect.poll(() => fixture.sent).toEqual(['Please review the attached file(s).']);
+    const stored = await fixture.loadStored();
+    expect(stored.messages.filter(message => message.type === 'user' && message.content === '').at(-1)?.attachments?.[0].name)
+      .toBe('attachment-only.txt');
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('retrying a recovery copy after its acknowledgement is lost creates only one copy', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  try {
+    fixture.fail('conflict');
+    await send(page, 'One recovered copy');
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    const panel = page.getByTestId('chat-outbox');
+    await panel.locator('summary').first().click();
+    fixture.fail('lost-response');
+    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    await expect(panel.getByRole('button', { name: 'Save as new message' }).first()).toBeEnabled();
+    await expect.poll(async () => (await fixture.loadStored()).messages.filter(message => message.content === 'One recovered copy').length).toBe(1);
+    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    await expect(panel).toHaveCount(0);
+    expect((await fixture.loadStored()).messages.filter(message => message.content === 'One recovered copy')).toHaveLength(1);
+    expect(fixture.sent).toEqual([]);
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('resumes a partially uploaded draft after reload without reuploading confirmed chunks or dispatching', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  const firstChunks = new Map<string, number>();
+  let interrupt = true;
+  await page.route('**/api/chat-transfers', route => {
+    const body = route.request().postDataJSON();
+    if (body.index === 0) firstChunks.set(body.id, (firstChunks.get(body.id) || 0) + 1);
+    if (body.index === 1 && interrupt) return route.abort('connectionrefused');
+    return route.fallback();
+  });
+  try {
+    const text = '文'.repeat(360_000);
+    await send(page, text);
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    await expect(page.getByTestId('chat-outbox')).toBeVisible();
+    expect(firstChunks.size).toBeGreaterThan(0);
+    interrupt = false;
+    await fixture.reload();
+    await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === text)).toBe(true);
+    await expect(page.getByTestId('chat-outbox')).toHaveCount(0);
+    expect([...firstChunks.values()].every(count => count === 1)).toBe(true);
+    expect(fixture.sent).toEqual([]);
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('downloads a complete conflict draft and discards it without changing the server version', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  const content = 'Download this private draft';
+  const attachmentText = 'Full attachment content';
+  try {
+    fixture.fail('conflict');
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'download.txt', mimeType: 'text/plain', buffer: Buffer.from(attachmentText),
+    });
+    await send(page, content);
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    const storedBefore = await fixture.loadStored();
+    const panel = page.getByTestId('chat-outbox');
+    await panel.locator('summary').first().click();
+    const downloadEvent = page.waitForEvent('download');
+    await panel.getByRole('button', { name: 'Download' }).first().click();
+    const stream = await (await downloadEvent).createReadStream();
+    if (!stream) throw new Error('Missing draft download stream');
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const downloaded = JSON.parse(Buffer.concat(chunks).toString());
+    const message = downloaded.messages.find((item: ChatMessage) => item.content === content);
+    expect(message.attachments[0]).toMatchObject({
+      name: 'download.txt', dataUrl: `data:text/plain;base64,${Buffer.from(attachmentText).toString('base64')}`,
+    });
+    await panel.getByRole('button', { name: 'Discard' }).first().click();
+    await expect(panel).toHaveCount(0);
+    expect((await fixture.loadStored()).messages).toEqual(storedBefore.messages);
+    expect(fixture.sent).toEqual([]);
+  } finally {
     await page.goto('about:blank');
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
   }

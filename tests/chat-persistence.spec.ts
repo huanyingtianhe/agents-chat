@@ -38,7 +38,7 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
   const savedBeforeSend: boolean[] = [];
   const pageErrors: string[] = [];
   page.on('pageerror', error => pageErrors.push(error.message));
-  let failure: '413' | 'network' | null = null;
+  let failure: '413' | 'network' | 'lost-response' | 'conflict' | null = null;
   let saveGate: Promise<void> | null = null;
   let activeReply = '';
   let chatDetailRequests = 0;
@@ -59,6 +59,24 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
       saveSizes.push(bytes);
       if (saveGate) await saveGate;
       if (failure === 'network') return route.abort('connectionrefused');
+      if (failure === 'lost-response') {
+        failure = null;
+        const committed = await route.fetch();
+        expect(committed.ok()).toBeTruthy();
+        return route.abort('connectionrefused');
+      }
+      if (failure === 'conflict') {
+        failure = null;
+        const operation = body.operation;
+        const first = operation.chat.messages.find((message: ChatMessage) => message.type === 'user');
+        const remote = await request.post('/api/chats', { data: {
+          action: 'save-sync', operation: {
+            operationId: randomUUID(), expectedVersions: { [first.id]: null },
+            chat: { ...operation.chat, messages: [{ ...first, content: 'Version saved by another device' }] },
+          },
+        } });
+        expect(remote.ok()).toBeTruthy();
+      }
     }
     if (bytes > 1024 * 1024 || (body?.action === 'save-sync' && failure === '413')) {
       return route.fulfill({ status: 413, contentType: 'text/html', body: '<h1>Request Entity Too Large</h1>' });
@@ -282,6 +300,46 @@ test('recovers an offline draft after reload without automatically executing it'
     await expect.poll(async () => (await fixture.loadStored()).messages.some(message => message.content === 'Recover this draft after reload')).toBe(true);
     expect(fixture.sent).toEqual([]);
     await expect(page.getByText('Recover this draft after reload', { exact: true })).toBeVisible();
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('lost commit acknowledgement can be retried without duplicating or automatically sending a message', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  try {
+    fixture.fail('lost-response');
+    await send(page, 'Saved once despite a lost response');
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    expect(fixture.sent).toEqual([]);
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect.poll(() => fixture.sent.length).toBe(1);
+    expect((await fixture.loadStored()).messages.filter(message => message.content === 'Saved once despite a lost response')).toHaveLength(1);
+  } finally {
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('conflicting drafts preserve both versions and can be saved as a new message without execution', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page);
+  try {
+    fixture.fail('conflict');
+    await send(page, 'Keep my local version');
+    const panel = page.getByTestId('chat-outbox');
+    await expect(page.locator('.userSendFailureCard')).toBeVisible();
+    await panel.locator('summary').first().click();
+    await expect(panel).toContainText('message_conflict');
+    await panel.getByRole('button', { name: 'View server version' }).first().click();
+    await expect(panel).toContainText('Version saved by another device');
+    await panel.getByRole('button', { name: 'Save as new message' }).first().click();
+    await expect.poll(async () => (await fixture.loadStored()).messages.filter(message =>
+      message.content === 'Keep my local version' || message.content === 'Version saved by another device').length).toBe(2);
+    expect(fixture.sent).toEqual([]);
+    const versions = (await fixture.loadStored()).messages.filter(message =>
+      message.content === 'Keep my local version' || message.content === 'Version saved by another device');
+    expect(new Set(versions.map(message => message.id)).size).toBe(2);
   } finally {
     await page.goto('about:blank');
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);

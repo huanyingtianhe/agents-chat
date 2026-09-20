@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatMessage } from '../chatTypes';
 import { createIndexedDbChatOutbox, type ChatOutboxEntry } from './chatOutboxStore';
 import { createIncrementalChatSaver } from './incrementalChatSaver';
+import { newOperationId } from '@/lib/chatSyncProtocol';
 
 export type OutboxRemoteChat = { id: string; name: string; ts: number; messages: ChatMessage[]; agentSessions: Record<string, string> };
 
@@ -86,7 +87,7 @@ export function useChatOutbox(
     setBusy(true);
     try {
       const original = await readChat(entry.operation.chat.id);
-      const chatId = original?.id || `chat-${crypto.randomUUID()}`;
+      const chatId = original?.id || `chat-${newOperationId()}`;
       await saver.saveCopy(entry, {
         id: chatId, name: original?.name || 'Recovered drafts',
         agentSessions: original?.agentSessions || {},
@@ -105,7 +106,9 @@ export function useChatOutbox(
   return {
     saver,
     notice: {
-      entries: entries.filter(entry => entry.userId === userId), error, busy,
+      entries: entries.filter(entry => entry.userId === userId
+        && !Object.values(entry.operation.dependencies || {}).some(id =>
+          entries.some(parent => parent.operation.operationId === id))), error, busy,
       onRetry: retry, onDiscard: discard, onSaveCopy: saveCopy, readChat,
     },
   };

@@ -1,7 +1,7 @@
 import type { ChatMessage } from '../chatTypes';
 import type { ChatOperation } from '@/lib/chatSyncStore';
 import type { StoredMessage } from '@/lib/chatStore';
-import { ChatSyncError } from '@/lib/chatSyncProtocol';
+import { ChatSyncError, newOperationId } from '@/lib/chatSyncProtocol';
 import { commitOperation, requestJson } from './chatTransferClient';
 import { createMemoryChatOutbox, type ChatOutboxEntry, type ChatOutboxStore } from './chatOutboxStore';
 
@@ -33,7 +33,7 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
   let stages = Promise.resolve();
   let initialized: Promise<void> | undefined;
   let sequence = Date.now();
-  const owner = crypto.randomUUID();
+  const owner = newOperationId();
   const blockedChats = new Set<string>();
 
   function applyStaged(entry: ChatOutboxEntry) {
@@ -153,7 +153,7 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
           if (previous?.operationId) dependencies[id] = previous.operationId;
         }
         const operation: ChatOperation = {
-          operationId: crypto.randomUUID(), userId, expectedVersions, dependencies,
+          operationId: newOperationId(), userId, expectedVersions, dependencies,
           chat: { ...metadata, messages: batch, removedMessageIds },
         };
         const entry: ChatOutboxEntry = { userId, operation, createdAt: Math.max(Date.now(), ++sequence), state: 'pending' };
@@ -220,12 +220,12 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       for (const message of item.operation.chat.messages) if (message.type === 'user') latest.set(message.id, message);
     }
     const messages = [...latest.values()].map(message => ({
-      id: crypto.randomUUID(), type: 'user' as const, content: message.content, attachments: message.attachments, ts: Date.now(),
+      id: newOperationId(), type: 'user' as const, content: message.content, attachments: message.attachments, ts: Date.now(),
       sendStatus: 'failed' as const, sendError: 'Recovered draft saved. Use Retry to explicitly send it to an agent.',
     }));
     if (!messages.length) throw new Error('This draft contains no user messages to copy. Download it before discarding.');
     const operation: ChatOperation = {
-      userId, operationId: crypto.randomUUID(),
+      userId, operationId: newOperationId(),
       chat: { ...target, ts: Date.now(), messages },
       expectedVersions: Object.fromEntries(messages.map(message => [message.id, null])),
     };

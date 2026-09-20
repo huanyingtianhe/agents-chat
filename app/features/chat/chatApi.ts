@@ -1,11 +1,12 @@
 import type { Agent } from '../agents/agentTypes';
 import { isAcpFailureResult } from './chatHelpers';
 import { requestJson, uploadJson } from './runtime/chatTransferClient';
+import { newOperationId } from '@/lib/chatSyncProtocol';
 
 export async function acpApi(body: Record<string, unknown>) {
   if (body.action === 'send' && new TextEncoder().encode(JSON.stringify(body)).length > 512 * 1024) {
     if (typeof body.chatId !== 'string' || !body.chatId) throw new Error('A saved chat is required for a large prompt.');
-    const id = crypto.randomUUID();
+    const id = newOperationId();
     const userId = typeof body.userId === 'string' ? body.userId : undefined;
     await uploadJson(body, body.chatId, 'acp', id, fetch, userId);
     const result = await requestJson('/api/acp', {

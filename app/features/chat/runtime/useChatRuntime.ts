@@ -622,7 +622,6 @@ export function useChatRuntime({
       const target = history.find((chat) => chat.id === data.lastChatId) || history[0];
       if (!target) return null;
       return {
-        outboxNotice,
         chatId: target.id,
         chatName: target.name || target.id,
       };
@@ -782,6 +781,7 @@ export function useChatRuntime({
 
   return {
     /* state */
+    outboxNotice,
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
     initialChatRestore: initialChatRestore.state,

@@ -72,10 +72,10 @@ export function useChatOutbox(
     setBusy(true);
     try {
       const chat = await readChat(entry.operation.chat.id);
-      await saver.discard(entry.operation.operationId);
+      const discarded = await saver.discard(entry.operation.operationId);
       if (chat) {
         saver.hydrate(chat.id, chat.messages);
-        recovered.current(chat, entry.operation.chat.messages.map(message => message.id));
+        recovered.current(chat, discarded.flatMap(item => item.operation.chat.messages.map(message => message.id)));
       }
       setError('');
     } catch (cause) { setError(String(cause)); }
@@ -87,21 +87,15 @@ export function useChatOutbox(
     try {
       const original = await readChat(entry.operation.chat.id);
       const chatId = original?.id || `chat-${crypto.randomUUID()}`;
-      const messages: ChatMessage[] = entry.operation.chat.messages.filter(message => message.type === 'user').map(message => ({
-        id: crypto.randomUUID(), type: 'user', content: message.content, attachments: message.attachments, ts: Date.now(),
-        sendStatus: 'failed', sendError: 'Recovered draft saved. Use Retry to explicitly send it to an agent.',
-      }));
-      if (!messages.length) throw new Error('This draft contains no user messages to copy. Download it before discarding.');
-      if (original) saver.hydrate(chatId, original.messages);
-      await saver.save({
-        id: chatId, name: original?.name || 'Recovered drafts', ts: Date.now(),
-        agentSessions: original?.agentSessions || {}, messages: [...(original?.messages || []), ...messages],
+      await saver.saveCopy(entry, {
+        id: chatId, name: original?.name || 'Recovered drafts',
+        agentSessions: original?.agentSessions || {},
       });
-      await saver.discard(entry.operation.operationId);
+      const discarded = await saver.discard(entry.operation.operationId);
       const chat = await readChat(chatId);
       if (chat) {
         saver.hydrate(chat.id, chat.messages);
-        recovered.current(chat, entry.operation.chat.messages.map(message => message.id));
+        recovered.current(chat, discarded.flatMap(item => item.operation.chat.messages.map(message => message.id)));
       }
       setError('');
     } catch (cause) { setError(String(cause)); }

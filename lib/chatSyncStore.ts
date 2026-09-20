@@ -53,7 +53,7 @@ export function commitChatOperation(userId: string, operation: ChatOperation): C
     const versions: Record<string, number> = {};
     for (const incoming of delta.messages) {
       const saved = messages.get(incoming.id);
-      if (saved?.type === 'agent' && saved.serverManaged) {
+      if (saved?.type === 'agent' && saved.serverManaged !== false) {
         // The browser owns presentation metadata, never ACP output or its tools.
         messages.set(saved.id, {
           ...saved, round: incoming.round ?? saved.round,

@@ -51,18 +51,38 @@ For persistent deployment, use one of the platform-specific scripts below. Both 
 
 ### Chat persistence and proxy limits
 
-The browser saves new or changed messages incrementally instead of uploading
-the entire conversation. Updates are batched toward 512 KiB; ACP tool and
-thinking parts are stored directly by the server and are not re-uploaded by the
-browser. Existing history is retained when another tab saves its changes.
+The browser saves only new or changed messages. Small updates are batched below
+512 KiB; individually larger messages, attachments, and ACP prompt/context
+payloads use resumable 256 KiB binary chunks (about 350 KiB per JSON request).
+The final save/send request contains a small upload reference. Nginx's default
+1 MiB request limit therefore does not require increasing. ACP tool and thinking
+parts remain server-owned and are not uploaded back by the browser.
 
-User messages must be saved successfully before they are sent to an agent.
-If saving fails (including an HTTP 413 from a reverse proxy), the chat shows
-an error and keeps the message available for **Retry**. Keep the tab open until
-the retry succeeds; unsaved messages are not durable across a page reload.
-A single message or attachment can still exceed the proxy's request limit:
-reduce its size or configure the proxy to accept it. This change does not
-restore messages that were already missing from the database.
+Before clearing the composer, saves enter an IndexedDB outbox scoped to the
+authenticated user and application chat ID, not the rotating ACP session ID.
+User messages must also be confirmed by the server before agent dispatch.
+Network requests time out after 30 seconds; retries reuse the same immutable
+operation ID. Successful commits and their receipts are atomic, so a lost
+acknowledgement does not duplicate messages. Refresh/online recovery retries
+pending saves, **never agent execution**. Use the message's **Retry** action
+explicitly when you want to send a recovered question to an agent.
+
+The local drafts panel provides server/local comparison, JSON download (including
+attachments), discard, and **Save as new message**. Different message IDs merge;
+conflicting edits to the same ID are retained locally rather than silently
+overwriting another device. Deleted chats have persistent tombstones: delayed
+saves cannot resurrect them, and recovered copies use a new chat ID. Same-browser
+tabs coordinate uploads with renewable 60-second IndexedDB leases; server version
+checks and idempotency remain authoritative across devices.
+
+Each serialized upload is limited to 64 MiB; existing attachment limits still
+apply (8 files, 10 MiB each, 25 MiB total before Base64 encoding). Incomplete
+uploads expire after 24 hours, with at most 128 uploads / 256 MiB reserved per user.
+Successful clients release uploads after acknowledgement. Browser storage
+availability/quota failures are explicit: keep the tab open and copy/download
+the message if local storage is unavailable. Clearing browser data also deletes
+unsynced drafts. HTTPS or localhost is required for browser cryptographic upload
+checksums. This change does not recover messages already missing from the database.
 
 ### Binary release bundles
 

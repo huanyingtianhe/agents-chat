@@ -10,6 +10,7 @@ async function main() {
   try {
     process.chdir(dir);
     const { saveChat, saveChatDelta, updateChatMessage, getChat, getDb } = await import('../lib/chatStore');
+    const { commitChatOperation } = await import('../lib/chatSyncStore');
     const parts = [{ kind: 'tool', toolName: 'read', result: 'x'.repeat(5 * 1024 * 1024), done: true }];
     const user = { id: 'u1', type: 'user' as const, content: 'Question', ts: 1 };
     const agent = { id: 'a1', type: 'agent' as const, content: 'Answer', ts: 2, parts, pending: false };
@@ -41,7 +42,11 @@ async function main() {
     assert.deepEqual(saved?.messages[1].parts, parts);
     await saveChatDelta('owner', { ...chat, messages: [{ ...agent, pending: true, content: '' }] });
     assert.equal((await getChat('owner', 'chat'))?.messages[1].content, 'Updated answer');
-    await saveChatDelta('owner', { ...chat, messages: [], removedMessageIds: ['u1', 'a1'] });
+    await assert.rejects(saveChatDelta('owner', { ...chat, messages: [], removedMessageIds: ['a1'] }), /message_conflict/);
+    commitChatOperation('owner', {
+      operationId: 'remove-agent', expectedVersions: { a1: saved?.messages[1].version || 0 },
+      chat: { ...chat, messages: [], removedMessageIds: ['u1', 'a1'] },
+    });
     assert.deepEqual((await getChat('owner', 'chat'))?.messages.map(message => message.id), ['u1', 'u2', 'u3']);
     assert.equal(await getChat('other-user', 'chat'), null);
     getDb().close();

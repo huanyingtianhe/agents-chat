@@ -290,16 +290,17 @@ export function mergeStoredMessages(existing: StoredMessage[], incoming: StoredM
   const existingById = new Map(existing.map(message => [message.id, message]));
   const merged = new Map(
     existing
-      .filter(message => message.type === 'user')
+      .filter(message => message.type === 'user' || message.version)
       .map(message => [message.id, message]),
   );
   for (const message of incoming) {
     const saved = existingById.get(message.id);
+    if (saved?.pending === false && message.pending === true) {
+      merged.set(message.id, saved);
+      continue;
+    }
     assertLegacyMessageUnchanged(saved, message);
-    merged.set(
-      message.id,
-      saved?.pending === false && message.pending === true ? saved : message,
-    );
+    merged.set(message.id, saved?.version ? saved : message);
   }
   return [...merged.values()].sort((a, b) => a.ts - b.ts);
 }
@@ -329,13 +330,19 @@ export async function saveChatDelta(userId: string, delta: StoredChatDelta): Pro
   db.transaction(() => {
     const existing = getChatWithDb(db, userId, delta.id);
     const removed = new Set(delta.removedMessageIds);
+    for (const message of existing?.messages || []) {
+      if (message.type !== 'user' && message.version && removed.has(message.id)) {
+        throw new ChatSyncError(`message_conflict:${message.id}`);
+      }
+    }
     const messages = new Map((existing?.messages || [])
       .filter(message => message.type === 'user' || !removed.has(message.id))
       .map(message => [message.id, message]));
     for (const message of delta.messages) {
       const saved = messages.get(message.id);
-      assertLegacyMessageUnchanged(saved, message);
       if (saved?.pending === false && message.pending === true) continue;
+      assertLegacyMessageUnchanged(saved, message);
+      if (saved?.version) continue;
       messages.set(message.id, message.type === 'agent' && saved?.parts && !message.parts
         ? { ...message, parts: saved.parts }
         : message);

@@ -75,8 +75,9 @@ test('a copy remains idempotent when background recovery commits it before the n
   assert.equal(server.receipts.size, 1);
 });
 
-test('attachment-only recovery preserves the retry prompt and selected agent', async () => {
+for (const legacy of [false, true]) test(`attachment-only recovery preserves the retry prompt and selected agent (legacy: ${legacy})`, async () => {
   const source = sourceDraft();
+  if (legacy) delete source.operation.chat.messages[0].resendMessage;
   const outbox = createMemoryChatOutbox();
   const server = receiptServer();
   await outbox.put(source);

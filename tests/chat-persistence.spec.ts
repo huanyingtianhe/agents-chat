@@ -76,9 +76,9 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
       if (saveGate) await saveGate;
       if (failure === 'network') return route.abort('connectionrefused');
       if (failure === 'lost-response') {
-        failure = null;
         const committed = await route.fetch();
-        expect(committed.ok()).toBeTruthy();
+        if (!committed.ok()) return route.fulfill({ response: committed });
+        failure = null;
         return route.abort('connectionrefused');
       }
       if (failure === 'conflict') {

@@ -54,6 +54,9 @@ for (const action of ['Retry saving drafts', 'Discard local draft', 'Save as new
       await expect(page.locator('.userSendFailureCard')).toBeVisible();
       const panel = page.getByTestId('chat-outbox');
       await panel.locator('summary').first().click();
+      await panel.getByRole('button', { name: 'Retry saving drafts', exact: true }).click();
+      await expect(panel.locator('.chatOutboxError')).toContainText('Offline fixture');
+      await expect(panel.getByRole('button', { name: action, exact: true }).first()).toBeEnabled();
       const before = await drafts(page);
       expect(before.length).toBeGreaterThan(0);
       holdRead = true;

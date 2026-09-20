@@ -11,7 +11,7 @@ type TestChat = {
   messages: ChatMessage[];
 };
 
-async function installPersistenceFixture(page: Page) {
+async function installPersistenceFixture(page: Page, interruptGitContext = false) {
   await installMobileChatFixture(page);
   await loginMobileFixture(page);
   await page.goto('about:blank');
@@ -41,11 +41,16 @@ async function installPersistenceFixture(page: Page) {
   let failure: '413' | 'network' | null = null;
   let saveGate: Promise<void> | null = null;
   let activeReply = '';
+  let chatDetailRequests = 0;
   const toolOutput = 'z'.repeat(2 * 1024 * 1024);
   const loadStored = async (): Promise<TestChat> =>
     (await (await request.get(`/api/chats?id=${chat.id}`)).json()).chat;
 
   await page.route('**/api/chats**', async route => {
+    if (route.request().method() === 'GET' && new URL(route.request().url()).searchParams.get('id') === chat.id) {
+      chatDetailRequests++;
+      if (interruptGitContext && chatDetailRequests === 2) return route.abort('connectionrefused');
+    }
     if (route.request().method() !== 'POST') return route.continue();
     const bytes = Buffer.byteLength(route.request().postData() || '');
     const body = route.request().postDataJSON();
@@ -175,6 +180,21 @@ test('waits for a confirmed save before sending to the agent', async ({ page }) 
     await expect.poll(() => fixture.savedBeforeSend).toEqual([true]);
   } finally {
     release();
+    await page.goto('about:blank');
+    await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
+  }
+});
+
+test('reports a failed auxiliary chat read without an unhandled rejection', async ({ page }) => {
+  const fixture = await installPersistenceFixture(page, true);
+  try {
+    await expect(page.locator('.composerGitContextStatus')).toContainText('Failed to load git context');
+    await send(page, 'Continue after a failed context read');
+    await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByText('Continue after a failed context read', { exact: true })).toBeVisible();
+    expect(fixture.pageErrors).toEqual([]);
+  } finally {
     await page.goto('about:blank');
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);
   }

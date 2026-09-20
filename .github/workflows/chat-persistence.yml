@@ -96,32 +96,14 @@ jobs:
           --timeout=60000 --global-timeout=480000 --max-failures=3
           --trace=retain-on-failure --reporter=line
           --output=artifacts/mobile
-      - name: Diagnose handled WebKit network failures
-        if: failure()
-        run: |
-          node --input-type=module <<'NODE'
-          import { webkit } from '@playwright/test';
-          const browser = await webkit.launch();
-          const page = await browser.newPage();
-          const errors = [];
-          page.on('pageerror', error => errors.push(error.message));
-          await page.route('http://network-fixture.test/', route => route.fulfill({
-            contentType: 'text/html', body: '<html><body>Isolated fetch fixture</body></html>',
-          }));
-          await page.route('http://network-fixture.test/api/chats', route => route.abort('connectionrefused'));
-          await page.goto('http://network-fixture.test/');
-          const handled = await page.evaluate(async () => {
-            try {
-              await fetch('/api/chats', { method: 'POST', body: JSON.stringify({ text: 'Synthetic message' }) });
-              return 'unexpected success';
-            } catch (error) {
-              return error.message;
-            }
-          });
-          await page.reload();
-          console.log(JSON.stringify({ handled, errorsWithoutAppCode: errors }));
-          await browser.close();
-          NODE
+      - name: Repeat WebKit network and reload regressions
+        run: >-
+          npx playwright test --config tests/playwright.config.ts tests/chat-persistence.spec.ts
+          --project=iphone-webkit --workers=1 --repeat-each=3
+          --grep='network save failure|failed auxiliary chat read'
+          --timeout=60000 --global-timeout=240000 --max-failures=2
+          --trace=retain-on-failure --reporter=line
+          --output=artifacts/webkit-network
       - name: Stop isolated application
         if: always()
         run: |

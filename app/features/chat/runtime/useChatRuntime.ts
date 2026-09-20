@@ -344,21 +344,30 @@ export function useChatRuntime({
     }, chatId);
   }
 
+  async function confirmUserMessageDispatch(chatId: string, userMessageId: string) {
+    if (chatMessagesRef.current[chatId]?.find(message => message.id === userMessageId)?.sendStatus !== 'pending') return;
+    clearUserMessageSendFailure(chatId, userMessageId);
+    await persistHandlers.saveChatToHistory(chatId);
+  }
+
   /* ── Resend / send / stop ── */
   async function resendFailedUserMessage(message: ChatMessage) {
+    if (stagingSendRef.current) return;
     if (message.type !== 'user' || message.sendStatus !== 'failed') return;
     const chatId = currentChatIdRef.current;
     if (acpHandlers.isChatRunning(chatId)) return;
     if (!message.resendAgentIds?.length && (agentsLoadingRef.current || agentsRef.current.length === 0)) return;
     const parsed = parseAgents(message.content, agentsRef.current);
     const agentIds = message.resendAgentIds?.length ? message.resendAgentIds : parsed.agentIds;
-    const resendMessage = message.resendMessage || parsed.message || message.content;
+    const resendMessage = message.resendMessage || parsed.message || message.content
+      || (message.attachments?.length ? 'Please review the attached file(s).' : '');
     if (agentIds.length === 0 || !resendMessage.trim()) return;
-    clearUserMessageSendFailure(chatId, message.id);
+    updateMessage(message.id, { sendStatus: 'pending', sendError: undefined, resendAgentIds: agentIds, resendMessage }, chatId);
     try {
       const saved = await persistHandlers.saveChatToHistory(chatId);
       if (!saved.ok) throw new Error(saved.error);
       await orchHandlers.dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id, attachments: message.attachments || [] });
+      await confirmUserMessageDispatch(chatId, message.id);
     } catch (err) {
       markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage, message.attachments);
     }
@@ -392,7 +401,10 @@ export function useChatRuntime({
     }
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
-    const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
+    const userMessageId = addMessage({
+      type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined,
+      sendStatus: 'pending', resendAgentIds: agentIds, resendMessage: message || textForAgent,
+    }, sendChatId);
     stagingSendRef.current = true;
     const allHist = inputHistoryRef.current;
     if (!allHist[sendChatId]) allHist[sendChatId] = [];
@@ -404,7 +416,6 @@ export function useChatRuntime({
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
       const saved = await persistHandlers.saveChatToHistory(sendChatId, false, () => {
-        setInputProgrammatic('');
         onStaged?.();
         stagingSendRef.current = false;
       });
@@ -486,6 +497,7 @@ export function useChatRuntime({
         }
         await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
       }
+      await confirmUserMessageDispatch(sendChatId, userMessageId);
     } catch (err) {
       markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
     } finally {

@@ -15,7 +15,7 @@ function isMessage(value: unknown): value is StoredMessage {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') return false;
   }
   if (value.round !== undefined && (typeof value.round !== 'number' || !Number.isFinite(value.round))) return false;
-  if (value.sendStatus !== undefined && value.sendStatus !== 'failed') return false;
+  if (value.sendStatus !== undefined && value.sendStatus !== 'failed' && value.sendStatus !== 'pending') return false;
   if (value.parts !== undefined && !Array.isArray(value.parts)) return false;
   if (value.resendAgentIds !== undefined
     && (!Array.isArray(value.resendAgentIds) || !value.resendAgentIds.every(id => typeof id === 'string'))) return false;

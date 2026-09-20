@@ -158,6 +158,14 @@ export function migrateFailedSendWarnings(
   const migrated: ChatMessage[] = [];
   let changed = false;
   for (const message of chatMessages) {
+    if (message.type === 'user' && message.sendStatus === 'pending') {
+      migrated.push({
+        ...message, sendStatus: 'failed',
+        sendError: 'Sending was interrupted before confirmation. Check existing replies before using Retry.',
+      });
+      changed = true;
+      continue;
+    }
     if (isSendFailureMessage(message)) {
       const previous = migrated[migrated.length - 1];
       if (previous?.type === 'user') {

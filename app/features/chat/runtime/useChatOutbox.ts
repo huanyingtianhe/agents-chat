@@ -5,6 +5,7 @@ import type { ChatMessage } from '../chatTypes';
 import { createIndexedDbChatOutbox, type ChatOutboxEntry } from './chatOutboxStore';
 import { createIncrementalChatSaver } from './incrementalChatSaver';
 import { newOperationId } from '@/lib/chatSyncProtocol';
+import { migrateFailedSendWarnings } from '../chatHelpers';
 
 export type OutboxRemoteChat = { id: string; name: string; ts: number; messages: ChatMessage[]; agentSessions: Record<string, string> };
 
@@ -47,7 +48,12 @@ export function useChatOutbox(
         if (scope.current !== userId) return;
         if (chat) {
           const confirmedIds = await saver.refreshFromServer(chat.id, chat.messages);
-          if (scope.current === userId) recovered.current(chat, confirmedIds);
+          const replayedIds = new Set(before.filter(entry => entry.operation.chat.id === id)
+            .flatMap(entry => entry.operation.chat.messages.filter(message => message.type === 'user').map(message => message.id)));
+          const messages = chat.messages.map(message => replayedIds.has(message.id)
+            ? migrateFailedSendWarnings([message], chat.agentSessions, { inferLatestUserFailure: false }).messages[0]
+            : message);
+          if (scope.current === userId) recovered.current({ ...chat, messages }, confirmedIds);
         }
       }
       if (scope.current === userId) setError(failure);
@@ -100,7 +106,7 @@ export function useChatOutbox(
       const original = await readChat(entry.operation.chat.id);
       if (scope.current !== userId) throw new Error('Account changed. Reopen the draft using its original account.');
       const chatId = original?.id || `chat-${newOperationId()}`;
-      await saver.saveCopy(entry, {
+      const savedChatId = await saver.saveCopy(entry, {
         id: chatId, name: original?.name || 'Recovered drafts',
         agentSessions: original?.agentSessions || {},
       });
@@ -108,7 +114,7 @@ export function useChatOutbox(
       const discarded = await saver.discard(entry.operation.operationId);
       if (scope.current !== userId) return;
       if (!original) recovered.current(null, undefined, entry.operation.chat.id);
-      const chat = await readChat(chatId);
+      const chat = await readChat(savedChatId);
       if (scope.current !== userId) return;
       if (chat) {
         await saver.refreshFromServer(chat.id, chat.messages);
@@ -124,6 +130,7 @@ export function useChatOutbox(
     saver,
     notice: {
       entries: entries.filter(entry => entry.userId === userId
+        && !(entry.recoveryOf && entries.some(source => source.operation.operationId === entry.recoveryOf))
         && !Object.values(entry.operation.dependencies || {}).some(id =>
           entries.some(parent => parent.operation.operationId === id))), error, busy,
       onRetry: retry, onDiscard: discard, onSaveCopy: saveCopy, readChat,

@@ -193,6 +193,30 @@ for (const kind of ['createIndexedDbChatOutbox', 'createMemoryChatOutbox'] as co
     expect(result.protectedRows).toEqual(result.before);
     expect(result.remaining).toEqual([]);
   });
+
+  test(`${kind}: recovery mapping survives completion and grouped discard is atomic`, async ({ page }) => {
+    const result = await page.evaluate(async ({ kind, source, candidate }) => {
+      const store = window.chatOutboxTest[kind]('alice');
+      await store.put(source);
+      const first = await store.prepareCopy(source.operation.operationId, candidate);
+      await store.claim(first.operation.operationId, 'copy-tab');
+      let discardError = '';
+      try { await store.discard([source.operation.operationId, first.operation.operationId]); }
+      catch (error) { discardError = String(error); }
+      const protectedRows = await store.list();
+      await store.complete(first.operation.operationId, 'copy-tab');
+      const retried = await store.prepareCopy(source.operation.operationId, {
+        ...candidate, operation: { ...candidate.operation, operationId: 'different-copy' },
+      });
+      await store.discard([source.operation.operationId, first.operation.operationId]);
+      return { first, retried, protectedRows, discardError, remaining: await store.list() };
+    }, { kind, source: entry('source-copy'), candidate: entry('stable-copy') });
+    expect(result.first.operation.operationId).toBe('stable-copy');
+    expect(result.retried.operation).toEqual(result.first.operation);
+    expect(result.discardError).toMatch(/active lease/i);
+    expect(result.protectedRows).toHaveLength(2);
+    expect(result.remaining).toEqual([]);
+  });
 }
 
 test('IndexedDB preserves records through reload and uses composite user/operation keys', async ({ page }) => {
@@ -232,6 +256,17 @@ test('IndexedDB claims are atomic across tabs and never claim another user’s r
   expect(await other.evaluate(() => window.chatOutboxTest.createIndexedDbChatOutbox('bob').claim('race', 'three'))).toBe(false);
   await other.evaluate(() => window.chatOutboxTest.createIndexedDbChatOutbox('bob').discard('race'));
   expect(await page.evaluate(() => window.chatOutboxTest.createIndexedDbChatOutbox('alice').list())).toHaveLength(1);
+});
+
+test('IndexedDB assigns only one recovery operation when two tabs copy the same source', async ({ page, context }) => {
+  await page.evaluate(record => window.chatOutboxTest.createIndexedDbChatOutbox('alice').put(record), entry('source-copy'));
+  const other = await context.newPage();
+  await loadAdapter(other);
+  const prepare = (tab: Page, record: ChatOutboxEntry) => tab.evaluate(record =>
+    window.chatOutboxTest.createIndexedDbChatOutbox('alice').prepareCopy('source-copy', record), record);
+  const [first, second] = await Promise.all([prepare(page, entry('copy-a')), prepare(other, entry('copy-b'))]);
+  expect(first.operation).toEqual(second.operation);
+  expect(await page.evaluate(() => window.chatOutboxTest.createIndexedDbChatOutbox('alice').list())).toHaveLength(2);
 });
 
 test('IndexedDB surfaces unavailable storage and quota failures with their original cause', async ({ page }) => {

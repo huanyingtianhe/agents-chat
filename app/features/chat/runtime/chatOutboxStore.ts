@@ -10,16 +10,19 @@ export type ChatOutboxEntry = {
   state: 'pending' | 'conflict' | 'deleted';
   leaseOwner?: string;
   leaseUntil?: number;
+  recovery?: { operation: ChatOperation; createdAt: number };
+  recoveryOf?: string;
 };
 
 export interface ChatOutboxStore {
   put(entry: ChatOutboxEntry): Promise<void>;
+  prepareCopy(sourceOperationId: string, candidate: ChatOutboxEntry): Promise<ChatOutboxEntry>;
   list(): Promise<ChatOutboxEntry[]>;
   claim(operationId: string, owner: string): Promise<boolean>;
   renew(operationId: string, owner: string): Promise<boolean>;
   complete(operationId: string, owner: string): Promise<void>;
   fail(operationId: string, owner: string, error: string, state: ChatOutboxEntry['state']): Promise<void>;
-  discard(operationId: string): Promise<void>;
+  discard(operationId: string | string[]): Promise<void>;
 }
 
 type StoredEntry = ChatOutboxEntry & { operationId: string };
@@ -82,6 +85,16 @@ function assertDiscardable(entry: ChatOutboxEntry | undefined) {
   if (entry?.leaseOwner && (entry.leaseUntil ?? 0) > Date.now()) {
     throw new Error(`Chat outbox operation ${entry.operation.operationId} has an active lease and cannot be discarded`);
   }
+}
+
+function recoveryCopy(source: ChatOutboxEntry | undefined, candidate: ChatOutboxEntry): ChatOutboxEntry {
+  if (!source) throw new Error('The source draft is no longer available. Refresh the local drafts panel.');
+  assertDiscardable(source);
+  const recovery = source.recovery || { operation: candidate.operation, createdAt: candidate.createdAt };
+  return structuredClone({
+    userId: source.userId, operation: recovery.operation, createdAt: recovery.createdAt,
+    state: 'pending', recoveryOf: source.operation.operationId,
+  });
 }
 
 function markFailed(entry: ChatOutboxEntry, error: string, state: ChatOutboxEntry['state']) {
@@ -193,6 +206,26 @@ export function createIndexedDbChatOutbox(userId: string): ChatOutboxStore {
         else store.add({ ...snapshot, operationId: snapshot.operation.operationId } satisfies StoredEntry);
       });
     },
+    async prepareCopy(sourceOperationId, candidate) {
+      validateEntry(userId, candidate);
+      return transact<ChatOutboxEntry>('prepare recovery', 'readwrite', (store, finish, guard) => {
+        const readSource = store.get(key(sourceOperationId));
+        readSource.onsuccess = () => guard(() => {
+          const source = readSource.result as StoredEntry | undefined;
+          const copy = recoveryCopy(source, candidate);
+          const readCopy = store.get(key(copy.operation.operationId));
+          readCopy.onsuccess = () => guard(() => {
+            const existing = readCopy.result as StoredEntry | undefined;
+            if (existing) assertSameOperation(existing, copy);
+            else store.add({ ...copy, operationId: copy.operation.operationId } satisfies StoredEntry);
+            if (source && !source.recovery) {
+              store.put({ ...source, recovery: { operation: copy.operation, createdAt: copy.createdAt } } satisfies StoredEntry);
+            }
+            finish(copy);
+          });
+        });
+      });
+    },
     list() {
       return transact<ChatOutboxEntry[]>('list', 'readonly', (store, finish, guard) => {
         const entries: ChatOutboxEntry[] = [];
@@ -236,10 +269,17 @@ export function createIndexedDbChatOutbox(userId: string): ChatOutboxStore {
         store.put(entry);
       });
     },
-    discard(operationId) {
-      return update('discard', operationId, (entry, store) => {
-        assertDiscardable(entry);
-        store.delete(key(operationId));
+    discard(operationIds) {
+      const ids = Array.isArray(operationIds) ? operationIds : [operationIds];
+      return transact<void>('discard', 'readwrite', (store, finish, guard) => {
+        for (const id of ids) {
+          const request = store.get(key(id));
+          request.onsuccess = () => guard(() => {
+            assertDiscardable(request.result as StoredEntry | undefined);
+            store.delete(key(id));
+          });
+        }
+        finish(undefined);
       });
     },
   };
@@ -254,6 +294,16 @@ export function createMemoryChatOutbox(userId = 'test'): ChatOutboxStore {
       const existing = entries.get(entry.operation.operationId);
       if (existing) assertSameOperation(existing, entry);
       else entries.set(entry.operation.operationId, structuredClone(entry));
+    },
+    async prepareCopy(sourceOperationId, candidate) {
+      validateEntry(userId, candidate);
+      const source = entries.get(sourceOperationId);
+      const copy = recoveryCopy(source, candidate);
+      const existing = entries.get(copy.operation.operationId);
+      if (existing) assertSameOperation(existing, copy);
+      else entries.set(copy.operation.operationId, structuredClone(copy));
+      if (source && !source.recovery) source.recovery = structuredClone({ operation: copy.operation, createdAt: copy.createdAt });
+      return copy;
     },
     async list() {
       return orderEntries(structuredClone([...entries.values()]));
@@ -280,9 +330,10 @@ export function createMemoryChatOutbox(userId = 'test'): ChatOutboxStore {
       const entry = entries.get(operationId);
       if (owns(entry, owner)) markFailed(entry, error, state);
     },
-    async discard(operationId) {
-      assertDiscardable(entries.get(operationId));
-      entries.delete(operationId);
+    async discard(operationIds) {
+      const ids = Array.isArray(operationIds) ? operationIds : [operationIds];
+      for (const id of ids) assertDiscardable(entries.get(id));
+      for (const id of ids) entries.delete(id);
     },
   };
 }

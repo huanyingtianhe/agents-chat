@@ -198,20 +198,21 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       changed = false;
       for (const entry of entries) {
         if (!discarded.has(entry.operation.operationId)
-          && Object.values(entry.operation.dependencies || {}).some(id => discarded.has(id))) {
+          && ((entry.recoveryOf && discarded.has(entry.recoveryOf))
+            || Object.values(entry.operation.dependencies || {}).some(id => discarded.has(id)))) {
           discarded.add(entry.operation.operationId);
           changed = true;
         }
       }
     }
-    for (const entry of entries.filter(entry => discarded.has(entry.operation.operationId))) {
-      if (entry.leaseUntil && entry.leaseUntil > Date.now()) throw new Error('A tab is still saving this draft. Wait before discarding it.');
-      await outbox.discard(entry.operation.operationId);
+    const selected = entries.filter(entry => discarded.has(entry.operation.operationId));
+    await outbox.discard(selected.map(entry => entry.operation.operationId));
+    for (const entry of selected) {
       baselines.delete(entry.operation.chat.id);
     }
     for (const entry of await outbox.list()) applyStaged(entry);
     options.onChange?.();
-    return entries.filter(entry => discarded.has(entry.operation.operationId));
+    return selected;
   }
 
   async function saveCopy(entry: ChatOutboxEntry, target: Pick<ChatSnapshot, 'id' | 'name' | 'agentSessions'>) {
@@ -234,6 +235,8 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
     const messages = [...latest.values()].map(message => ({
       id: newOperationId(), type: 'user' as const, content: message.content, attachments: message.attachments, ts: Date.now(),
       sendStatus: 'failed' as const, sendError: 'Recovered draft saved. Use Retry to explicitly send it to an agent.',
+      resendAgentIds: message.resendAgentIds,
+      resendMessage: message.resendMessage || message.content || (message.attachments?.length ? 'Please review the attached file(s).' : undefined),
     }));
     if (!messages.length) throw new Error('This draft contains no user messages to copy. Download it before discarding.');
     const operation: ChatOperation = {
@@ -242,10 +245,11 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       expectedVersions: Object.fromEntries(messages.map(message => [message.id, null])),
     };
     sequence = Math.max(Date.now(), sequence + 1);
-    await outbox.put({ userId, operation, createdAt: sequence, state: 'pending' });
-    applyStaged({ userId, operation, createdAt: sequence, state: 'pending' });
+    const copy = await outbox.prepareCopy(entry.operation.operationId, { userId, operation, createdAt: sequence, state: 'pending' });
+    applyStaged(copy);
     options.onChange?.();
-    await synchronize(target.id, new Set([operation.operationId]));
+    await synchronize(copy.operation.chat.id, new Set([copy.operation.operationId]));
+    return copy.operation.chat.id;
   }
 
   async function markDeleted(chatId: string) {

@@ -36,7 +36,7 @@ export type StoredMessage = {
   parts?: unknown[];
   userRequest?: unknown;
   attachments?: StoredAttachment[];
-  sendStatus?: 'failed';
+  sendStatus?: 'pending' | 'failed';
   sendError?: string;
   resendAgentIds?: string[];
   resendMessage?: string;

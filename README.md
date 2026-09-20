@@ -66,13 +66,20 @@ operation ID. Successful commits and their receipts are atomic, so a lost
 acknowledgement does not duplicate messages. Refresh/online recovery retries
 pending saves, **never agent execution**. Use the message's **Retry** action
 explicitly when you want to send a recovered question to an agent.
+Interrupted sends retain a pending-confirmation state even in chats with existing
+agent sessions; recovery exposes Retry with a warning to check existing replies.
+Only the submitted composer revision and attachments are cleared after local
+staging, so typing the next message while storage is busy does not erase it.
 Navigation cancels active save requests without discarding unconfirmed drafts.
 Recovery adopts newer server revisions and ignores stale reads that would move
 the confirmed message version backwards.
 
 The local drafts panel provides server/local comparison, JSON download (including
-attachments), discard, and **Save as new message**. Different message IDs merge;
-conflicting edits to the same ID are retained locally rather than silently
+attachments), discard, and **Save as new message**.
+Recovery copies reuse a durable operation associated with the source draft,
+including when their acknowledgement is lost. Attachment-only copies retain
+their retry prompt and original agent selection.
+Different message IDs merge; conflicting edits to the same ID are retained locally rather than silently
 overwriting another device. Deleted chats have persistent tombstones: delayed
 saves cannot resurrect them, and recovered copies use a new chat ID. Same-browser
 tabs coordinate uploads with renewable 60-second IndexedDB leases; server version

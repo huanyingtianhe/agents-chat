@@ -9,6 +9,7 @@ import { STORAGE_CHAT_INPUT } from './sessionPersistence';
 export function useComposerState() {
   const [input, setInput] = useState('');
   const inputRef = useRef('');
+  const inputRevisionRef = useRef(0);
   const inputDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -32,6 +33,7 @@ export function useComposerState() {
   }, []);
 
   const setInputProgrammatic = useCallback((value: string) => {
+    inputRevisionRef.current++;
     inputRef.current = value;
     if (!value) pastedLinksRef.current = [];
     if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
@@ -45,6 +47,7 @@ export function useComposerState() {
   const composerInputHandler = useCallback(() => {
     const el = composerRef.current;
     if (!el) return;
+    inputRevisionRef.current++;
     inputRef.current = el.value;
     resizeComposer();
     if (inputDebounceRef.current) clearTimeout(inputDebounceRef.current);
@@ -68,6 +71,23 @@ export function useComposerState() {
 
   function removeAttachment(id: string) { setAttachments(prev => prev.filter(a => a.id !== id)); setAttachmentError(null); }
   function clearAttachments() { setAttachments([]); setAttachmentError(null); }
+
+  function prepareSubmission() {
+    const revision = inputRevisionRef.current;
+    let text = (inputRef.current || composerRef.current?.value || '').trim();
+    for (const { text: linkText, href } of pastedLinksRef.current) {
+      const index = text.indexOf(linkText);
+      if (index !== -1) text = `${text.slice(0, index)}[${linkText}](${href})${text.slice(index + linkText.length)}`;
+    }
+    const submittedIds = new Set(attachments.map(attachment => attachment.id));
+    return {
+      text, attachments,
+      onStaged() {
+        if (inputRevisionRef.current === revision) setInputProgrammatic('');
+        setAttachments(current => current.filter(attachment => !submittedIds.has(attachment.id)));
+      },
+    };
+  }
 
   function getFilesFromClipboard(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
     const files: File[] = [];
@@ -142,7 +162,7 @@ export function useComposerState() {
   return {
     input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef,
     attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic,
-    composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments,
+    composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments, prepareSubmission,
     handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop,
   };
 }

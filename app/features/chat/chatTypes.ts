@@ -56,6 +56,8 @@ export type AgentUserRequestSubmission = {
 };
 
 export type ChatMessage = {
+  version?: number;
+  serverManaged?: boolean;
   id: string;
   type: 'user' | 'agent' | 'system';
   content: string;
@@ -70,7 +72,7 @@ export type ChatMessage = {
   parts?: ContentPart[];
   userRequest?: AgentUserRequest;
   attachments?: ChatAttachment[];
-  sendStatus?: 'failed';
+  sendStatus?: 'pending' | 'failed';
   sendError?: string;
   resendAgentIds?: string[];
   resendMessage?: string;

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
+import { listChats, getChat, mergeChat, saveChatDelta, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
+import { isStoredChatDelta } from '@/lib/chatDeltaValidation';
+import { commitChatOperation, isChatOperation } from '@/lib/chatSyncStore';
+import { readTransfer } from '@/lib/chatTransferStore';
+import { ChatSyncError } from '@/lib/chatSyncProtocol';
 import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
 import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
 import { getAgentById, getAllAgents, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
@@ -129,6 +133,33 @@ export async function POST(req: NextRequest) {
   const userId = getUserId(token);
   const body = await req.json().catch(() => ({}));
 
+  if (body?.action === 'save-sync') {
+    try {
+      const operation: unknown = typeof body.transferId === 'string' && typeof body.chatId === 'string'
+        ? readTransfer(userId, body.transferId, body.chatId, 'chat') : body.operation;
+      if (!isChatOperation(operation)) {
+        return NextResponse.json({ ok: false, error: 'invalid_chat_operation' }, { status: 400 });
+      }
+      return NextResponse.json(commitChatOperation(userId, operation));
+    } catch (error) {
+      if (error instanceof ChatSyncError) return NextResponse.json({ ok: false, error: error.code }, { status: error.status });
+      logger.error({ err: error }, 'Failed to commit chat operation');
+      return NextResponse.json({ ok: false, error: 'chat_save_failed' }, { status: 500 });
+    }
+  }
+
+  if (body?.action === 'save-delta') {
+    if (!isStoredChatDelta(body.chat)) {
+      return NextResponse.json({ ok: false, error: 'invalid_chat_delta' }, { status: 400 });
+    }
+    try { await saveChatDelta(userId, body.chat); }
+    catch (error) {
+      if (error instanceof ChatSyncError) return NextResponse.json({ ok: false, error: error.code }, { status: error.status });
+      throw error;
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   // Admin-only: migrate JSON files to SQLite
   if (body?.action === 'migrate') {
     if (!isAdminToken(token)) return NextResponse.json({ ok: false, error: 'admin_only' }, { status: 403 });
@@ -190,7 +221,11 @@ export async function POST(req: NextRequest) {
   // Ensure agentSessions is present
   if (!chat.agentSessions) chat.agentSessions = {};
 
-  await mergeChat(userId, chat);
+  try { await mergeChat(userId, chat); }
+  catch (error) {
+    if (error instanceof ChatSyncError) return NextResponse.json({ ok: false, error: error.code }, { status: error.status });
+    throw error;
+  }
   return NextResponse.json({ ok: true });
 }
 

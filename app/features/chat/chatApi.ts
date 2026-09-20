@@ -1,7 +1,21 @@
 import type { Agent } from '../agents/agentTypes';
 import { isAcpFailureResult } from './chatHelpers';
+import { requestJson, uploadJson } from './runtime/chatTransferClient';
+import { newOperationId } from '@/lib/chatSyncProtocol';
 
 export async function acpApi(body: Record<string, unknown>) {
+  if (body.action === 'send' && new TextEncoder().encode(JSON.stringify(body)).length > 512 * 1024) {
+    if (typeof body.chatId !== 'string' || !body.chatId) throw new Error('A saved chat is required for a large prompt.');
+    const id = newOperationId();
+    const userId = typeof body.userId === 'string' ? body.userId : undefined;
+    await uploadJson(body, body.chatId, 'acp', id, fetch, userId);
+    const result = await requestJson('/api/acp', {
+      action: 'send', agentId: body.agentId, chatId: body.chatId, payloadRef: id, userId,
+    });
+    void requestJson('/api/chat-transfers', { action: 'delete', id, userId })
+      .catch(error => console.error('Failed to clean up a completed prompt upload', error));
+    return result;
+  }
   const res = await fetch('/api/acp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

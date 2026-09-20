@@ -40,6 +40,7 @@ import { ImageLightbox } from '../layout/components/ImageLightbox';
 import { SelectPicker } from '../ui/SelectPicker';
 import { useChatGitContext } from './runtime/useChatGitContext';
 import { useMobileOverlayState } from '../layout/hooks/useMobileOverlayState';
+import { ChatOutboxNotice } from './components/ChatOutboxNotice';
 
 const CHAT_ACTION_MENU_WIDTH = 132;
 const CHAT_ACTION_MENU_HEIGHT = 124;
@@ -50,7 +51,7 @@ export function ChatPageClient() {
   const userId = (session?.user as any)?.email || (session?.user as any)?.name || 'anonymous';
   const acp = useCallback((body: Record<string, unknown>) => acpApi({ ...body, userId }), [userId]);
   const composer = useComposerState();
-  const { input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef, attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic, composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments, handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop } = composer;
+  const { input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef, attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic, composerInputHandler, addFilesToComposer, removeAttachment, prepareSubmission, handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop } = composer;
   const mobile = useMobileOverlayState();
   const ui = usePageUIState({ mounted, isMobileLayout: mobile.isMobileLayout, onMobileNavigationClose: mobile.close });
   const { themeId, setThemeId, normalizedThemeId, themeStyle, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, sidebarDragRef, lightboxImage, setLightboxImage, showChatsPanel, setShowChatsPanel, openChatMenuId, setOpenChatMenuId, chatMenuButtonRefs, renamingChatId, setRenamingChatId, renameValue, setRenameValue, mentionSelectedIndex, setMentionSelectedIndex } = ui;
@@ -73,7 +74,7 @@ export function ChatPageClient() {
   const chatLoadingRef = useRef<HTMLDivElement | null>(null);
   const chatSelection = useChatSelectionTransition();
   const fileCommentsControllerRef = useRef<Pick<UseFileCommentsResult, 'resetForFileOpen'> | null>(null);
-  const runtime = useChatRuntime({ acp, agentsRef, agentsLoadingRef, chatAgentFilterRef, getSelectedModelIdForAgent, setInputProgrammatic, effectiveLastUsedAgentRef, rememberLastUsedAgent, authStatus, reloadAgents });
+  const runtime = useChatRuntime({ userId, acp, agentsRef, agentsLoadingRef, chatAgentFilterRef, getSelectedModelIdForAgent, setInputProgrammatic, effectiveLastUsedAgentRef, rememberLastUsedAgent, authStatus, reloadAgents });
   const { messages, chatHistory, currentChatId, activeSidebarChatId, chatName, runVersion, shareDialog, expandedMessages, initialChatRestore, retryInitialChatRestore, cancelInitialChatRestore, orchestrationMode, pendingWorkflowPlan, dismissedFollowUpOrchId, setDismissedFollowUpOrchId, dismissedWorkflowBarOrchId, setChatHistory, setChatName, setCurrentChatId, setActiveSidebarChatId, setShareDialog, setExpandedMessages, setOrchestrationMode, setPendingWorkflowPlan, currentChatIdRef, sessionRunsRef, currentAgentSessionsRef, inputHistoryRef, orchestrationsRef, addMessage, updateMessage, notifyRunStateChanged, dispatchToAgent, saveCurrentChatToHistory, clearChatMessages, shareCurrentChat, handleStop, retryFailedSend, sendWorkflowFollowUpReply, answerAgentUserRequest, dismissAgentUserRequest, fileCommentCallbacksRef, panelCallbacksRef, loadChat: runtimeLoadChat, createNewChat: runtimeCreateNewChat, renameChatById: runtimeRenameChatById, deleteChatById: runtimeDeleteChatById, handleSend: runtimeHandleSend, loadChatIntoCache, getChatSidebarStatus } = runtime;
   const [showWorkflowPicker, setShowWorkflowPicker] = useState(false);
   const { chatContainerRef, attachChatContainer, showScrollToBottom, handleBeforeFileTabChange, prepareChatLoad, scrollToLatest, forgetChatScroll } = useChatScroll(currentChatId);
@@ -233,7 +234,7 @@ export function ChatPageClient() {
   async function createNewChat() { cancelInitialChatRestore(); setOpenChatMenuId(null); await runtimeCreateNewChat(registry.selectedAgentFilter); }
   async function renameChatById(chatId: string, newName: string) { await runtimeRenameChatById(chatId, newName, () => { setRenamingChatId(null); setRenameValue(''); }); }
   async function deleteChatById(chatId: string) { forgetChatScroll(chatId); await runtimeDeleteChatById(chatId, () => setOpenChatMenuId(null)); }
-  async function handleSend() { let text = (inputRef.current || composerRef.current?.value || '').trim(); const sendAttachments = attachments; if ((!text && sendAttachments.length === 0) || agents.length === 0) return; if (pastedLinksRef.current.length > 0) { for (const { text: linkText, href } of pastedLinksRef.current) { const idx = text.indexOf(linkText); if (idx !== -1) { text = text.substring(0, idx) + `[${linkText}](${href})` + text.substring(idx + linkText.length); } } pastedLinksRef.current = []; } scrollToLatest(); clearAttachments(); await runtimeHandleSend(text, sendAttachments, inputHistoryIndexRef, inputDraftRef); }
+  async function handleSend() { const draft = prepareSubmission(); if ((!draft.text && draft.attachments.length === 0) || agents.length === 0) return; scrollToLatest(); await runtimeHandleSend(draft.text, draft.attachments, inputHistoryIndexRef, inputDraftRef, draft.onStaged); }
   function selectMention(agentId: string) { const currentInput = inputRef.current, atIndex = currentInput.lastIndexOf('@'); setInputProgrammatic(`${currentInput.slice(0, atIndex)}@${agentId} `); setMentionSelectedIndex(0); }
   function insertSlashCommand(command: { name: string }) { setInputProgrammatic(`/${command.name} `); setSlashSelectedIndex(0); composerRef.current?.focus(); }
   async function copyShareDialogLink() { if (!shareDialog?.url) return; try { await navigator.clipboard.writeText(shareDialog.url); setShareDialog((prev) => prev ? { ...prev, copied: true, detail: 'Copied to clipboard.' } : prev); } catch { setShareDialog((prev) => prev ? { ...prev, copied: false, detail: 'Could not copy automatically. Select the link and copy it manually.' } : prev); } }
@@ -300,5 +301,5 @@ export function ChatPageClient() {
     shareDialog={shareDialog ? <ShareDialogComponent dialog={shareDialog} onCopyLink={() => void copyShareDialogLink()} onClose={() => setShareDialog(null)} /> : null}
     imageLightbox={lightboxImage ? <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} /> : null}
     workflowPicker={<WorkflowPicker open={showWorkflowPicker} onClose={() => setShowWorkflowPicker(false)} agentIds={agents.map((a) => a.id)} onPicked={(plan) => { setPendingWorkflowPlan(plan); setOrchestrationMode('workflow'); }} />}
-  /></div>;
+  /><ChatOutboxNotice {...runtime.outboxNotice} /></div>;
 }

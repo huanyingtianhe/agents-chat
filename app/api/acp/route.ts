@@ -8,7 +8,7 @@ import { getToken } from 'next-auth/jwt';
 import {
   getChat,
   reconcileStalePendingMessagesForAgent,
-  saveChat,
+  updateChatMessage,
   StoredMessage,
   updateChatAgentSession,
 } from '@/lib/chatStore';
@@ -22,6 +22,8 @@ import { handleReadTextFile, handleWriteTextFile } from '@/lib/acp/fsTools';
 import { cleanupStaleSessions, getAgentProcess, getAgentProcesses, getBootPromises, getPendingUserRequestResponders, getReplayBuffers, getUserSession, getUserSessions, pendingUserRequestResponders, PENDING_USER_REQUEST_TIMEOUT_MS, userSessionKey, type PendingUserRequestResponder } from '@/lib/acp/runtimeState';
 import { applySessionModelIfRequested, normalizeSessionModels, syncAgentModelsFromSessionResult, validateRequestedModel } from '@/lib/acp/models';
 import { createLogger } from '@/lib/logger';
+import { resolvePreparedPrompt } from '@/lib/acp/preparedPrompt';
+import { ChatSyncError } from '@/lib/chatSyncProtocol';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -825,36 +827,24 @@ function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
 
 async function persistTurnSnapshot(turn: TurnState): Promise<void> {
   if (!turn.chatId) return;
-  const chat = await getChat(turn.userId, turn.chatId);
-  if (!chat) return;
 
   const parts = buildStoredParts(turn.events);
   const content = turn.done
     ? (turn.fullText.trim() || (turn.error ? `⚠️ ${turn.error}` : ''))
     : turn.fullText.trim();
-  const existingIndex = chat.messages.findIndex(m => m.id === turn.messageId);
-  const existing = existingIndex >= 0 ? chat.messages[existingIndex] : null;
-  const message = {
-    ...(existing || {}),
+  const message: StoredMessage = {
     id: turn.messageId,
     type: 'agent' as const,
     content,
     agentId: turn.agentId,
-    ts: existing?.ts ?? turn.startedAt,
+    ts: turn.startedAt,
     pending: !turn.done,
     statusText: turn.done ? undefined : turn.statusText,
     ptyPhase: turn.done ? undefined : turn.phase,
     parts: parts.length ? parts : undefined,
     userRequest: turn.done ? undefined : turn.userRequest,
-  } as StoredMessage & { pending?: boolean; statusText?: string; ptyPhase?: string; parts?: StoredContentPart[]; userRequest?: PendingUserRequest };
-
-  if (existingIndex >= 0) {
-    chat.messages[existingIndex] = message;
-  } else {
-    chat.messages.push(message);
-  }
-  chat.ts = Date.now();
-  await saveChat(turn.userId, chat);
+  };
+  await updateChatMessage(turn.userId, turn.chatId, message);
   turn.lastPersistedAt = Date.now();
 }
 
@@ -1576,15 +1566,13 @@ async function compareAndRecover(
       const replyText = agentAfter[agentAfter.length - 1].text;
       const ts = Date.now();
       const recovered = [{ type: 'agent' as const, content: replyText, agentId, ts }];
-      chat.messages.push({
+      await updateChatMessage(userId, chatId, {
         id: `recovered-${ts}`,
         type: 'agent',
         content: replyText,
         agentId,
         ts,
       });
-      chat.ts = ts;
-      await saveChat(userId, chat);
       log(`[ACP:recovery] Recovered agent reply for last user message in chat ${chatId}`);
       return { recoveredMessages: recovered };
     }
@@ -1597,7 +1585,7 @@ async function compareAndRecover(
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
+    let body = await req.json().catch(() => ({}));
     const action = body?.action as string | undefined;
     const agentId = body?.agentId as string | undefined;
 
@@ -2106,6 +2094,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'send') {
+      if (!token) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+      if (body.userId !== undefined && body.userId !== userId) {
+        return NextResponse.json({ ok: false, error: 'account_changed' }, { status: 403 });
+      }
+      if (body.payloadRef !== undefined) {
+        try { body = resolvePreparedPrompt(userId, body); }
+        catch (error) {
+          if (error instanceof ChatSyncError) return NextResponse.json({ ok: false, error: error.code }, { status: error.status });
+          throw error;
+        }
+      }
+      if (typeof body.chatId === 'string' && !await getChat(userId, body.chatId)) {
+        return NextResponse.json({ ok: false, error: 'chat_deleted_or_missing' }, { status: 410 });
+      }
       const text = String(body?.text ?? '');
       let attachments: PromptAttachment[] = [];
       try {
@@ -2286,6 +2288,11 @@ export async function POST(req: NextRequest) {
       const turnChatKey = chatId || '__default';
       const turn = sess.activeTurns.get(turnChatKey);
       if (turn) {
+        if (turn.persistTimer) {
+          clearTimeout(turn.persistTimer);
+          turn.persistTimer = undefined;
+        }
+        await persistTurnSnapshot(turn);
         clearPendingUserRequestForTurn(turn, 'cleared');
         turn.events = [];
         sess.activeTurns.delete(turnChatKey);

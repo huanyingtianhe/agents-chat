@@ -27,6 +27,8 @@ async function main() {
           content: '',
           ts: 1,
           pending: true,
+          version: 4,
+          serverManaged: false,
           statusText: 'Reading shell output',
           parts: [{ kind: 'tool', toolName: 'read_shell', done: true }],
         },
@@ -55,10 +57,22 @@ async function main() {
       content: '⏹ Interrupted',
       ts: 1,
       pending: false,
+      version: 5,
+      serverManaged: true,
       statusText: 'Interrupted',
       parts: [{ kind: 'tool', toolName: 'read_shell', done: true }],
     });
     assert.equal(reconciled?.messages[1].pending, true);
+    const { commitChatOperation } = await import('../lib/chatSyncStore');
+    commitChatOperation('user-1', {
+      operationId: 'stale-browser-after-reconciliation',
+      chat: {
+        id: 'chat-1', name: 'Stale chat', ts: 1, agentSessions: {},
+        messages: [{ id: 'pending-alpha', type: 'agent', agentId: 'alpha', content: '', pending: true, ts: 1 }],
+      },
+      expectedVersions: { 'pending-alpha': 4 },
+    });
+    assert.deepEqual((await getChat('user-1', 'chat-1'))?.messages[0], reconciled?.messages[0]);
     assert.equal(
       await reconcileStalePendingMessagesForAgent('user-1', 'chat-1', 'alpha'),
       false,

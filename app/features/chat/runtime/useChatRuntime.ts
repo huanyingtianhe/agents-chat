@@ -7,7 +7,8 @@ import type { AgentUserRequestResponse, ChatHistoryEntry, ChatMessage, DispatchT
 import { makeId, PromptSendFailedError } from './chatRunLoop';
 import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
-import { createPersistenceHandlers } from './chatPersistenceService';
+import { createPersistenceHandlers, type ChatSaveResult } from './chatPersistenceService';
+import { useChatOutbox } from './useChatOutbox';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
@@ -26,6 +27,7 @@ import {
 } from './useInitialChatRestore';
 
 export type UseChatRuntimeParams = {
+  userId: string;
   acp: (body: Record<string, unknown>) => Promise<any>;
   agentsRef: React.MutableRefObject<Agent[]>;
   agentsLoadingRef: React.MutableRefObject<boolean>;
@@ -53,6 +55,7 @@ export type PanelCallbacks = {
 };
 
 export function useChatRuntime({
+  userId,
   acp,
   agentsRef,
   agentsLoadingRef,
@@ -99,6 +102,34 @@ export function useChatRuntime({
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
+  const { saver: chatSaver, notice: outboxNotice } = useChatOutbox(userId, authStatus, (chat, replaceIds = [], deletedChatId) => {
+    if (!chat) {
+      if (deletedChatId) {
+        delete chatMessagesRef.current[deletedChatId];
+        setChatHistory(previous => previous.filter(entry => entry.id !== deletedChatId));
+        if (currentChatIdRef.current === deletedChatId) {
+          currentChatIdRef.current = '';
+          currentAgentSessionsRef.current = {};
+          setCurrentChatId('');
+          setActiveSidebarChatId('');
+          setChatName('New Chat');
+          messagesRef.current = [];
+          setMessages([]);
+        }
+      }
+      return;
+    }
+    const existing = chatMessagesRef.current[chat.id] || [];
+    const replace = new Set(replaceIds);
+    const merged = new Map(existing.filter(message => !replace.has(message.id)).map(message => [message.id, message]));
+    for (const message of chat.messages) if (!merged.has(message.id)) merged.set(message.id, message);
+    setMessagesForChat(chat.id, [...merged.values()].sort((a, b) => a.ts - b.ts));
+    setChatHistory(previous => normalizeChatHistory([
+      ...previous.filter(entry => entry.id !== chat.id),
+      { id: chat.id, name: chat.name, ts: chat.ts, agentSessions: chat.agentSessions },
+    ]));
+  });
+  const stagingSendRef = useRef(false);
 
   /* ── Cross-service callback refs ── */
   const maybeAdvanceOrchestrationRef = useRef<(id: string) => Promise<void>>(async () => {});
@@ -164,7 +195,7 @@ export function useChatRuntime({
   }
 
   /* ── ACP service ── */
-  const saveChatToHistoryRef = useRef<(chatId: string) => Promise<number>>(async () => Date.now());
+  const saveChatToHistoryRef = useRef<(chatId: string) => Promise<ChatSaveResult>>(async () => ({ ok: true, savedAt: Date.now() }));
   const acpHandlers = createAcpHandlers({
     acp, sessionRunsRef, orchestrationsRef, currentChatIdRef, currentAgentSessionsRef,
     needsContextRestoreRef, chatMessagesRef, messagesRef, agentsRef,
@@ -196,6 +227,7 @@ export function useChatRuntime({
   const reconcileRunningWorkflowNodesRef = useRef<(chatId: string) => void>(() => {});
 
   const persistHandlers = createPersistenceHandlers({
+    chatSaver,
     acp, currentChatIdRef, currentAgentSessionsRef, needsContextRestoreRef,
     chatMessagesRef, messagesRef, chatNameRef, chatAgentFilterRef,
     chatHistoryRef, inputHistoryRef,
@@ -310,22 +342,32 @@ export function useChatRuntime({
       sendStatus: undefined, sendError: undefined,
       resendAgentIds: undefined, resendMessage: undefined,
     }, chatId);
-    void persistHandlers.saveChatToHistory(chatId);
+  }
+
+  async function confirmUserMessageDispatch(chatId: string, userMessageId: string) {
+    if (chatMessagesRef.current[chatId]?.find(message => message.id === userMessageId)?.sendStatus !== 'pending') return;
+    clearUserMessageSendFailure(chatId, userMessageId);
+    await persistHandlers.saveChatToHistory(chatId);
   }
 
   /* ── Resend / send / stop ── */
   async function resendFailedUserMessage(message: ChatMessage) {
+    if (stagingSendRef.current) return;
     if (message.type !== 'user' || message.sendStatus !== 'failed') return;
     const chatId = currentChatIdRef.current;
     if (acpHandlers.isChatRunning(chatId)) return;
     if (!message.resendAgentIds?.length && (agentsLoadingRef.current || agentsRef.current.length === 0)) return;
     const parsed = parseAgents(message.content, agentsRef.current);
     const agentIds = message.resendAgentIds?.length ? message.resendAgentIds : parsed.agentIds;
-    const resendMessage = message.resendMessage || parsed.message || message.content;
+    const resendMessage = message.resendMessage || parsed.message || message.content
+      || (message.attachments?.length ? 'Please review the attached file(s).' : '');
     if (agentIds.length === 0 || !resendMessage.trim()) return;
-    clearUserMessageSendFailure(chatId, message.id);
+    updateMessage(message.id, { sendStatus: 'pending', sendError: undefined, resendAgentIds: agentIds, resendMessage }, chatId);
     try {
+      const saved = await persistHandlers.saveChatToHistory(chatId);
+      if (!saved.ok) throw new Error(saved.error);
       await orchHandlers.dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id, attachments: message.attachments || [] });
+      await confirmUserMessageDispatch(chatId, message.id);
     } catch (err) {
       markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage, message.attachments);
     }
@@ -341,11 +383,12 @@ export function useChatRuntime({
     sendAttachments: ChatAttachment[],
     inputHistoryIndexRef: React.MutableRefObject<number>,
     inputDraftRef: React.MutableRefObject<string>,
+    onStaged?: () => void,
   ) {
-    if ((!text && sendAttachments.length === 0) || agentsRef.current.length === 0) return;
+    if (stagingSendRef.current || (!text && sendAttachments.length === 0) || agentsRef.current.length === 0) return;
     const textForAgent = text || 'Please review the attached file(s).';
     if (!currentChatIdRef.current) {
-      await persistHandlers.createNewChat(chatAgentFilterRef.current);
+      if (!await persistHandlers.createNewChat(chatAgentFilterRef.current)) return;
     }
     const sendChatPrimaryAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId || null;
     const sendFallbackAgentId = getExistingAgentId(effectiveLastUsedAgentRef.current(currentChatIdRef.current), agentsRef.current)
@@ -358,9 +401,11 @@ export function useChatRuntime({
     }
     const orchestrationId = `orch-${makeId()}`;
     const sendChatId = currentChatIdRef.current;
-    const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
-    setInputProgrammatic('');
-    void persistHandlers.saveChatToHistory(sendChatId);
+    const userMessageId = addMessage({
+      type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined,
+      sendStatus: 'pending', resendAgentIds: agentIds, resendMessage: message || textForAgent,
+    }, sendChatId);
+    stagingSendRef.current = true;
     const allHist = inputHistoryRef.current;
     if (!allHist[sendChatId]) allHist[sendChatId] = [];
     const chatHist = allHist[sendChatId];
@@ -370,6 +415,11 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
+      const saved = await persistHandlers.saveChatToHistory(sendChatId, false, () => {
+        onStaged?.();
+        stagingSendRef.current = false;
+      });
+      if (!saved.ok) throw new Error(saved.error);
       const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
       const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
       // If a LIVE workflow has awaiting nodes and the user's send targets any
@@ -447,8 +497,11 @@ export function useChatRuntime({
         }
         await orchHandlers.dispatchParsedPrompt(agentIds, message, textForAgent, orchestrationId, { chatId: sendChatId, sourceUserMessageId: userMessageId, attachments: sendAttachments });
       }
+      await confirmUserMessageDispatch(sendChatId, userMessageId);
     } catch (err) {
       markUserMessageSendFailed(sendChatId, userMessageId, err instanceof Error ? err.message : String(err), agentIds, message || textForAgent, sendAttachments);
+    } finally {
+      stagingSendRef.current = false;
     }
   }
 
@@ -457,7 +510,15 @@ export function useChatRuntime({
     if (!trimmed || awaitingAgentIds.length === 0) return;
     const sendChatId = currentChatIdRef.current;
     if (!sendChatId) return;
-    addMessage({ type: 'user', content: trimmed }, sendChatId);
+    const userMessageId = addMessage({
+      type: 'user', content: trimmed, sendStatus: 'pending',
+      resendAgentIds: awaitingAgentIds, resendMessage: trimmed,
+    }, sendChatId);
+    const saved = await persistHandlers.saveChatToHistory(sendChatId);
+    if (!saved.ok) {
+      markUserMessageSendFailed(sendChatId, userMessageId, saved.error, awaitingAgentIds, trimmed);
+      return;
+    }
     // Don't mark dismissed here: the awaiting nodes will flip to 'running'
     // below and detection naturally returns null until/unless the same node
     // asks another question — at which point we DO want the card to reappear.
@@ -465,40 +526,47 @@ export function useChatRuntime({
     // reply back into the same node so the engine can resume: flip awaiting
     // nodes to 'running' and re-dispatch with workflowNodeId so finalizeRun
     // updates the right node and triggers maybeAdvanceOrchestration.
-    const orch = orchestrationsRef.current[orchestrationId];
-    if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
-      const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
-      const awaitingNodes = orch.workflowPlan.nodes.filter(
-        (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
-      );
-      // Literal "skip" reply: mark awaiting nodes skipped and advance.
-      // Dependents will cascade-skip via the engine's normal logic.
-      if (awaitingNodes.length > 0 && trimmed.toLowerCase() === 'skip') {
-        for (const n of awaitingNodes) {
-          statuses[n.id] = 'skipped';
-          orch.results = orch.results || {};
-          if (!orch.results[n.id]) orch.results[n.id] = '⏭ Skipped by user';
+    try {
+      const orch = orchestrationsRef.current[orchestrationId];
+      if (orch && orch.mode === 'workflow' && orch.workflowPlan) {
+        const statuses = orch.nodeStatuses || (orch.nodeStatuses = {});
+        const awaitingNodes = orch.workflowPlan.nodes.filter(
+          (n) => statuses[n.id] === 'awaiting-input' && awaitingAgentIds.includes(n.agent),
+        );
+        // Literal "skip" reply: mark awaiting nodes skipped and advance.
+        // Dependents will cascade-skip via the engine's normal logic.
+        if (awaitingNodes.length > 0 && trimmed.toLowerCase() === 'skip') {
+          for (const n of awaitingNodes) {
+            statuses[n.id] = 'skipped';
+            orch.results = orch.results || {};
+            if (!orch.results[n.id]) orch.results[n.id] = '⏭ Skipped by user';
+          }
+          notifyRunStateChanged();
+          void orchHandlers.maybeAdvanceOrchestration(orchestrationId);
+          await confirmUserMessageDispatch(sendChatId, userMessageId);
+          return;
         }
-        notifyRunStateChanged();
-        void orchHandlers.maybeAdvanceOrchestration(orchestrationId);
-        return;
+        if (awaitingNodes.length > 0) {
+          for (const n of awaitingNodes) statuses[n.id] = 'running';
+          notifyRunStateChanged();
+          await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
+            n.agent, trimmed, orchestrationId, 'worker',
+            { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
+          )));
+          await confirmUserMessageDispatch(sendChatId, userMessageId);
+          return;
+        }
       }
-      if (awaitingNodes.length > 0) {
-        for (const n of awaitingNodes) statuses[n.id] = 'running';
-        notifyRunStateChanged();
-        await Promise.all(awaitingNodes.map((n) => acpHandlers.dispatchToAgent(
-          n.agent, trimmed, orchestrationId, 'worker',
-          { chatId: sendChatId, relation: `Workflow node ${n.id}`, workflowNodeId: n.id },
-        )));
-        return;
-      }
+      // Fallback (no live orchestration — e.g. msg- id from history scan):
+      // plain dispatch to the asking agent(s), no orchestration tracking.
+      await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
+        agentId, trimmed, `followup-${makeId()}`, 'worker',
+        { chatId: sendChatId, relation: 'Workflow follow-up' },
+      )));
+      await confirmUserMessageDispatch(sendChatId, userMessageId);
+    } catch (error) {
+      markUserMessageSendFailed(sendChatId, userMessageId, error instanceof Error ? error.message : String(error), awaitingAgentIds, trimmed);
     }
-    // Fallback (no live orchestration — e.g. msg- id from history scan):
-    // plain dispatch to the asking agent(s), no orchestration tracking.
-    await Promise.all(awaitingAgentIds.map((agentId) => acpHandlers.dispatchToAgent(
-      agentId, trimmed, `followup-${makeId()}`, 'worker',
-      { chatId: sendChatId, relation: 'Workflow follow-up' },
-    )));
   }
 
   async function handleStop() {
@@ -601,6 +669,7 @@ export function useChatRuntime({
       setActiveSidebarChatId(target.chatId);
     },
     onChatLoaded(target, chat: InitialChatRecord, isCurrent) {
+      chatSaver.hydrate(target.chatId, chat.messages || []);
       const agentSessions = chat.agentSessions || {};
       const isReviewChat = target.chatId.startsWith('comment-review:');
       const migration = migrateFailedSendWarnings(
@@ -750,6 +819,7 @@ export function useChatRuntime({
 
   return {
     /* state */
+    outboxNotice,
     messages, chatHistory, currentChatId, activeSidebarChatId, chatName, chatCounter,
     runVersion, shareDialog, expandedMessages, loadedChatIdForResume,
     initialChatRestore: initialChatRestore.state,

@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { ChatMessage } from '../../app/features/chat/chatTypes';
 import { installMobileChatFixture } from './mobileChatFixture';
+import { chatSaveAcknowledgement } from './chatSaveFixture';
 
 export const TYPOGRAPHY_MARKDOWN = `# Stable heading
 
@@ -50,7 +51,7 @@ export async function installTypographyFixture(page: Page) {
         ? id
           ? { ok: true, chat }
           : { ok: true, chats: [{ id: chat.id, name: chat.name, ts: chat.ts }], lastChatId: chat.id }
-        : { ok: true },
+        : chatSaveAcknowledgement(request.postDataJSON()),
     });
   });
   await page.route('**/api/acp', async (route) => {

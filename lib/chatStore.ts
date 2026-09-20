@@ -2,6 +2,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
+import { ChatSyncError } from './chatSyncProtocol';
+import { isDeepStrictEqual } from 'node:util';
 
 /**
  * Server-side chat history storage — SQLite backend.
@@ -21,6 +23,8 @@ export type StoredAttachment = {
 };
 
 export type StoredMessage = {
+  version?: number;
+  serverManaged?: boolean;
   id: string;
   type: 'user' | 'agent' | 'system';
   content: string;
@@ -32,7 +36,7 @@ export type StoredMessage = {
   parts?: unknown[];
   userRequest?: unknown;
   attachments?: StoredAttachment[];
-  sendStatus?: 'failed';
+  sendStatus?: 'pending' | 'failed';
   sendError?: string;
   resendAgentIds?: string[];
   resendMessage?: string;
@@ -140,6 +144,13 @@ export function getDb(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_chats_user_ts ON chats (user_id, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_tombstones (
+      user_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      deleted_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, chat_id)
+    );
 
     CREATE TABLE IF NOT EXISTS shares (
       share_id   TEXT PRIMARY KEY,
@@ -279,17 +290,26 @@ export function mergeStoredMessages(existing: StoredMessage[], incoming: StoredM
   const existingById = new Map(existing.map(message => [message.id, message]));
   const merged = new Map(
     existing
-      .filter(message => message.type === 'user')
+      .filter(message => message.type === 'user' || message.version)
       .map(message => [message.id, message]),
   );
   for (const message of incoming) {
     const saved = existingById.get(message.id);
-    merged.set(
-      message.id,
-      saved?.pending === false && message.pending === true ? saved : message,
-    );
+    if (saved?.pending === false && message.pending === true) {
+      merged.set(message.id, saved);
+      continue;
+    }
+    assertLegacyMessageUnchanged(saved, message);
+    merged.set(message.id, saved?.version ? saved : message);
   }
   return [...merged.values()].sort((a, b) => a.ts - b.ts);
+}
+
+function assertLegacyMessageUnchanged(saved: StoredMessage | undefined, incoming: StoredMessage) {
+  if (!saved?.version) return;
+  const { version: _savedVersion, serverManaged: _savedManaged, ...oldValue } = saved;
+  const { version: _incomingVersion, serverManaged: _incomingManaged, ...newValue } = incoming;
+  if (!isDeepStrictEqual(oldValue, newValue)) throw new ChatSyncError(`message_conflict:${saved.id}`);
 }
 
 export async function mergeChat(userId: string, chat: StoredChat): Promise<void> {
@@ -301,6 +321,62 @@ export async function mergeChat(userId: string, chat: StoredChat): Promise<void>
       : chat);
   });
   merge();
+}
+
+export type StoredChatDelta = StoredChat & { removedMessageIds?: string[] };
+
+export async function saveChatDelta(userId: string, delta: StoredChatDelta): Promise<void> {
+  const db = getDb();
+  db.transaction(() => {
+    const existing = getChatWithDb(db, userId, delta.id);
+    const removed = new Set(delta.removedMessageIds);
+    for (const message of existing?.messages || []) {
+      if (message.type !== 'user' && message.version && removed.has(message.id)) {
+        throw new ChatSyncError(`message_conflict:${message.id}`);
+      }
+    }
+    const messages = new Map((existing?.messages || [])
+      .filter(message => message.type === 'user' || !removed.has(message.id))
+      .map(message => [message.id, message]));
+    for (const message of delta.messages) {
+      const saved = messages.get(message.id);
+      if (saved?.pending === false && message.pending === true) continue;
+      assertLegacyMessageUnchanged(saved, message);
+      if (saved?.version) continue;
+      messages.set(message.id, message.type === 'agent' && saved?.parts && !message.parts
+        ? { ...message, parts: saved.parts }
+        : message);
+    }
+    saveChatWithDb(db, userId, {
+      ...delta,
+      gitContext: existing?.gitContext,
+      messages: [...messages.values()].sort((a, b) => a.ts - b.ts),
+    });
+  })();
+}
+
+/** Apply a server snapshot without replacing messages saved by another request. */
+export async function updateChatMessage(userId: string, chatId: string, message: StoredMessage): Promise<boolean> {
+  const db = getDb();
+  return db.transaction(() => {
+    const chat = getChatWithDb(db, userId, chatId);
+    if (!chat) return false;
+    const index = chat.messages.findIndex(saved => saved.id === message.id);
+    const existing = index >= 0 ? chat.messages[index] : undefined;
+    const next = {
+      ...existing, ...message,
+      version: (existing?.version || 0) + 1,
+      serverManaged: true,
+      ts: existing?.ts ?? message.ts,
+      parts: message.parts ?? existing?.parts,
+    };
+    if (index < 0) chat.messages.push(next);
+    else chat.messages[index] = next;
+    chat.messages.sort((a, b) => a.ts - b.ts);
+    chat.ts = Date.now();
+    saveChatWithDb(db, userId, chat);
+    return true;
+  })();
 }
 
 export async function reconcileStalePendingMessagesForAgent(
@@ -322,6 +398,8 @@ export async function reconcileStalePendingMessagesForAgent(
       return {
         ...message,
         content: message.content.trim() ? message.content : '⏹ Interrupted',
+        version: (message.version || 0) + 1,
+        serverManaged: true,
         pending: false,
         statusText: 'Interrupted',
         ptyPhase: undefined,
@@ -359,12 +437,15 @@ function mapStoredChatRow(row: any): StoredChat {
   };
 }
 
-function getChatWithDb(db: Database.Database, userId: string, chatId: string): StoredChat | null {
+export function getChatWithDb(db: Database.Database, userId: string, chatId: string): StoredChat | null {
   const row = db.prepare('SELECT * FROM chats WHERE user_id = ? AND chat_id = ?').get(userId, chatId) as any;
   return row ? mapStoredChatRow(row) : null;
 }
 
-function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat): void {
+export function saveChatWithDb(db: Database.Database, userId: string, chat: StoredChat): void {
+  if (db.prepare('SELECT 1 FROM chat_tombstones WHERE user_id = ? AND chat_id = ?').get(userId, chat.id)) {
+    throw new ChatSyncError('chat_deleted', 410);
+  }
   // ACP session updates are written by updateChatAgentSession; chat saves may
   // carry stale client session maps, so conflict updates preserve DB sessions.
   db.prepare(`
@@ -459,6 +540,8 @@ export async function renameChat(userId: string, chatId: string, newName: string
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
   const db = getDb();
   db.transaction(() => {
+    db.prepare('INSERT OR IGNORE INTO chat_tombstones (user_id, chat_id, deleted_at) VALUES (?, ?, ?)')
+      .run(userId, chatId, Date.now());
     db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
     db.prepare(`
       UPDATE user_prefs SET last_chat_id = NULL, updated_at = ?
@@ -933,6 +1016,7 @@ export async function migrateFromJson(): Promise<{ chats: number; shares: number
         try {
           const raw = await fs.readFile(path.join(userPath, file), 'utf-8');
           const chat: StoredChat = JSON.parse(raw);
+          if (db.prepare('SELECT 1 FROM chat_tombstones WHERE user_id = ? AND chat_id = ?').get(userId, chat.id)) continue;
           insertChat.run(
             userId,
             chat.id,

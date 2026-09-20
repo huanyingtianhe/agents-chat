@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { applyFixtureChatSave, chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -69,14 +70,11 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
 
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
-      if (body?.chat) {
-        createdChatId = body.chat.id;
-        const existing = chats.get(body.chat.id);
-        chats.set(body.chat.id, {
-          ...existing,
-          ...body.chat,
-          gitContext: body.chat.gitContext ?? existing?.gitContext,
-        });
+      const delta = body.operation?.chat || body.chat;
+      const saved = applyFixtureChatSave(body, delta && chats.get(delta.id));
+      if (saved) {
+        createdChatId = saved.id;
+        chats.set(saved.id, saved);
       }
       if (body?.action === 'set-last-chat') {
         lastChatId = body.chatId || '';
@@ -92,7 +90,7 @@ test('shows branch/worktree controls in the status bar and keeps selection per c
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, gitContext: body.gitContext }) });
         return;
       }
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+      await route.fulfill({ json: chatSaveAcknowledgement(body) });
       return;
     }
 

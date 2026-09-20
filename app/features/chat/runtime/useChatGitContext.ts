@@ -25,8 +25,9 @@ export function useChatGitContext({ currentChatId, sessionLockSignature = '', on
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    void fetchChatGitContext(currentChatId).then((result) => {
+    void fetchChatGitContext(currentChatId, controller.signal).then((result) => {
       if (cancelled) return;
       setState({
         loading: false,
@@ -35,8 +36,16 @@ export function useChatGitContext({ currentChatId, sessionLockSignature = '', on
         locked: result.locked,
         error: result.error || (result.locked ? 'session active - git context locked' : null),
       });
+    }).catch((err: unknown) => {
+      if (cancelled) return;
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error('Failed to load git context', { chatId: currentChatId, error: detail });
+      setState(prev => ({ ...prev, loading: false, error: `Failed to load git context: ${detail}` }));
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [currentChatId]);
 
   const derivedLocked = state.locked || sessionLockSignature.length > 0;

@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test';
+import { chatSaveAcknowledgement } from './chatSaveFixture';
 
 export const TEST_AGENT = {
   id: 'alpha',
@@ -138,6 +139,12 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   };
 
   await page.route('**/api/chats**', async (route) => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON();
+      if (body.action === 'save-sync') {
+        return route.fulfill({ json: chatSaveAcknowledgement(body) });
+      }
+    }
     const id = new URL(route.request().url()).searchParams.get('id');
     const selectedChat = id === secondChat.id ? secondChat : id === thirdChat.id ? thirdChat : chat;
     await route.fulfill({
@@ -375,7 +382,7 @@ export async function installMobileChatFixture(page: Page): Promise<MobileFixtur
   };
 }
 
-export async function loginMobileFixture(page: Page): Promise<void> {
+export async function loginMobileFixture(page: Page, options: { emptyHistory?: boolean } = {}): Promise<void> {
   await page.goto('/login');
   const username = page.getByPlaceholder('Admin username');
   const password = page.getByPlaceholder('Password');
@@ -386,5 +393,5 @@ export async function loginMobileFixture(page: Page): Promise<void> {
     await expect(submit).toBeEnabled();
   }).toPass({ timeout: 30_000 });
   await submit.click();
-  await expect(page.locator('.message.user')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(options.emptyHistory ? '.emptyHomepage' : '.message.user')).toBeVisible({ timeout: 30_000 });
 }

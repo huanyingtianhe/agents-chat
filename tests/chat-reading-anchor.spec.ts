@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { loginMobileFixture } from './helpers/mobileChatFixture';
+import { chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 import { installTypographyFixture } from './helpers/typographyFixture';
 import type { ChatMessage } from '../app/features/chat/chatTypes';
 import { settleChatLayout as settleLayout } from './helpers/chatLayout';
@@ -48,7 +49,7 @@ async function installReadingFixture(page: Page) {
       ? id ? { ok: true, chat } : {
         ok: true, chats: [{ id: chat.id, name: chat.name, ts: chat.ts }], lastChatId: chat.id,
       }
-      : { ok: true } });
+      : chatSaveAcknowledgement(request.postDataJSON()) });
   });
   return {
     ...streaming,

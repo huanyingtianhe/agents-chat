@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
 
@@ -53,6 +54,7 @@ async function mockIsolatedApp(page: Page, searchRequests: string[]) {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, items: [] }) }),
   );
   await page.route('**/api/chats**', async (route) => {
+    if (route.request().method() === 'POST') return route.fulfill({ json: chatSaveAcknowledgement(route.request().postDataJSON()) });
     const request = route.request();
     const url = new URL(request.url());
     if (request.method() !== 'GET') {

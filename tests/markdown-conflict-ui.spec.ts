@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
@@ -26,6 +27,7 @@ test('Files editor shows conflict choices and manual diff resolver', async ({ pa
   });
 
   await page.route('**/api/chats**', async (route) => {
+    if (route.request().method() === 'POST') return route.fulfill({ json: chatSaveAcknowledgement(route.request().postDataJSON()) });
     if (route.request().method() === 'GET') {
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, chats: [] }) });
     }

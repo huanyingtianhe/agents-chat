@@ -158,3 +158,50 @@ Self-review: every agreed behavior maps to Tasks 2-4; the red run remains
 separate from implementation; helper/controller/hook responsibilities are
 bounded; test selection includes all three projects; native viewport, history,
 font policy and backend code remain out of scope.
+
+## Completion record (2026-09-20)
+
+Implementation and remote validation are complete. The original task checkboxes
+above describe the planned sequence; this record is the authoritative outcome.
+The interrupted terminal session had not yet saved this final handoff.
+
+- Validated code commit: `013844da241291cab4de5ff4d4dd115f45cde4e7`.
+- Remote branch: `origin/fix/rotation-reading-anchor`.
+- Green run: https://github.com/xujxu/agents-chat/actions/runs/35456686064.
+- Red baseline: `62f4ad9`, run `35454668124`. All three builds succeeded;
+  each browser failed all three original reading-position regressions.
+  Initial rotation left the latest position 470 CSS pixels from the bottom.
+- Final geometry tests: six passing cases in each of three jobs.
+- Final browser results:
+
+| Coverage | Desktop Chromium | Android Chromium | iPhone WebKit |
+| --- | ---: | ---: | ---: |
+| Reading-anchor E2E | 18 | 18 | 17 |
+| Typography behavior | 8 | 7 | 7 |
+| Served CSS/viewport policy | 1 | 1 | 1 |
+| Existing coupled regressions | 17 | 31 | 31 |
+
+Total: 157 browser passes plus 18 pure-test executions (175 passing executions).
+Three intentional skips: two desktop-only typography cases in mobile projects,
+and real mouse-wheel injection unsupported by Playwright mobile WebKit.
+Keyboard and programmatic reading-position changes are covered in WebKit.
+All three production builds and type checks passed. No local installation,
+build, type check, unit test, or browser test was run.
+
+The implementation retains a logical body-text/element point relative to the
+chat viewport bottom, handles multi-stage reflow without overwriting that
+anchor, and updates it on user scrolling. Follow-latest, smooth jump, streaming,
+file return, composer resizing, long paragraphs, images, code and tables have
+remote coverage. The existing WebKit navigation-position regression also passes
+unchanged after distinguishing independent scrolling from intermediate reflow
+clamping. Test fixtures wait for actual stable geometry, not a fixed delay.
+
+The final desktop artifact is `10588408523`, build
+`LvyqwH4tHliNBhFm3ygAy`. Read-only inspection confirmed the production origin,
+25 routes without diagnostic endpoints, both root 100% text-adjust policies,
+and the unrestricted ordinary viewport metadata.
+
+PROD was not updated: it remains build `3tQ5Gip6b6QMwUDh4HZvF`, the previous
+typography-only release. The typography PR was not changed and no scroll-fix PR
+was opened. Physical iPhone confirmation is still pending a separately
+authorized deployment; passing Playwright WebKit is not physical-device proof.

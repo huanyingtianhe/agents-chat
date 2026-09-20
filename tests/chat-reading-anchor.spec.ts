@@ -2,29 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { loginMobileFixture } from './helpers/mobileChatFixture';
 import { installTypographyFixture } from './helpers/typographyFixture';
 import type { ChatMessage } from '../app/features/chat/chatTypes';
+import { settleChatLayout as settleLayout } from './helpers/chatLayout';
 
 const portrait = { width: 390, height: 844 };
 const landscape = { width: 844, height: 390 };
 const longParagraph = Array.from({ length: 1400 }, (_, i) => `reading${String(i).padStart(4, '0')}`).join(' ');
 const paragraphSelector = '.message.agent .markdownBody p';
-
-async function settleLayout(page: Page) {
-  await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    let previous = '';
-    let stable = 0;
-    let frames = 0;
-    const sample = () => {
-      const chat = document.querySelector<HTMLElement>('.chatContainer');
-      const geometry = chat ? [chat.clientWidth, chat.clientHeight, chat.scrollHeight, chat.scrollTop].join(',') : '';
-      stable = geometry && geometry === previous ? stable + 1 : 0;
-      previous = geometry;
-      if (stable >= 4) resolve();
-      else if (++frames >= 120) reject(new Error('Chat layout did not settle'));
-      else requestAnimationFrame(sample);
-    };
-    requestAnimationFrame(sample);
-  }));
-}
 
 async function settleUserScroll(page: Page) {
   await page.locator('.chatContainer').evaluate((element) => new Promise<void>((resolve, reject) => {

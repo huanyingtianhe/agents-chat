@@ -41,6 +41,7 @@ export async function installTypographyFixture(page: Page) {
   let streaming = false;
   let completed = false;
   let additions = '';
+  let nextPollGate: { waiting: () => void; released: Promise<void> } | null = null;
   await page.route('**/api/chats**', async (route) => {
     const request = route.request();
     const id = new URL(request.url()).searchParams.get('id');
@@ -62,6 +63,12 @@ export async function installTypographyFixture(page: Page) {
       return;
     }
     if (body.action === 'poll' && streaming) {
+      const gate = nextPollGate;
+      nextPollGate = null;
+      if (gate) {
+        gate.waiting();
+        await gate.released;
+      }
       const text = TYPOGRAPHY_MARKDOWN + additions;
       await route.fulfill({
         json: {
@@ -95,6 +102,15 @@ export async function installTypographyFixture(page: Page) {
     } },
   }));
   return {
+    holdNextPoll() {
+      if (nextPollGate) throw new Error('A typography poll is already held');
+      let waiting!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => { waiting = resolve; });
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      nextPollGate = { waiting, released };
+      return { started, release };
+    },
     append() { additions += '\n\nAdditional streaming paragraph.'; },
     finish() { completed = true; },
   };

@@ -302,32 +302,50 @@ test('does not overwrite a new reading position before resize observation is del
   await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
 });
 
-test('keeps historical text fixed during streaming then follows an explicit jump', async ({ page }) => {
-  await page.locator('textarea.composerTextarea').fill('@alpha Start reading stream');
-  await page.getByRole('button', { name: 'Send message' }).click();
-  await expect(page.locator('.message.agent.streamingMessage')).toBeVisible();
-  const point = await captureHistoricalPoint(page);
-  fixture.append();
-  await expect(page.locator('.message.agent:last-child')).toContainText('Additional streaming paragraph.');
-  await settleLayout(page);
-  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
-  await page.setViewportSize(landscape);
-  await settleLayout(page);
-  await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
-  await page.getByRole('button', { name: 'Jump to latest messages' }).click();
-  fixture.append();
-  const chat = page.locator('.chatContainer');
-  await expect.poll(() => chat.evaluate((element) =>
-    element.scrollHeight - element.clientHeight - element.scrollTop,
-  )).toBeLessThanOrEqual(4);
-  fixture.finish();
-  await expect(page.locator('.message.agent:last-child')).not.toHaveClass(/streamingMessage/);
-  await page.setViewportSize(portrait);
-  await settleLayout(page);
-  await expect.poll(() => chat.evaluate((element) =>
-    element.scrollHeight - element.clientHeight - element.scrollTop,
-  )).toBeLessThanOrEqual(4);
-});
+for (const delayedFirstChunk of [false, true]) {
+  test(`keeps historical text fixed during streaming then follows an explicit jump (delayed first chunk: ${delayedFirstChunk})`, async ({ page }) => {
+    const heldPoll = delayedFirstChunk ? fixture.holdNextPoll() : null;
+    const streamedBody = page.locator('.message.agent.streamingMessage .partsStream .markdownBody');
+    try {
+      await page.locator('textarea.composerTextarea').fill('@alpha Start reading stream');
+      await page.getByRole('button', { name: 'Send message' }).click();
+      await expect(page.locator('.message.agent.streamingMessage')).toBeVisible();
+      if (heldPoll) {
+        await heldPoll.started;
+        await expect(streamedBody).toHaveCount(0);
+      }
+    } finally {
+      heldPoll?.release();
+    }
+    // The pending bubble precedes the first poll response and is not a stable scroll baseline.
+    await expect(streamedBody).toContainText('Stable heading');
+    await settleLayout(page);
+    const point = await captureHistoricalPoint(page);
+    fixture.append();
+    await expect(page.locator('.message.agent:last-child')).toContainText('Additional streaming paragraph.');
+    await settleLayout(page);
+    await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+    await page.setViewportSize(landscape);
+    await settleLayout(page);
+    await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
+    await page.getByRole('button', { name: 'Jump to latest messages' }).click();
+    fixture.append();
+    await expect(page.locator('.message.agent:last-child .markdownBody p').filter({
+      hasText: 'Additional streaming paragraph.',
+    })).toHaveCount(2);
+    const chat = page.locator('.chatContainer');
+    await expect.poll(() => chat.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop,
+    )).toBeLessThanOrEqual(4);
+    fixture.finish();
+    await expect(page.locator('.message.agent:last-child')).not.toHaveClass(/streamingMessage/);
+    await page.setViewportSize(portrait);
+    await settleLayout(page);
+    await expect.poll(() => chat.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop,
+    )).toBeLessThanOrEqual(4);
+  });
+}
 
 test('keeps short content within the available scroll range', async ({ page }) => {
   fixture.shorten();

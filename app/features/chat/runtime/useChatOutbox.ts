@@ -22,6 +22,8 @@ export function useChatOutbox(
     userId, outbox: createIndexedDbChatOutbox(userId), onChange: () => setRevision(value => value + 1),
   }), [userId]);
   const working = useRef(false);
+  const scope = useRef(userId);
+  scope.current = userId;
 
   const readChat = useCallback(async (chatId: string): Promise<OutboxRemoteChat | null> => {
     const response = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(30_000) });
@@ -37,12 +39,15 @@ export function useChatOutbox(
     setBusy(true);
     try {
       const before = await saver.list();
-      await saver.retryPending();
+      let failure = '';
+      try { await saver.retryPending(); }
+      catch (cause) { failure = cause instanceof Error ? cause.message : String(cause); }
       for (const id of new Set(before.map(entry => entry.operation.chat.id))) {
         const chat = await readChat(id);
+        if (scope.current !== userId) return;
         if (chat) recovered.current(chat);
       }
-      setError('');
+      setError(failure);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -50,7 +55,7 @@ export function useChatOutbox(
       setBusy(false);
       setRevision(value => value + 1);
     }
-  }, [authStatus, readChat, saver]);
+  }, [authStatus, readChat, saver, userId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') { setEntries([]); return; }
@@ -73,6 +78,7 @@ export function useChatOutbox(
     setBusy(true);
     try {
       const chat = await readChat(entry.operation.chat.id);
+      if (scope.current !== userId) throw new Error('Account changed. Reopen the draft using its original account.');
       const discarded = await saver.discard(entry.operation.operationId);
       if (chat) {
         saver.hydrate(chat.id, chat.messages);
@@ -87,6 +93,7 @@ export function useChatOutbox(
     setBusy(true);
     try {
       const original = await readChat(entry.operation.chat.id);
+      if (scope.current !== userId) throw new Error('Account changed. Reopen the draft using its original account.');
       const chatId = original?.id || `chat-${newOperationId()}`;
       await saver.saveCopy(entry, {
         id: chatId, name: original?.name || 'Recovered drafts',

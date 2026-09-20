@@ -50,7 +50,17 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
   }
 
   function ready() {
-    if (!initialized) initialized = outbox.list().then(entries => { for (const entry of entries) applyStaged(entry); })
+    if (!initialized) initialized = outbox.list().then(entries => {
+      const pending = new Map(entries.map(entry => [entry.operation.operationId, entry]));
+      while (pending.size) {
+        const entry = [...pending.values()].find(candidate =>
+          !Object.values(candidate.operation.dependencies || {}).some(id => pending.has(id)));
+        if (!entry) throw new Error('Local draft dependencies are invalid. Download the drafts before clearing browser storage.');
+        sequence = Math.max(sequence, entry.createdAt);
+        applyStaged(entry);
+        pending.delete(entry.operation.operationId);
+      }
+    })
       .catch(error => { initialized = undefined; throw error; });
     return initialized;
   }
@@ -156,7 +166,8 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
           operationId: newOperationId(), userId, expectedVersions, dependencies,
           chat: { ...metadata, messages: batch, removedMessageIds },
         };
-        const entry: ChatOutboxEntry = { userId, operation, createdAt: Math.max(Date.now(), ++sequence), state: 'pending' };
+        sequence = Math.max(Date.now(), sequence + 1);
+        const entry: ChatOutboxEntry = { userId, operation, createdAt: sequence, state: 'pending' };
         await outbox.put(entry);
         required.add(operation.operationId);
         applyStaged(entry);
@@ -198,6 +209,7 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       await outbox.discard(entry.operation.operationId);
       baselines.delete(entry.operation.chat.id);
     }
+    for (const entry of await outbox.list()) applyStaged(entry);
     options.onChange?.();
     return entries.filter(entry => discarded.has(entry.operation.operationId));
   }
@@ -229,7 +241,8 @@ export function createIncrementalChatSaver(request: typeof fetch = fetch, option
       chat: { ...target, ts: Date.now(), messages },
       expectedVersions: Object.fromEntries(messages.map(message => [message.id, null])),
     };
-    await outbox.put({ userId, operation, createdAt: Math.max(Date.now(), ++sequence), state: 'pending' });
+    sequence = Math.max(Date.now(), sequence + 1);
+    await outbox.put({ userId, operation, createdAt: sequence, state: 'pending' });
     applyStaged({ userId, operation, createdAt: sequence, state: 'pending' });
     options.onChange?.();
     await synchronize(target.id, new Set([operation.operationId]));

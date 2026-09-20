@@ -7,7 +7,8 @@ import type { AgentUserRequestResponse, ChatHistoryEntry, ChatMessage, DispatchT
 import { makeId, PromptSendFailedError } from './chatRunLoop';
 import { type FileCommentCallbacks, createAcpHandlers } from './chatAcpService';
 import { createOrchestrationHandlers } from './chatOrchestrationService';
-import { createPersistenceHandlers } from './chatPersistenceService';
+import { createPersistenceHandlers, type ChatSaveResult } from './chatPersistenceService';
+import { createIncrementalChatSaver } from './incrementalChatSaver';
 import { getMentionedAgentIds, getDefaultAgentId, getExistingAgentId, parseAgents, normalizeChatHistory, migrateFailedSendWarnings, lastSessionId, getMessageCopyText } from '../chatHelpers';
 import { detectWorkflowFollowUp } from '../../orchestration/workflowFollowUp';
 import { persistOrchestrationDiff, loadPersistedOrchestrations } from '../../orchestration/orchestrationPersistence';
@@ -99,6 +100,7 @@ export function useChatRuntime({
   const orchestrationModeRef = useRef(orchestrationMode);
   orchestrationModeRef.current = orchestrationMode;
   const inputHistoryRef = useRef<Record<string, string[]>>({});
+  const [chatSaver] = useState(createIncrementalChatSaver);
 
   /* ── Cross-service callback refs ── */
   const maybeAdvanceOrchestrationRef = useRef<(id: string) => Promise<void>>(async () => {});
@@ -164,7 +166,7 @@ export function useChatRuntime({
   }
 
   /* ── ACP service ── */
-  const saveChatToHistoryRef = useRef<(chatId: string) => Promise<number>>(async () => Date.now());
+  const saveChatToHistoryRef = useRef<(chatId: string) => Promise<ChatSaveResult>>(async () => ({ ok: true, savedAt: Date.now() }));
   const acpHandlers = createAcpHandlers({
     acp, sessionRunsRef, orchestrationsRef, currentChatIdRef, currentAgentSessionsRef,
     needsContextRestoreRef, chatMessagesRef, messagesRef, agentsRef,
@@ -196,6 +198,7 @@ export function useChatRuntime({
   const reconcileRunningWorkflowNodesRef = useRef<(chatId: string) => void>(() => {});
 
   const persistHandlers = createPersistenceHandlers({
+    chatSaver,
     acp, currentChatIdRef, currentAgentSessionsRef, needsContextRestoreRef,
     chatMessagesRef, messagesRef, chatNameRef, chatAgentFilterRef,
     chatHistoryRef, inputHistoryRef,
@@ -310,7 +313,6 @@ export function useChatRuntime({
       sendStatus: undefined, sendError: undefined,
       resendAgentIds: undefined, resendMessage: undefined,
     }, chatId);
-    void persistHandlers.saveChatToHistory(chatId);
   }
 
   /* ── Resend / send / stop ── */
@@ -325,6 +327,8 @@ export function useChatRuntime({
     if (agentIds.length === 0 || !resendMessage.trim()) return;
     clearUserMessageSendFailure(chatId, message.id);
     try {
+      const saved = await persistHandlers.saveChatToHistory(chatId);
+      if (!saved.ok) throw new Error(saved.error);
       await orchHandlers.dispatchParsedPrompt(agentIds, resendMessage, message.content, `resend-${makeId()}`, { chatId, sourceUserMessageId: message.id, attachments: message.attachments || [] });
     } catch (err) {
       markUserMessageSendFailed(chatId, message.id, err instanceof Error ? err.message : String(err), agentIds, resendMessage, message.attachments);
@@ -345,7 +349,7 @@ export function useChatRuntime({
     if ((!text && sendAttachments.length === 0) || agentsRef.current.length === 0) return;
     const textForAgent = text || 'Please review the attached file(s).';
     if (!currentChatIdRef.current) {
-      await persistHandlers.createNewChat(chatAgentFilterRef.current);
+      if (!await persistHandlers.createNewChat(chatAgentFilterRef.current)) return;
     }
     const sendChatPrimaryAgentId = chatHistory.find(c => c.id === currentChatIdRef.current)?.agentId || null;
     const sendFallbackAgentId = getExistingAgentId(effectiveLastUsedAgentRef.current(currentChatIdRef.current), agentsRef.current)
@@ -360,7 +364,6 @@ export function useChatRuntime({
     const sendChatId = currentChatIdRef.current;
     const userMessageId = addMessage({ type: 'user', content: text, attachments: sendAttachments.length ? sendAttachments : undefined }, sendChatId);
     setInputProgrammatic('');
-    void persistHandlers.saveChatToHistory(sendChatId);
     const allHist = inputHistoryRef.current;
     if (!allHist[sendChatId]) allHist[sendChatId] = [];
     const chatHist = allHist[sendChatId];
@@ -370,6 +373,8 @@ export function useChatRuntime({
     inputDraftRef.current = '';
     try { window.localStorage.setItem(STORAGE_INPUT_HISTORY, JSON.stringify(allHist)); } catch { /* ignore */ }
     try {
+      const saved = await persistHandlers.saveChatToHistory(sendChatId);
+      if (!saved.ok) throw new Error(saved.error);
       const followUp = detectWorkflowFollowUp(orchestrationsRef.current, sendChatId, messagesRef.current);
       const followUpActive = !!followUp && followUp.orchestrationId !== dismissedFollowUpOrchId;
       // If a LIVE workflow has awaiting nodes and the user's send targets any
@@ -457,7 +462,12 @@ export function useChatRuntime({
     if (!trimmed || awaitingAgentIds.length === 0) return;
     const sendChatId = currentChatIdRef.current;
     if (!sendChatId) return;
-    addMessage({ type: 'user', content: trimmed }, sendChatId);
+    const userMessageId = addMessage({ type: 'user', content: trimmed }, sendChatId);
+    const saved = await persistHandlers.saveChatToHistory(sendChatId);
+    if (!saved.ok) {
+      markUserMessageSendFailed(sendChatId, userMessageId, saved.error, awaitingAgentIds, trimmed);
+      return;
+    }
     // Don't mark dismissed here: the awaiting nodes will flip to 'running'
     // below and detection naturally returns null until/unless the same node
     // asks another question — at which point we DO want the card to reappear.
@@ -601,6 +611,7 @@ export function useChatRuntime({
       setActiveSidebarChatId(target.chatId);
     },
     onChatLoaded(target, chat: InitialChatRecord, isCurrent) {
+      chatSaver.hydrate(target.chatId, chat.messages || []);
       const agentSessions = chat.agentSessions || {};
       const isReviewChat = target.chatId.startsWith('comment-review:');
       const migration = migrateFailedSendWarnings(

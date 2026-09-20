@@ -284,7 +284,17 @@ export function createAcpHandlers(ctx: AcpServiceContext) {
             parts: parts.length ? parts : undefined,
             userRequest: undefined,
           }, effectiveChatId);
-          await ctx.acp({ action: 'turn-clear', agentId, chatId: effectiveChatId }).catch(() => null);
+          try {
+            const cleared = await ctx.acp({ action: 'turn-clear', agentId, chatId: effectiveChatId });
+            if (!cleared?.ok) throw new Error(cleared?.error || 'Failed to save agent reply');
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            console.error('Failed to finalize agent reply', error);
+            ctx.addMessage({
+              type: 'system',
+              content: `Could not confirm agent reply was saved: ${error}. Keep this tab open and retry loading the chat when the connection recovers.`,
+            }, effectiveChatId);
+          }
           const completedCommentId = current.commentId;
           finalizeRun(runKey);
           if (effectiveChatId && fcCbs) {

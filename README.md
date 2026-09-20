@@ -49,6 +49,21 @@ case, not a guarantee across every browser or OS version.
 
 For persistent deployment, use one of the platform-specific scripts below. Both handle build + restart + health check in one command.
 
+### Chat persistence and proxy limits
+
+The browser saves new or changed messages incrementally instead of uploading
+the entire conversation. Updates are batched toward 512 KiB; ACP tool and
+thinking parts are stored directly by the server and are not re-uploaded by the
+browser. Existing history is retained when another tab saves its changes.
+
+User messages must be saved successfully before they are sent to an agent.
+If saving fails (including an HTTP 413 from a reverse proxy), the chat shows
+an error and keeps the message available for **Retry**. Keep the tab open until
+the retry succeeds; unsaved messages are not durable across a page reload.
+A single message or attachment can still exceed the proxy's request limit:
+reduce its size or configure the proxy to accept it. This change does not
+restore messages that were already missing from the database.
+
 ### Binary release bundles
 
 GitHub Releases can also publish prebuilt runtime bundles for Windows and Linux. Each release asset contains the Next.js standalone server output, static assets, `public/`, `.env.example`, and startup scripts:

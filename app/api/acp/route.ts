@@ -9,6 +9,7 @@ import {
   getChat,
   reconcileStalePendingMessagesForAgent,
   saveChat,
+  updateChatMessage,
   StoredMessage,
   updateChatAgentSession,
 } from '@/lib/chatStore';
@@ -825,36 +826,24 @@ function buildStoredParts(events: TurnEvent[]): StoredContentPart[] {
 
 async function persistTurnSnapshot(turn: TurnState): Promise<void> {
   if (!turn.chatId) return;
-  const chat = await getChat(turn.userId, turn.chatId);
-  if (!chat) return;
 
   const parts = buildStoredParts(turn.events);
   const content = turn.done
     ? (turn.fullText.trim() || (turn.error ? `⚠️ ${turn.error}` : ''))
     : turn.fullText.trim();
-  const existingIndex = chat.messages.findIndex(m => m.id === turn.messageId);
-  const existing = existingIndex >= 0 ? chat.messages[existingIndex] : null;
-  const message = {
-    ...(existing || {}),
+  const message: StoredMessage = {
     id: turn.messageId,
     type: 'agent' as const,
     content,
     agentId: turn.agentId,
-    ts: existing?.ts ?? turn.startedAt,
+    ts: turn.startedAt,
     pending: !turn.done,
     statusText: turn.done ? undefined : turn.statusText,
     ptyPhase: turn.done ? undefined : turn.phase,
     parts: parts.length ? parts : undefined,
     userRequest: turn.done ? undefined : turn.userRequest,
-  } as StoredMessage & { pending?: boolean; statusText?: string; ptyPhase?: string; parts?: StoredContentPart[]; userRequest?: PendingUserRequest };
-
-  if (existingIndex >= 0) {
-    chat.messages[existingIndex] = message;
-  } else {
-    chat.messages.push(message);
-  }
-  chat.ts = Date.now();
-  await saveChat(turn.userId, chat);
+  };
+  await updateChatMessage(turn.userId, turn.chatId, message);
   turn.lastPersistedAt = Date.now();
 }
 
@@ -2286,6 +2275,11 @@ export async function POST(req: NextRequest) {
       const turnChatKey = chatId || '__default';
       const turn = sess.activeTurns.get(turnChatKey);
       if (turn) {
+        if (turn.persistTimer) {
+          clearTimeout(turn.persistTimer);
+          turn.persistTimer = undefined;
+        }
+        await persistTurnSnapshot(turn);
         clearPendingUserRequestForTurn(turn, 'cleared');
         turn.events = [];
         sess.activeTurns.delete(turnChatKey);

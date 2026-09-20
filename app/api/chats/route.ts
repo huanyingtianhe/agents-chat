@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { listChats, getChat, mergeChat, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
+import { listChats, getChat, mergeChat, saveChatDelta, deleteChat, renameChat, migrateFromJson, getLastChatId, setLastChatId, StoredChat, deleteOrchestrationsForChat, searchChats, updateChatGitContext } from '@/lib/chatStore';
+import { isStoredChatDelta } from '@/lib/chatDeltaValidation';
 import { hasPersistedAgentSession } from '@/app/features/chat/chatHelpers';
 import { getGitContextOptions, isValidStoredGitContext, validateGitContext } from '@/lib/gitContext';
 import { getAgentById, getAllAgents, getUserChatLastUsedAgent, getUserLastUsedAgent, getUserSettings } from '@/lib/configStore';
@@ -128,6 +129,14 @@ export async function POST(req: NextRequest) {
 
   const userId = getUserId(token);
   const body = await req.json().catch(() => ({}));
+
+  if (body?.action === 'save-delta') {
+    if (!isStoredChatDelta(body.chat)) {
+      return NextResponse.json({ ok: false, error: 'invalid_chat_delta' }, { status: 400 });
+    }
+    await saveChatDelta(userId, body.chat);
+    return NextResponse.json({ ok: true });
+  }
 
   // Admin-only: migrate JSON files to SQLite
   if (body?.action === 'migrate') {

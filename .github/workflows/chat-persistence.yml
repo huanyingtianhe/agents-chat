@@ -1,0 +1,113 @@
+name: Chat persistence
+
+on:
+  push:
+    branches:
+      - fix/incremental-chat-history
+  pull_request:
+    paths:
+      - 'app/features/chat/**'
+      - 'app/api/chats/**'
+      - 'app/api/acp/**'
+      - 'lib/chatStore.ts'
+      - 'lib/chatDeltaValidation.ts'
+      - 'tests/chat-*'
+      - '.github/workflows/chat-persistence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-persistence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      NEXTAUTH_SECRET: isolated-chat-persistence-ci-secret
+      NEXTAUTH_URL: http://localhost:3011
+      PLAYWRIGHT_BASE_URL: http://localhost:3011
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies and browsers
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium webkit
+      - name: Persistence logic regressions
+        run: >-
+          npx --yes --package=tsx@4.20.6 tsx --test
+          tests/chat-incremental-save.test.ts
+          tests/chat-store-delta.test.ts
+          tests/chat-store-message-merge.test.ts
+          tests/chat-store-stale-reconciliation.test.ts
+          tests/chat-selection-load-guard.test.ts
+      - name: Build and check types
+        run: |
+          npm run build
+          npx tsc --noEmit --incremental false
+      - name: Start isolated application
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' "$GITHUB_SHA" > artifacts/revision.txt
+          node_modules/.bin/next start --hostname 127.0.0.1 --port 3011 >artifacts/server.log 2>&1 &
+          server_pid=$!
+          echo "$server_pid" > artifacts/server.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --max-time 3 "$PLAYWRIGHT_BASE_URL/login" >/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat artifacts/server.log
+              exit 1
+            fi
+            sleep 2
+          done
+          cat artifacts/server.log
+          exit 1
+      - name: Large history, API, failures, and chat selection
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          tests/chat-persistence.spec.ts tests/chat-selection-loading.spec.ts
+          --project=desktop-chromium --workers=1
+          --timeout=60000 --global-timeout=480000 --max-failures=3
+          --trace=retain-on-failure --reporter=line
+          --output=artifacts/persistence
+      - name: Existing send and persistence behavior
+        run: >-
+          npx playwright test --config tests/playwright.config.ts tests/test-ui.spec.ts
+          --project=desktop-chromium --workers=1
+          --grep='should send a message and receive a reply|should show failed send status on the user message and allow resend|should remove partial workflow agent messages when one initial send fails|should persist messages to SQLite after send and reload|should preserve messages when a stale browser saves the same chat|should switch between chats and remember context|attachment-only send is allowed|should manually resend a mentioned failed message'
+          --timeout=60000 --global-timeout=480000 --max-failures=3
+          --trace=retain-on-failure --reporter=line
+          --output=artifacts/existing-behavior
+      - name: Mobile persistence
+        run: >-
+          npx playwright test --config tests/playwright.config.ts tests/chat-persistence.spec.ts
+          --project=iphone-webkit --project=android-chromium --workers=1
+          --timeout=60000 --global-timeout=480000 --max-failures=3
+          --trace=retain-on-failure --reporter=line
+          --output=artifacts/mobile
+      - name: Stop isolated application
+        if: always()
+        run: |
+          if [ -f artifacts/server.pid ]; then
+            server_pid="$(cat artifacts/server.pid)"
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid"
+            fi
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-persistence-evidence
+          path: artifacts/
+          retention-days: 7

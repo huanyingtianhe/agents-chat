@@ -1,6 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { ChatHistoryEntry, ChatMessage, ShareDialog } from '../chatTypes';
-import { getPersistableMessages, migrateFailedSendWarnings, normalizeChatHistory, lastSessionId } from '../chatHelpers';
+import { migrateFailedSendWarnings, normalizeChatHistory, lastSessionId } from '../chatHelpers';
+import { postChatJson, type IncrementalChatSaver } from './incrementalChatSaver';
 import { STORAGE_INPUT_HISTORY } from './sessionPersistence';
 import {
   collectInterruptedAgentIds,
@@ -9,8 +10,10 @@ import {
 } from './reconcileStalePendingMessages';
 
 export type LoadChatResult = 'loaded' | 'failed' | 'superseded';
+export type ChatSaveResult = { ok: true; savedAt: number } | { ok: false; error: string };
 
 export type PersistenceContext = {
+  chatSaver: IncrementalChatSaver;
   acp: (body: Record<string, unknown>) => Promise<any>;
   currentChatIdRef: MutableRefObject<string>;
   currentAgentSessionsRef: MutableRefObject<Record<string, string>>;
@@ -40,20 +43,34 @@ export type PersistenceContext = {
 };
 
 export function createPersistenceHandlers(ctx: PersistenceContext) {
+  function showSaveError(chatId: string, error: string | null) {
+    const id = `chat-save-error:${chatId}`;
+    const messages = ctx.chatMessagesRef.current[chatId] || ctx.messagesRef.current;
+    const next = messages.filter(message => message.id !== id);
+    if (error) {
+      console.error('Failed to save chat', { chatId, error });
+      next.push({ id, type: 'system', content: `${error} Unsaved messages remain in this tab; do not reload before retrying.`, ts: Date.now() });
+      if (!ctx.currentChatIdRef.current) {
+        ctx.setShareDialog({ variant: 'error', title: 'Failed to save chat', detail: error });
+      }
+    }
+    if (error || next.length !== messages.length) ctx.setMessagesForChat(chatId, next);
+  }
+
   async function persistLoadedChatMigration(
     chatId: string, name: string, ts: number,
     chatMessages: ChatMessage[], agentSessions: Record<string, string>,
   ) {
     const chatData = {
       id: chatId, name: name || chatId, ts: ts || Date.now(),
-      messages: getPersistableMessages(chatMessages), agentSessions,
+      messages: chatMessages, agentSessions,
     };
     try {
-      await fetch('/api/chats', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat: chatData }),
-      });
-    } catch { /* ignore */ }
+      await ctx.chatSaver.save(chatData);
+      showSaveError(chatId, null);
+    } catch (err) {
+      showSaveError(chatId, err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function loadChatIntoCache(chatId: string) {
@@ -61,6 +78,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
       const res = await fetch(`/api/chats?id=${encodeURIComponent(chatId)}`);
       const data = await res.json();
       if (data.ok && data.chat) {
+        ctx.chatSaver.hydrate(chatId, data.chat.messages || []);
         const agentSessions = data.chat.agentSessions || {};
         const isReviewChat = typeof chatId === 'string' && chatId.startsWith('comment-review:');
         const migration = migrateFailedSendWarnings(data.chat.messages || [], agentSessions, {
@@ -86,8 +104,8 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     }
   }
 
-  async function saveChatToHistory(chatId: string, _preserveOrder = false) {
-    if (!chatId) return Date.now();
+  async function saveChatToHistory(chatId: string, _preserveOrder = false): Promise<ChatSaveResult> {
+    if (!chatId) return { ok: true, savedAt: Date.now() };
     const currentMessages = ctx.chatMessagesRef.current[chatId]
       || (chatId === ctx.currentChatIdRef.current ? ctx.messagesRef.current : []);
     const existingHistoryEntry = ctx.chatHistoryRef.current.find(c => c.id === chatId);
@@ -102,31 +120,29 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
       ? (firstUser.content.trim().slice(0, 50) || (attachmentName ? `Attached file: ${attachmentName}`.slice(0, 50) : currentName))
       : currentName;
     const name = hasCustomName ? existingHistoryEntry!.name : autoName;
-    const persistable = getPersistableMessages(currentMessages);
     const agentSessions = chatId === ctx.currentChatIdRef.current
       ? ctx.currentAgentSessionsRef.current
       : (existingHistoryEntry?.agentSessions || {});
     const agentId = existingHistoryEntry?.agentId || '';
     const savedAt = existingHistoryEntry?.ts ?? Date.now();
-    const chatData = { id: chatId, name, ts: savedAt, messages: persistable, agentSessions, agentId };
+    const chatData = { id: chatId, name, ts: savedAt, messages: currentMessages, agentSessions, agentId };
     try {
-      await fetch('/api/chats', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat: chatData }),
-      });
+      await ctx.chatSaver.save(chatData);
       if (chatId === ctx.currentChatIdRef.current) {
-        await fetch('/api/chats', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'set-last-chat', chatId }),
-        });
+        await postChatJson({ action: 'set-last-chat', chatId });
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      showSaveError(chatId, error);
+      return { ok: false, error };
+    }
+    showSaveError(chatId, null);
     ctx.setChatHistory(prev => {
       const entry = { id: chatId, name, ts: savedAt, agentSessions, agentId };
       if (prev.some(c => c.id === chatId)) return prev.map(c => c.id === chatId ? entry : c);
       return normalizeChatHistory([entry, ...prev]);
     });
-    return savedAt;
+    return { ok: true, savedAt };
   }
 
   async function saveCurrentChatToHistory(preserveOrder = false) {
@@ -153,8 +169,12 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
     if (chatId === currentChatId) return 'loaded';
 
     ctx.setActiveSidebarChatId(chatId);
-    await saveCurrentChatToHistory(true);
+    const saveResult = await saveCurrentChatToHistory(true);
     if (!isCurrentSelection()) return 'superseded';
+    if (!saveResult.ok) {
+      ctx.setActiveSidebarChatId(currentChatId);
+      return 'failed';
+    }
 
     let targetMessages: ChatMessage[] = [];
     let targetName = ctx.chatHistoryRef.current.find(c => c.id === chatId)?.name || chatId;
@@ -171,6 +191,7 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
         return 'failed';
       }
       if (data.ok && data.chat) {
+        ctx.chatSaver.hydrate(chatId, data.chat.messages || []);
         agentSessions = data.chat.agentSessions || {};
         const cachedMessages = ctx.chatMessagesRef.current[chatId];
         if (cachedMessages) {
@@ -291,16 +312,16 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
   }
 
   async function createNewChat(chatAgentFilter?: string | null) {
-    await saveCurrentChatToHistory();
+    if (!(await saveCurrentChatToHistory()).ok) return null;
     const newName = 'New Chat';
     const newId = `chat-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const newEntry: ChatHistoryEntry = { id: newId, name: newName, ts: Date.now(), agentId: chatAgentFilter || undefined };
     try {
-      await fetch('/api/chats', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat: { ...newEntry, messages: [], agentSessions: {} } }),
-      });
-    } catch { /* ignore */ }
+      await ctx.chatSaver.save({ ...newEntry, messages: [], agentSessions: {} });
+    } catch (err) {
+      showSaveError(ctx.currentChatIdRef.current, err instanceof Error ? err.message : String(err));
+      return null;
+    }
     ctx.currentChatIdRef.current = newId;
     clearChatMessages({ clearAgentFilter: false });
     ctx.setChatName(newName);
@@ -328,7 +349,11 @@ export function createPersistenceHandlers(ctx: PersistenceContext) {
   }
 
   async function shareCurrentChat(chatId: string) {
-    await saveCurrentChatToHistory();
+    const result = await saveChatToHistory(chatId);
+    if (!result.ok) {
+      ctx.setShareDialog({ variant: 'error', title: 'Share failed', detail: result.error });
+      return;
+    }
     try {
       const res = await fetch('/api/share', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

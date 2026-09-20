@@ -303,6 +303,53 @@ export async function mergeChat(userId: string, chat: StoredChat): Promise<void>
   merge();
 }
 
+export type StoredChatDelta = StoredChat & { removedMessageIds?: string[] };
+
+export async function saveChatDelta(userId: string, delta: StoredChatDelta): Promise<void> {
+  const db = getDb();
+  db.transaction(() => {
+    const existing = getChatWithDb(db, userId, delta.id);
+    const removed = new Set(delta.removedMessageIds);
+    const messages = new Map((existing?.messages || [])
+      .filter(message => message.type === 'user' || !removed.has(message.id))
+      .map(message => [message.id, message]));
+    for (const message of delta.messages) {
+      const saved = messages.get(message.id);
+      if (saved?.pending === false && message.pending === true) continue;
+      messages.set(message.id, message.type === 'agent' && saved?.parts && !message.parts
+        ? { ...message, parts: saved.parts }
+        : message);
+    }
+    saveChatWithDb(db, userId, {
+      ...delta,
+      gitContext: existing?.gitContext,
+      messages: [...messages.values()].sort((a, b) => a.ts - b.ts),
+    });
+  })();
+}
+
+/** Apply a server snapshot without replacing messages saved by another request. */
+export async function updateChatMessage(userId: string, chatId: string, message: StoredMessage): Promise<boolean> {
+  const db = getDb();
+  return db.transaction(() => {
+    const chat = getChatWithDb(db, userId, chatId);
+    if (!chat) return false;
+    const index = chat.messages.findIndex(saved => saved.id === message.id);
+    const existing = index >= 0 ? chat.messages[index] : undefined;
+    const next = {
+      ...existing, ...message,
+      ts: existing?.ts ?? message.ts,
+      parts: message.parts ?? existing?.parts,
+    };
+    if (index < 0) chat.messages.push(next);
+    else chat.messages[index] = next;
+    chat.messages.sort((a, b) => a.ts - b.ts);
+    chat.ts = Date.now();
+    saveChatWithDb(db, userId, chat);
+    return true;
+  })();
+}
+
 export async function reconcileStalePendingMessagesForAgent(
   userId: string,
   chatId: string,

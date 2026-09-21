@@ -23,7 +23,7 @@ test('new chat welcomes without adding history and disappears on first message',
   await expect(welcome.getByText('Type / for commands')).toBeVisible();
   await expect(welcome.getByText('Use @ to mention an agent')).toBeVisible();
   await expect(page.locator('.message')).toHaveCount(0);
-  await page.screenshot({ path: info.outputPath('new-chat-welcome.png') });
+  await page.screenshot({ path: info.outputPath('new-chat-welcome.png'), animations: 'disabled', scale: 'css' });
   const composer = page.locator('textarea.composerTextarea');
   await composer.fill('Keep my draft');
   await expect(welcome).toBeVisible();
@@ -51,7 +51,7 @@ test('empty chat survives reload and fits a short landscape viewport', async ({ 
   if (info.project.name !== 'desktop-chromium') {
     await expect(page.locator('textarea.composerTextarea')).toHaveCSS('font-size', '16px');
   }
-  await page.screenshot({ path: info.outputPath('welcome-landscape.png') });
+  await page.screenshot({ path: info.outputPath('welcome-landscape.png'), animations: 'disabled', scale: 'css' });
 });
 
 test('placeholder uses chat body typography while mobile input avoids focus zoom', async ({ page }, info) => {

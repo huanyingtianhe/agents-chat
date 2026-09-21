@@ -45,7 +45,7 @@
   padding: 14px 16px;
   border-radius: 18px;
   line-height: 1.5;
-  font-size: 13.5px;
+  font-size: var(--chat-body-font-size);
   border: 1px solid var(--border);
   box-shadow: 0 14px 30px rgba(0,0,0,0.08);
   position: relative;

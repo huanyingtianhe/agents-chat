@@ -28,6 +28,11 @@ Open [https://localhost:3010](https://localhost:3010).
 
 ## Mobile browser compatibility
 
+New and restored empty chats show a welcome view with `/` command and `@`
+agent hints until the first conversation message. This view is not saved as
+chat history. The composer placeholder shares the message-body typography;
+mobile input text remains at least 16px to avoid focus-triggered zoom.
+
 Markdown uses a document-wide text-adjustment policy to keep its font
 sizes stable across portrait and landscape. Native pinch zoom remains
 available.

@@ -2,6 +2,7 @@
   color-scheme: dark;
   --bg: #0a0e1a;
   --text: #e7edf8;
+  --chat-body-font-size: 13.5px;
 }
 
 /* Light themes opt into the light color-scheme so native form controls

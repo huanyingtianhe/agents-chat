@@ -6,9 +6,11 @@ import type { ChatMessage, AgentUserRequestResponse } from '../../chat/chatTypes
 import { useStableCallback } from '../../chat/hooks/useStableCallback';
 import type { FailedSendByMessageId } from '../messageTypes';
 import { MessageBubble, getMessageCopyText } from './MessageBubble';
+import { ChatWelcome } from './ChatWelcome';
 
 export function MessageList({
   messages,
+  isEmptyChat,
   agents,
   expandedMessages,
   failedSendByMessageId,
@@ -19,6 +21,7 @@ export function MessageList({
   onDismissAgentUserRequest,
 }: {
   messages: ChatMessage[];
+  isEmptyChat: boolean;
   agents: Agent[];
   expandedMessages: Record<string, boolean>;
   failedSendByMessageId: FailedSendByMessageId;
@@ -139,6 +142,7 @@ export function MessageList({
           ))}
         </div>
       ) : null}
+      {isEmptyChat ? <ChatWelcome /> : null}
       {chatMessages.map((message) => (
         <MessageBubble
           key={message.id}

@@ -1,0 +1,64 @@
+name: Chat welcome UX
+on:
+  push:
+    branches: [fix/chat-welcome-typography]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chat-welcome-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  welcome:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      NEXTAUTH_SECRET: isolated-welcome-ci-secret
+      NEXTAUTH_URL: http://localhost:3011
+      PLAYWRIGHT_BASE_URL: http://localhost:3011
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Build and check types
+        run: npm run build && npx tsc --noEmit --incremental false
+      - name: Start isolated application
+        run: |
+          mkdir artifacts
+          node_modules/.bin/next start --hostname 127.0.0.1 --port 3011 > artifacts/server.log 2>&1 &
+          echo "$!" > artifacts/server.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://localhost:3011/login >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Welcome and typography across devices
+        run: >-
+          npx playwright test --config tests/playwright.config.ts tests/chat-welcome.spec.ts
+          --workers=1 --timeout=45000 --global-timeout=420000 --max-failures=3
+          --trace=retain-on-failure --reporter=line --output=artifacts/welcome
+      - name: Loading and mobile composer regressions
+        run: >-
+          npx playwright test --config tests/playwright.config.ts
+          tests/chat-selection-loading.spec.ts tests/mobile-composer-viewport.spec.ts
+          --workers=1 --timeout=60000 --global-timeout=480000 --max-failures=2
+          --trace=retain-on-failure --reporter=line --output=artifacts/regression
+      - name: Stop app
+        if: always()
+        run: |
+          if [ -f artifacts/server.pid ] && kill -0 "$(cat artifacts/server.pid)" 2>/dev/null; then
+            kill "$(cat artifacts/server.pid)"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-welcome-${{ github.sha }}
+          path: artifacts/
+          retention-days: 7

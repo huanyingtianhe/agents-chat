@@ -326,7 +326,7 @@ test('saves an individual oversized Unicode message and attachments, then sends 
     expect(attachment?.size).toBe(900_000);
     expect(attachment?.dataUrl.length).toBeGreaterThan(1024 * 1024);
     expect(Math.max(...fixture.saveSizes)).toBeLessThan(1024 * 1024);
-    expect(fixture.savedBeforeSend).toEqual([true, true]);
+    await expect.poll(() => fixture.savedBeforeSend).toEqual([true, true]);
   } finally {
     await page.goto('about:blank');
     await page.context().request.delete(`/api/chats?id=${fixture.chat.id}`);

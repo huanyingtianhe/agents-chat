@@ -227,6 +227,9 @@
   min-width: 0;
   gap: inherit;
 }
+.chatPageRoot .chatScrollContent:has(> .chatWelcome) {
+  flex-grow: 1;
+}
 .chatPageRoot .workflowFollowUpCard {
   margin: 12px 0 4px;
   padding: 12px 14px;

@@ -288,7 +288,7 @@ export function ChatPageClient() {
       <div className="chatMessagesArea">
         <section className="chatContainer" ref={attachChatContainer} tabIndex={-1}>
           <div className="chatScrollContent">
-            <MessageList messages={visibleMessages} agents={agents} expandedMessages={expandedMessages} failedSendByMessageId={failedSendByMessageId} onToggleExpanded={toggleMessageExpanded} onRetryFailedSend={retryFailedSend} onOpenImage={setLightboxImage} onAnswerAgentUserRequest={answerAgentUserRequest} onDismissAgentUserRequest={dismissAgentUserRequest} />
+            <MessageList messages={visibleMessages} isEmptyChat={messages.every(message => message.type === 'system')} agents={agents} expandedMessages={expandedMessages} failedSendByMessageId={failedSendByMessageId} onToggleExpanded={toggleMessageExpanded} onRetryFailedSend={retryFailedSend} onOpenImage={setLightboxImage} onAnswerAgentUserRequest={answerAgentUserRequest} onDismissAgentUserRequest={dismissAgentUserRequest} />
             {showFollowUpHint && workflowFollowUp ? <WorkflowFollowUpCard agentIds={workflowFollowUp.awaitingAgentIds} agents={agents} onReply={(text) => sendWorkflowFollowUpReply(text, workflowFollowUp.awaitingAgentIds, workflowFollowUp.orchestrationId)} onDismiss={() => setDismissedFollowUpOrchId(workflowFollowUp.orchestrationId)} /> : null}
           </div>
         </section>

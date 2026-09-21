@@ -355,12 +355,14 @@
   color: var(--text);
   outline: none;
   line-height: 1.5;
-  font-size: 15px;
-  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-size: var(--chat-body-font-size);
+  font-family: inherit;
 }
 
 .composerTextarea::placeholder {
   color: var(--muted);
+  font-size: var(--chat-body-font-size);
+  font-family: inherit;
 }
 
 .targetPills {
@@ -644,5 +646,12 @@
 
   .composerToolbarActions {
     flex: 0 0 auto;
+  }
+}
+
+@media (hover: none) and (pointer: coarse), (max-width: 560px) {
+  .composerTextarea {
+    /* Keep iOS from zooming the page when the field receives focus. */
+    font-size: 16px;
   }
 }

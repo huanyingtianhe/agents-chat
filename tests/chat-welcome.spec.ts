@@ -16,18 +16,42 @@ test('new chat welcomes without adding history and disappears on first message',
   await expect(welcome).toHaveCount(0);
   await openNavigation(page);
   await page.getByRole('button', { name: /New Chat/ }).first().click();
+  await expect(page.locator('.chatWelcome')).toBeAttached();
+  const closeNavigation = page.getByRole('button', { name: 'Close navigation', exact: true });
+  if (await closeNavigation.isVisible()) await closeNavigation.click();
   await expect(welcome).toBeVisible();
   await expect(welcome.getByText('Type / for commands')).toBeVisible();
   await expect(welcome.getByText('Use @ to mention an agent')).toBeVisible();
   await expect(page.locator('.message')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('new-chat-welcome.png') });
   const composer = page.locator('textarea.composerTextarea');
   await composer.fill('Keep my draft');
   await expect(welcome).toBeVisible();
-  await page.screenshot({ path: info.outputPath('new-chat-welcome.png') });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect(page.locator('.message.user')).toContainText('Keep my draft');
   await expect(welcome).toHaveCount(0);
+});
+
+test('empty chat survives reload and fits a short landscape viewport', async ({ page }, info) => {
+  await page.route('**/api/chats**', async route => {
+    if (route.request().method() !== 'GET'
+      || new URL(route.request().url()).searchParams.get('id') !== 'mobile-chat') return route.fallback();
+    await route.fulfill({ json: { ok: true, chat: {
+      id: 'mobile-chat', name: 'Mobile coverage', ts: 1000, agentSessions: {}, messages: [],
+    } } });
+  });
+  await page.reload();
+  const welcome = page.getByRole('region', { name: 'Welcome to Agents Chat' });
+  await expect(welcome).toBeVisible();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(welcome).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeInViewport();
+  if (info.project.name !== 'desktop-chromium') {
+    await expect(page.locator('textarea.composerTextarea')).toHaveCSS('font-size', '16px');
+  }
+  await page.screenshot({ path: info.outputPath('welcome-landscape.png') });
 });
 
 test('placeholder uses chat body typography while mobile input avoids focus zoom', async ({ page }, info) => {

@@ -640,18 +640,18 @@
     padding: 7px 0 6px;
   }
 
-  @media (hover: none) and (pointer: coarse), (max-width: 560px) {
-    .composerTextarea {
-      /* Keep iOS from zooming the page when the field receives focus. */
-      font-size: 16px;
-    }
-  }
-
   .composerActions {
     justify-content: flex-end;
   }
 
   .composerToolbarActions {
     flex: 0 0 auto;
+  }
+}
+
+@media (hover: none) and (pointer: coarse), (max-width: 560px) {
+  .composerTextarea {
+    /* Keep iOS from zooming the page when the field receives focus. */
+    font-size: 16px;
   }
 }

@@ -393,7 +393,8 @@
 .targetPill {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
+  height: var(--control-height);
+  min-height: var(--control-height);
   padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
@@ -450,9 +451,9 @@
 
 /* ── Attach button ── */
 .attachButton {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
   padding: 0;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -496,9 +497,9 @@
 
 /* ── Send / stop buttons ── */
 .sendButton {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
   padding: 0 !important;
   border-radius: 999px !important;
   border: 1px solid var(--send-button-border, color-mix(in srgb, var(--accent) 30%, transparent)) !important;
@@ -608,11 +609,11 @@
     overflow-x: auto;
     overflow-y: hidden;
     gap: 6px;
-    /* Keep the final pill outside the fade when scrolled all the way right. */
-    padding-right: 12px;
-    scroll-padding-right: 12px;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
+    /* Keep the first and last pills clear of the fades at the scroll limits. */
+    padding-inline: 12px;
+    scroll-padding-inline: 12px;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }

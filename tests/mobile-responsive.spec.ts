@@ -98,7 +98,7 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       json: { ok: true, repo: [], user: [] },
     }));
     await page.getByRole('button', { name: 'More actions' }).click();
-    await page.getByRole('menuitem', { name: 'Theme', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Theme' }).click();
     await page.getByRole('menuitemradio', { name: theme, exact: false }).click();
 
     const pills = page.locator('.targetPills');

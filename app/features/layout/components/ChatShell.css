@@ -41,13 +41,13 @@
   transition: grid-template-columns 0.15s ease;
 }
 .chatPageRoot .chatLayout.agentsSidebarOpen {
-  grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) 260px;
+  grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) 280px;
 }
 .chatPageRoot .chatLayout.sidebarCollapsed {
   grid-template-columns: 58px minmax(0, 1fr);
 }
 .chatPageRoot .chatLayout.sidebarCollapsed.agentsSidebarOpen {
-  grid-template-columns: 58px minmax(0, 1fr) 260px;
+  grid-template-columns: 58px minmax(0, 1fr) 280px;
 }
 .chatPageRoot .participantsSidebar {
   border-right: 1px solid var(--border);
@@ -1344,6 +1344,7 @@
   .chatPageRoot .page .participantsSidebar,
   .chatPageRoot .page .agentsSidebar {
     display: block;
+    width: min(84vw, 320px);
     position: fixed;
     top: var(--app-viewport-offset-top, 0px);
     bottom: auto;
@@ -1358,14 +1359,12 @@
   .chatPageRoot .page .participantsSidebar {
     display: flex;
     left: 0;
-    width: min(84vw, 320px);
     overflow: hidden;
     transform: translateX(-105%);
     border-right: 1px solid var(--border);
   }
   .chatPageRoot .agentsSidebar {
     right: 0;
-    width: min(92vw, 420px);
     transform: translateX(105%);
     border-left: 1px solid var(--border);
   }

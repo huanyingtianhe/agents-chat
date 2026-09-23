@@ -46,7 +46,7 @@ assert.doesNotMatch(textRowSource, /attachButton|targetControls|composerActions/
 assert.match(composerCss, /\.composerToolbar\s*\{[\s\S]*?display:\s*flex;[\s\S]*?justify-content:\s*space-between;/, 'bottom toolbar should lay out controls horizontally');
 assert.match(composerCss, /\.composerTextRow\s*\{[\s\S]*?display:\s*flex;/, 'text row should have its own layout block');
 assert.match(composerCss, /\.attachmentTray\s*\{[\s\S]*?padding:\s*0 0 2px;/, 'attachment tray should sit as the compact top strip');
-assert.match(composerCss, /\.attachButton\s*\{[\s\S]*?width:\s*32px;[\s\S]*?border-radius:\s*999px;/, 'file attachment button should use a compact rounded icon-button shape');
+assert.match(composerCss, /\.attachButton\s*\{[\s\S]*?width:\s*var\(--control-height\);[\s\S]*?border-radius:\s*999px;/, 'file attachment button should use a compact rounded icon-button shape');
 assert.doesNotMatch(composerCss, /\.attachButtonLabel\s*\{/, 'file attachment button should not include visible label styles');
 assert.match(
 	composerCss,
@@ -65,7 +65,7 @@ assert.match(
 );
 assert.match(
 	composerCss,
-	/\.targetPill\s*\{[\s\S]*?min-height:\s*28px;/,
+	/\.targetPill\s*\{[\s\S]*?min-height:\s*var\(--control-height\);/,
 	'target pills should share a stable height whether or not they include a model selector',
 );
 assert.doesNotMatch(

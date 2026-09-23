@@ -178,8 +178,8 @@ test.describe('Chat UI', () => {
     });
     expect(filesButtonStyle.display).toBe('flex');
     expect(filesButtonStyle.borderRadius).toBe('999px');
-    expect(filesButtonStyle.width).toBe('32px');
-    expect(filesButtonStyle.height).toBe('32px');
+    expect(filesButtonStyle.width).toBe('30px');
+    expect(filesButtonStyle.height).toBe('30px');
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible();
   });
 

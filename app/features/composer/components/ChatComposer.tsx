@@ -1,6 +1,6 @@
 'use client';
 
-import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
+import { useLayoutEffect, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { Agent } from '../../agents/agentTypes';
 import type { ChatAttachment } from '../attachmentTypes';
 import type { SlashCommand } from '../slashCommandTypes';
@@ -12,6 +12,8 @@ type ChatComposerProps = {
   composerRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   input: string;
+  isMobileLayout: boolean;
+  onResize: () => void;
   attachments: ChatAttachment[];
   attachmentError: string | null;
   isDraggingAttachment: boolean;
@@ -42,6 +44,8 @@ export function ChatComposer({
   composerRef,
   fileInputRef,
   input,
+  isMobileLayout,
+  onResize,
   attachments,
   attachmentError,
   isDraggingAttachment,
@@ -67,6 +71,24 @@ export function ChatComposer({
   onSend,
   onStop,
 }: ChatComposerProps) {
+  const placeholder = isMobileLayout
+    ? 'Type a message, / or @'
+    : 'Type a message, / for commands, or @ to mention an agent';
+
+  useLayoutEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    onResize();
+    let width = textarea.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (textarea.clientWidth === width) return;
+      width = textarea.clientWidth;
+      onResize();
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, [composerRef, onResize, placeholder]);
+
   return (
     <section className="chatInputDock">
       <div className="composerStack">
@@ -124,7 +146,7 @@ export function ChatComposer({
                 defaultValue={input}
                 onPaste={onPaste}
                 onKeyDown={onKeyDown}
-                placeholder="Message Agents Chat — type / for commands, @ to mention an agent"
+                placeholder={placeholder}
                 rows={1}
                 spellCheck={false}
                 onInput={onInput}

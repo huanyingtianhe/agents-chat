@@ -177,6 +177,24 @@ test('keeps latest messages at the bottom through orientation round trips', asyn
   }
 });
 
+test('keeps latest messages at the bottom while the composer is remeasured', async ({ page }) => {
+  const chat = page.locator('.chatContainer');
+  const composer = page.locator('textarea.composerTextarea');
+  await chat.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await settleLayout(page);
+  for (const size of [portrait, landscape, portrait]) {
+    await page.setViewportSize(size);
+    await settleLayout(page);
+    for (const draft of ['A', 'B', Array.from({ length: 9 }, (_, i) => `Draft line ${i}`).join('\n'), 'C', '']) {
+      await composer.fill(draft);
+      await settleLayout(page);
+      await expect.poll(() => chat.evaluate((element) =>
+        element.scrollHeight - element.clientHeight - element.scrollTop,
+      ), { message: `viewport ${size.width}, draft ${JSON.stringify(draft)}: latest stays at bottom` }).toBeLessThanOrEqual(4);
+    }
+  }
+});
+
 test('preserves bottom-visible text inside a long historical paragraph', async ({ page }) => {
   const point = await captureHistoricalPoint(page);
   for (let cycle = 0; cycle < 3; cycle++) {

@@ -1,4 +1,5 @@
 .chatPageRoot .page {
+  --control-height: 30px;
   position: relative;
   height: var(--app-viewport-height, 100dvh);
   min-height: var(--app-viewport-height, 100dvh);
@@ -40,13 +41,13 @@
   transition: grid-template-columns 0.15s ease;
 }
 .chatPageRoot .chatLayout.agentsSidebarOpen {
-  grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) 260px;
+  grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) 280px;
 }
 .chatPageRoot .chatLayout.sidebarCollapsed {
   grid-template-columns: 58px minmax(0, 1fr);
 }
 .chatPageRoot .chatLayout.sidebarCollapsed.agentsSidebarOpen {
-  grid-template-columns: 58px minmax(0, 1fr) 260px;
+  grid-template-columns: 58px minmax(0, 1fr) 280px;
 }
 .chatPageRoot .participantsSidebar {
   border-right: 1px solid var(--border);
@@ -429,9 +430,9 @@
 .chatPageRoot .headerInlineActions .ghostButton,
 .chatPageRoot .headerOverflowBtn {
   box-sizing: border-box;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
+  width: var(--control-height);
+  height: var(--control-height);
+  min-width: var(--control-height);
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -518,9 +519,10 @@
 }
 .chatPageRoot .userChip {
   display: flex;
+  height: var(--control-height);
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 4px 4px;
+  padding: 3px 8px 3px 3px;
   border-radius: 20px;
   background: var(--panel-strong);
   border: 1px solid var(--border);
@@ -528,8 +530,8 @@
   color: var(--text-soft);
 }
 .chatPageRoot .userAvatar {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
@@ -1226,7 +1228,8 @@
     display: none;
   }
   .chatPageRoot .headerOverflowWrap {
-    display: block;
+    display: flex;
+    align-items: center;
   }
   .chatPageRoot .themeMenuWrap {
     flex: none;
@@ -1268,6 +1271,10 @@
   .chatPageRoot .header {
     z-index: 23;
   }
+  .chatPageRoot .headerOverflowWrap {
+    display: flex;
+    align-items: center;
+  }
   .chatPageRoot .page:is(
     [data-mobile-overlay="navigation"],
     [data-mobile-overlay="agents"],
@@ -1296,14 +1303,22 @@
   ) .userChip {
     pointer-events: auto;
   }
-  .chatPageRoot .mobileNavigationButton {
+  .chatPageRoot .header .mobileNavigationButton,
+  .chatPageRoot .header .headerOverflowBtn {
     flex: 0 0 auto;
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
+    box-sizing: border-box;
+    width: var(--control-height);
+    min-width: var(--control-height);
+    height: var(--control-height);
+    min-height: var(--control-height);
     padding: 0;
     align-items: center;
     justify-content: center;
+    line-height: 1;
+  }
+  .chatPageRoot .header .userChip {
+    box-sizing: border-box;
+    height: var(--control-height);
   }
   .chatPageRoot .mobilePanelBackdrop {
     display: block;
@@ -1329,6 +1344,7 @@
   .chatPageRoot .page .participantsSidebar,
   .chatPageRoot .page .agentsSidebar {
     display: block;
+    width: min(84vw, 320px);
     position: fixed;
     top: var(--app-viewport-offset-top, 0px);
     bottom: auto;
@@ -1343,14 +1359,12 @@
   .chatPageRoot .page .participantsSidebar {
     display: flex;
     left: 0;
-    width: min(84vw, 320px);
     overflow: hidden;
     transform: translateX(-105%);
     border-right: 1px solid var(--border);
   }
   .chatPageRoot .agentsSidebar {
     right: 0;
-    width: min(92vw, 420px);
     transform: translateX(105%);
     border-left: 1px solid var(--border);
   }
@@ -1450,8 +1464,7 @@
   .chatPageRoot .userName {
     max-width: 76px;
   }
-  .chatPageRoot .mobileOnlyButton,
-  .chatPageRoot .mobileNavigationButton {
+  .chatPageRoot .mobileOnlyButton {
     min-height: 36px;
   }
   .chatPageRoot .ghostButton,
@@ -1459,12 +1472,6 @@
     min-height: unset;
     padding: 5px 9px;
     font-size: 14px;
-  }
-  .chatPageRoot .headerOverflowBtn {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    padding: 0;
   }
   .chatPageRoot .agentListItem {
     padding: 10px;

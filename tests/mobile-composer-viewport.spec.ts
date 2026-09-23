@@ -177,6 +177,9 @@ test('keeps composer controls above iPhone browser chrome and keyboard', async (
   await sendButton.click();
   const stopButton = page.getByRole('button', { name: 'Stop generation' });
   await expect(stopButton).toBeVisible();
+  await expect(stopButton).toHaveCSS('height', '30px');
+  await expect(stopButton).toHaveCSS('width', '30px');
+  await expect(page.locator('.attachButton')).toHaveCSS('height', '30px');
   const [stopBox, compressedAppBox] = await Promise.all([stopButton.boundingBox(), app.boundingBox()]);
   expect(stopBox).not.toBeNull();
   expect(compressedAppBox).not.toBeNull();

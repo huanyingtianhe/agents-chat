@@ -22,6 +22,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page, browser }, testInfo) => {
+  if (testInfo.status === 'skipped') return;
   await mkdir(testInfo.outputPath('evidence'), { recursive: true });
   const evidence = [
     {

@@ -25,11 +25,19 @@ export function useComposerState() {
   const resizeComposer = useCallback(() => {
     const el = composerRef.current;
     if (!el) return;
-    el.style.height = '0px';
-    el.style.overflowY = 'hidden';
-    const next = Math.min(Math.max(el.scrollHeight, 28), 300);
-    el.style.height = `${next}px`;
-    if (el.scrollHeight > 300) el.style.overflowY = 'auto';
+    const row = el.parentElement;
+    const minHeight = row?.style.minHeight ?? '';
+    // Measuring must not expand the chat viewport and clamp its scroll offset.
+    if (row) row.style.minHeight = `${row.getBoundingClientRect().height}px`;
+    try {
+      el.style.height = '0px';
+      el.style.overflowY = 'hidden';
+      const next = Math.min(Math.max(el.scrollHeight, 28), 300);
+      el.style.height = `${next}px`;
+      if (el.scrollHeight > 300) el.style.overflowY = 'auto';
+    } finally {
+      if (row) row.style.minHeight = minHeight;
+    }
   }, []);
 
   const setInputProgrammatic = useCallback((value: string) => {

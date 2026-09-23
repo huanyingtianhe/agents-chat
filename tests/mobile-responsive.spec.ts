@@ -48,17 +48,18 @@ test('mobile header controls match the account chip height', async ({ page }) =>
     const size = width <= 560 ? 30 : 34;
     const account = page.locator('.userChip');
     await expect(account).toHaveCSS('height', `${size}px`);
-    const accountBox = await account.boundingBox();
-    expect(accountBox).not.toBeNull();
 
     for (const name of ['Open navigation', 'More actions']) {
       const button = page.getByRole('button', { name });
       await expect(button).toHaveCSS('height', `${size}px`);
       await expect(button).toHaveCSS('width', `${size}px`);
-      const box = await button.boundingBox();
-      expect(box).not.toBeNull();
-      expect(Math.abs(box!.y - accountBox!.y)).toBeLessThanOrEqual(1);
     }
+    await expect.poll(() => page.locator('.header').evaluate((header) => {
+      const tops = Array.from(header.querySelectorAll(
+        '.mobileNavigationButton, .headerOverflowBtn, .userChip',
+      ), (element) => element.getBoundingClientRect().top);
+      return Math.max(...tops) - Math.min(...tops);
+    })).toBeLessThanOrEqual(1);
   }
 
   await page.getByRole('button', { name: 'Open navigation' }).click();

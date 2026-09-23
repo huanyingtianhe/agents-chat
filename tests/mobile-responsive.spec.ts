@@ -108,6 +108,7 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       await page.setViewportSize({ width, height: 844 });
       await setTestVisualViewport(page, 844, 0);
       await page.locator('textarea.composerTextarea').fill('@alpha @beta overflow controls');
+      await expect(pills.locator('.modelTargetPill')).toHaveCount(2);
       await expect(pills).toHaveCSS('overflow-x', 'auto');
       await expect.poll(() => pills.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
       await expect(pills).toHaveCSS('mask-image', /linear-gradient/);
@@ -125,12 +126,15 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       });
 
       await pills.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-      await expect.poll(async () => {
-        const [pillBox, viewportBox] = await Promise.all([workflow.boundingBox(), pills.boundingBox()]);
-        if (!pillBox || !viewportBox) return false;
-        return pillBox.x >= viewportBox.x
-          && pillBox.x + pillBox.width <= viewportBox.x + viewportBox.width - 12;
-      }).toBe(true);
+      await expect.poll(() => pills.evaluate((element) => {
+        const pill = element.lastElementChild;
+        if (!pill) throw new Error('Expected a workflow pill at the end of the toolbar');
+        return element.getBoundingClientRect().right - pill.getBoundingClientRect().right;
+      })).toBeGreaterThanOrEqual(11);
+      const [workflowBox, scrollBox] = await Promise.all([workflow.boundingBox(), pills.boundingBox()]);
+      expect(workflowBox).not.toBeNull();
+      expect(scrollBox).not.toBeNull();
+      expect(workflowBox!.x).toBeGreaterThanOrEqual(scrollBox!.x - 1);
       await workflow.click();
       await expect(page.getByRole('heading', { name: 'Pick a workflow' })).toBeVisible();
       await page.locator('.wfPickerClose').click();

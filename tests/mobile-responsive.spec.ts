@@ -215,6 +215,72 @@ for (const theme of ['VS Code Dark', 'Claude']) {
   });
 }
 
+test('mobile sidebars share navigation width while agent details stay full width', async ({ page }) => {
+  for (const width of [320, 390, 844]) {
+    await page.setViewportSize({ width, height: 844 });
+    await setTestVisualViewport(page, 844, 0);
+    const expectedWidth = Math.min(width * 0.84, 320);
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    const navigation = page.locator('.participantsSidebar');
+    await expect.poll(() => navigation.evaluate(
+      element => element.getBoundingClientRect().width,
+    )).toBeCloseTo(expectedWidth, 0);
+    await page.getByRole('button', { name: 'Close navigation' }).click();
+
+    for (const name of ['Agents', 'Nodes', 'Schedules']) {
+      await page.getByRole('button', { name: 'More actions' }).click();
+      await page.getByRole('menuitem', { name }).click();
+      const panel = page.locator(`[data-mobile-overlay-surface="${name.toLowerCase()}"]`);
+      await expect.poll(() => panel.evaluate(
+        element => element.getBoundingClientRect().width,
+      )).toBeCloseTo(expectedWidth, 0);
+      await expectDialogFitsVisualViewport(panel);
+      await expect.poll(() => panel.evaluate(
+        element => element.scrollWidth <= element.clientWidth + 1,
+      )).toBe(true);
+      if (name === 'Agents') {
+        await panel.getByText('Alpha Agent', { exact: true }).click();
+        const details = page.getByRole('dialog', { name: /Alpha Agent settings/ });
+        await expect(details).toBeVisible();
+        await expect(details).toHaveCSS('width', `${width}px`);
+        await expectDialogFitsVisualViewport(details);
+        await page.keyboard.press('Escape');
+        await expect(details).toBeHidden();
+      }
+      await page.getByRole('button', { name: `Close ${name.toLowerCase()}` }).click();
+    }
+  }
+});
+
+test('desktop sidebars default to 280px and preserve independent navigation resizing', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await setTestVisualViewport(page, 844, 0);
+  const navigation = page.locator('.participantsSidebar');
+  await expect(navigation).toHaveCSS('width', '280px');
+  for (const name of ['Agents', 'Nodes', 'Schedules']) {
+    await page.locator(`.headerInlineActions button[title="${name}"]`).click();
+    const panel = page.locator(`.agentsSidebar[data-mobile-overlay-surface="${name.toLowerCase()}"]`);
+    await expect(panel).toHaveCSS('width', '280px');
+    await page.getByRole('button', { name: `Close ${name.toLowerCase()}` }).click();
+  }
+
+  await page.locator('.headerInlineActions button[title="Agents"]').click();
+  const agents = page.locator('.agentsSidebar[data-mobile-overlay-surface="agents"]');
+  const handle = await page.locator('.sidebarResizeHandle').boundingBox();
+  expect(handle).not.toBeNull();
+  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(360, handle!.y + 40, { steps: 5 });
+  await page.mouse.up();
+  await expect(navigation).toHaveCSS('width', '360px');
+  await expect(agents).toHaveCSS('width', '280px');
+  await navigation.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await expect(navigation).toHaveCSS('width', '58px');
+  await expect(agents).toHaveCSS('width', '280px');
+  await navigation.getByRole('button', { name: 'Expand sidebar' }).click();
+  await expect(navigation).toHaveCSS('width', '360px');
+});
+
 test('separates left navigation from management actions', async ({ page }) => {
   const navigation = page.getByRole('button', { name: 'Open navigation' });
   await expect(navigation).toBeVisible();

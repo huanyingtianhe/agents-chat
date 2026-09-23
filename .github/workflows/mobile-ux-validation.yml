@@ -2,6 +2,11 @@ name: Mobile UX validation
 
 on:
   workflow_dispatch:
+    inputs:
+      grep:
+        description: Optional Playwright title filter for mobile tests
+        type: string
+        default: ''
   push:
     branches:
       - feat/mobile-web-ux-only
@@ -23,6 +28,7 @@ jobs:
       NEXTAUTH_SECRET: isolated-mobile-ux-test-secret
       NEXTAUTH_URL: http://localhost:3011
       PLAYWRIGHT_BASE_URL: http://localhost:3011
+      TEST_GREP: ${{ inputs.grep || '.' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +45,7 @@ jobs:
         run: |
           npm run build
           npx tsc --noEmit
+          node tests/composer-layout.test.mjs
       - name: Start isolated app
         timeout-minutes: 1
         run: |
@@ -63,6 +70,7 @@ jobs:
         run: >-
           npx playwright test --config tests/playwright.config.ts
           --project=iphone-webkit --timeout=60000 --global-timeout=270000
+          --grep="$TEST_GREP"
           --max-failures=1 --trace=retain-on-failure --reporter=line
           --output=artifacts/iphone
       - name: Android Chromium mobile UX
@@ -70,6 +78,7 @@ jobs:
         run: >-
           npx playwright test --config tests/playwright.config.ts
           --project=android-chromium --timeout=60000 --global-timeout=210000
+          --grep="$TEST_GREP"
           --max-failures=1 --trace=retain-on-failure --reporter=line
           --output=artifacts/android
       - name: Model picker and chat loading regressions

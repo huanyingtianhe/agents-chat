@@ -41,6 +41,108 @@ async function expectExactlyOneActiveModal(page: import('@playwright/test').Page
   await expect(page.locator('[role="dialog"][aria-modal="true"]:not([aria-hidden="true"])')).toHaveCount(1);
 }
 
+test('mobile header controls match the account chip height', async ({ page }) => {
+  for (const width of [320, 390, 560, 561, 844, 900]) {
+    await page.setViewportSize({ width, height: 844 });
+    await setTestVisualViewport(page, 844, 0);
+    const size = width <= 560 ? 30 : 34;
+    const account = page.locator('.userChip');
+    await expect(account).toHaveCSS('height', `${size}px`);
+    const accountBox = await account.boundingBox();
+    expect(accountBox).not.toBeNull();
+
+    for (const name of ['Open navigation', 'More actions']) {
+      const button = page.getByRole('button', { name });
+      await expect(button).toHaveCSS('height', `${size}px`);
+      await expect(button).toHaveCSS('width', `${size}px`);
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(Math.abs(box!.y - accountBox!.y)).toBeLessThanOrEqual(1);
+    }
+  }
+
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await expect(page.getByRole('menu', { name: 'Header actions' })).toBeVisible();
+  await page.locator('.userNameButton').click();
+  await expect(page.getByRole('dialog', { name: 'Account details' })).toBeVisible();
+});
+
+test('composer controls share a compact height on mobile and desktop', async ({ page }) => {
+  const textarea = page.locator('textarea.composerTextarea');
+  const send = page.getByRole('button', { name: 'Send message' });
+  for (const width of [320, 390, 844, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    await setTestVisualViewport(page, 844, 0);
+    for (const draft of ['', '@alpha aligned controls']) {
+      await textarea.fill(draft);
+      const controls = page.locator('.attachButton, .sendButton, .targetPill');
+      await expect(send).toHaveCSS('height', '32px');
+      const sendBox = await send.boundingBox();
+      expect(sendBox).not.toBeNull();
+      for (const control of await controls.all()) {
+        await expect(control).toHaveCSS('height', '32px');
+        const box = await control.boundingBox();
+        expect(box).not.toBeNull();
+        expect(Math.abs(box!.y - sendBox!.y)).toBeLessThanOrEqual(1);
+      }
+    }
+  }
+});
+
+for (const theme of ['VS Code Dark', 'Claude']) {
+  test(`mobile pills fade softly without covering send or the last workflow pill in ${theme}`, async ({ page }, testInfo) => {
+    await page.route('**/api/workflows', (route) => route.fulfill({
+      json: { ok: true, repo: [], user: [] },
+    }));
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('menuitem', { name: 'Theme', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: theme, exact: false }).click();
+
+    const pills = page.locator('.targetPills');
+    const workflow = pills.getByRole('button', { name: /workflow/ });
+    const send = page.getByRole('button', { name: 'Send message' });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await setTestVisualViewport(page, 844, 0);
+      await page.locator('textarea.composerTextarea').fill('@alpha @beta overflow controls');
+      await expect(pills).toHaveCSS('overflow-x', 'auto');
+      await expect.poll(() => pills.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+      await expect(pills).toHaveCSS('mask-image', /linear-gradient/);
+      await pills.evaluate((element) => { element.scrollLeft = 0; });
+      await settleChatLayout(page);
+      const [pillsBox, sendBox] = await Promise.all([pills.boundingBox(), send.boundingBox()]);
+      expect(pillsBox).not.toBeNull();
+      expect(sendBox).not.toBeNull();
+      expect(pillsBox!.x + pillsBox!.width).toBeLessThanOrEqual(sendBox!.x - 6);
+      await testInfo.attach(`composer-${theme}-${width}-overflow`, {
+        body: await page.locator('.composerShell').screenshot(),
+        contentType: 'image/png',
+      });
+
+      await pills.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+      await expect.poll(async () => {
+        const [pillBox, viewportBox] = await Promise.all([workflow.boundingBox(), pills.boundingBox()]);
+        if (!pillBox || !viewportBox) return false;
+        return pillBox.x >= viewportBox.x
+          && pillBox.x + pillBox.width <= viewportBox.x + viewportBox.width - 12;
+      }).toBe(true);
+      await workflow.click();
+      await expect(page.getByRole('heading', { name: 'Pick a workflow' })).toBeVisible();
+      await page.locator('.wfPickerClose').click();
+
+      await page.locator('textarea.composerTextarea').fill('');
+      await pills.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+      await expect(workflow).toBeVisible();
+      await testInfo.attach(`composer-${theme}-${width}-end`, {
+        body: await page.locator('.composerShell').screenshot(),
+        contentType: 'image/png',
+      });
+    }
+  });
+}
+
 test('separates left navigation from management actions', async ({ page }) => {
   const navigation = page.getByRole('button', { name: 'Open navigation' });
   await expect(navigation).toBeVisible();

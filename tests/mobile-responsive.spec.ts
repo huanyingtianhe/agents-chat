@@ -41,6 +41,50 @@ async function expectExactlyOneActiveModal(page: import('@playwright/test').Page
   await expect(page.locator('[role="dialog"][aria-modal="true"]:not([aria-hidden="true"])')).toHaveCount(1);
 }
 
+test('responsive composer placeholder stays on one line without shrinking on input', async ({ page }) => {
+  const textarea = page.locator('textarea.composerTextarea');
+  const mobilePlaceholder = 'Type a message, / or @';
+  const desktopPlaceholder = 'Type a message, / for commands, or @ to mention an agent';
+
+  for (const width of [320, 375, 390, 430, 844, 900, 901, 1280, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await setTestVisualViewport(page, 844, 0);
+    await expect(textarea).toHaveAttribute('placeholder', width <= 900 ? mobilePlaceholder : desktopPlaceholder);
+    await expect(textarea).toHaveValue('');
+    await expect.poll(() => textarea.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const singleLineHeight = parseFloat(style.lineHeight)
+        + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      return Math.abs(element.getBoundingClientRect().height - singleLineHeight);
+    })).toBeLessThanOrEqual(1);
+    const emptyHeight = await textarea.evaluate((element) => element.getBoundingClientRect().height);
+
+    for (const value of ['a', '', '字', '']) {
+      await textarea.fill(value);
+      await expect.poll(() => textarea.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      )).toBeCloseTo(emptyHeight, 0);
+    }
+
+    await textarea.fill('First line\nSecond line');
+    await expect.poll(() => textarea.evaluate(
+      (element) => element.getBoundingClientRect().height,
+    )).toBeGreaterThan(emptyHeight + 10);
+    await textarea.fill('');
+    await expect.poll(() => textarea.evaluate(
+      (element) => element.getBoundingClientRect().height,
+    )).toBeCloseTo(emptyHeight, 0);
+  }
+
+  await textarea.fill('Keep my draft');
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await expect(textarea).toHaveAttribute('placeholder', desktopPlaceholder);
+  await expect(textarea).toHaveValue('Keep my draft');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(textarea).toHaveAttribute('placeholder', mobilePlaceholder);
+  await expect(textarea).toHaveValue('Keep my draft');
+});
+
 test('mobile header controls match the account chip height', async ({ page }) => {
   for (const width of [320, 390, 560, 561, 844, 900]) {
     await page.setViewportSize({ width, height: 844 });

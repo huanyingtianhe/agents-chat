@@ -85,27 +85,27 @@ test('responsive composer placeholder stays on one line without shrinking on inp
   await expect(textarea).toHaveValue('Keep my draft');
 });
 
-test('mobile header controls match the account chip height', async ({ page }) => {
-  for (const width of [320, 390, 560, 561, 844, 900]) {
+test('mobile header controls match the account chip height on every viewport', async ({ page }) => {
+  for (const width of [320, 390, 560, 561, 844, 900, 1100, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     await setTestVisualViewport(page, 844, 0);
-    const size = width <= 560 ? 30 : 34;
     const account = page.locator('.userChip');
-    await expect(account).toHaveCSS('height', `${size}px`);
+    await expect(account).toHaveCSS('height', '30px');
 
-    for (const name of ['Open navigation', 'More actions']) {
-      const button = page.getByRole('button', { name });
-      await expect(button).toHaveCSS('height', `${size}px`);
-      await expect(button).toHaveCSS('width', `${size}px`);
+    for (const button of await page.locator('.header .ghostButton:visible').all()) {
+      await expect(button).toHaveCSS('height', '30px');
+      await expect(button).toHaveCSS('width', '30px');
     }
     await expect.poll(() => page.locator('.header').evaluate((header) => {
       const tops = Array.from(header.querySelectorAll(
-        '.mobileNavigationButton, .headerOverflowBtn, .userChip',
-      ), (element) => element.getBoundingClientRect().top);
+        '.ghostButton, .userChip',
+      )).filter((element) => element.getClientRects().length > 0)
+        .map((element) => element.getBoundingClientRect().top);
       return Math.max(...tops) - Math.min(...tops);
     })).toBeLessThanOrEqual(1);
   }
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
   await page.getByRole('button', { name: 'More actions' }).click();
@@ -123,11 +123,12 @@ test('composer controls share a compact height on mobile and desktop', async ({ 
     for (const draft of ['', '@alpha aligned controls']) {
       await textarea.fill(draft);
       const controls = page.locator('.attachButton, .sendButton, .targetPill');
-      await expect(send).toHaveCSS('height', '32px');
+      await expect(send).toHaveCSS('height', '30px');
+      await expect(page.locator('.userChip')).toHaveCSS('height', '30px');
       const sendBox = await send.boundingBox();
       expect(sendBox).not.toBeNull();
       for (const control of await controls.all()) {
-        await expect(control).toHaveCSS('height', '32px');
+        await expect(control).toHaveCSS('height', '30px');
         const box = await control.boundingBox();
         expect(box).not.toBeNull();
         expect(Math.abs(box!.y - sendBox!.y)).toBeLessThanOrEqual(1);
@@ -156,8 +157,19 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       await expect(pills).toHaveCSS('overflow-x', 'auto');
       await expect.poll(() => pills.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
       await expect(pills).toHaveCSS('mask-image', /linear-gradient/);
+      const mask = await pills.evaluate((element) => getComputedStyle(element).maskImage);
+      expect(mask.match(/transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/g)).toHaveLength(2);
       await pills.evaluate((element) => { element.scrollLeft = 0; });
       await settleChatLayout(page);
+      await expect.poll(() => pills.evaluate((element) => {
+        const first = element.firstElementChild;
+        if (!first) throw new Error('Expected a model pill at the start of the toolbar');
+        return first.getBoundingClientRect().left - element.getBoundingClientRect().left;
+      })).toBeGreaterThanOrEqual(11);
+      const model = pills.getByRole('button', { name: 'Model for alpha' });
+      await model.click();
+      await expect(page.getByRole('listbox', { name: 'Model for alpha' })).toBeVisible();
+      await model.click();
       const [pillsBox, sendBox] = await Promise.all([pills.boundingBox(), send.boundingBox()]);
       expect(pillsBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
@@ -169,6 +181,13 @@ for (const theme of ['VS Code Dark', 'Claude']) {
         contentType: 'image/png',
       });
 
+      await pills.evaluate((element) => {
+        element.scrollLeft = (element.scrollWidth - element.clientWidth) / 2;
+      });
+      await expect.poll(() => pills.evaluate((element) => element.scrollLeft)).toBeGreaterThan(12);
+      await page.locator('.composerShell').screenshot({
+        path: testInfo.outputPath(`composer-${width}-both-edges.png`),
+      });
       await pills.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
       await expect.poll(() => pills.evaluate((element) => {
         const pill = element.lastElementChild;

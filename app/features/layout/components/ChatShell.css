@@ -1255,6 +1255,7 @@
 @media (max-width: 900px) {
   .chatPageRoot .page {
     --mobile-header-height: 68px;
+    --mobile-header-control-size: 34px;
     position: fixed;
     top: var(--app-viewport-offset-top, 0px);
     right: 0;
@@ -1267,6 +1268,10 @@
   }
   .chatPageRoot .header {
     z-index: 23;
+  }
+  .chatPageRoot .headerOverflowWrap {
+    display: flex;
+    align-items: center;
   }
   .chatPageRoot .page:is(
     [data-mobile-overlay="navigation"],
@@ -1296,14 +1301,22 @@
   ) .userChip {
     pointer-events: auto;
   }
-  .chatPageRoot .mobileNavigationButton {
+  .chatPageRoot .header .mobileNavigationButton,
+  .chatPageRoot .header .headerOverflowBtn {
     flex: 0 0 auto;
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
+    box-sizing: border-box;
+    width: var(--mobile-header-control-size);
+    min-width: var(--mobile-header-control-size);
+    height: var(--mobile-header-control-size);
+    min-height: var(--mobile-header-control-size);
     padding: 0;
     align-items: center;
     justify-content: center;
+    line-height: 1;
+  }
+  .chatPageRoot .header .userChip {
+    box-sizing: border-box;
+    height: var(--mobile-header-control-size);
   }
   .chatPageRoot .mobilePanelBackdrop {
     display: block;
@@ -1416,6 +1429,7 @@
 @media (max-width: 560px) {
   .chatPageRoot .page {
     --mobile-header-height: 52px;
+    --mobile-header-control-size: 30px;
   }
   .chatPageRoot .header {
     flex-wrap: nowrap;
@@ -1450,8 +1464,7 @@
   .chatPageRoot .userName {
     max-width: 76px;
   }
-  .chatPageRoot .mobileOnlyButton,
-  .chatPageRoot .mobileNavigationButton {
+  .chatPageRoot .mobileOnlyButton {
     min-height: 36px;
   }
   .chatPageRoot .ghostButton,
@@ -1459,12 +1472,6 @@
     min-height: unset;
     padding: 5px 9px;
     font-size: 14px;
-  }
-  .chatPageRoot .headerOverflowBtn {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    padding: 0;
   }
   .chatPageRoot .agentListItem {
     padding: 10px;

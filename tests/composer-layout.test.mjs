@@ -65,7 +65,7 @@ assert.match(
 );
 assert.match(
 	composerCss,
-	/\.targetPill\s*\{[\s\S]*?min-height:\s*28px;/,
+	/\.targetPill\s*\{[\s\S]*?min-height:\s*32px;/,
 	'target pills should share a stable height whether or not they include a model selector',
 );
 assert.doesNotMatch(

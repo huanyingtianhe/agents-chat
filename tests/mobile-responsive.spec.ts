@@ -116,8 +116,10 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       expect(pillsBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
       expect(pillsBox!.x + pillsBox!.width).toBeLessThanOrEqual(sendBox!.x - 6);
+      const overflowScreenshot = testInfo.outputPath(`composer-${width}-overflow.png`);
+      await page.locator('.composerShell').screenshot({ path: overflowScreenshot });
       await testInfo.attach(`composer-${theme}-${width}-overflow`, {
-        body: await page.locator('.composerShell').screenshot(),
+        path: overflowScreenshot,
         contentType: 'image/png',
       });
 
@@ -135,8 +137,10 @@ for (const theme of ['VS Code Dark', 'Claude']) {
       await page.locator('textarea.composerTextarea').fill('');
       await pills.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
       await expect(workflow).toBeVisible();
+      const endScreenshot = testInfo.outputPath(`composer-${width}-end.png`);
+      await page.locator('.composerShell').screenshot({ path: endScreenshot });
       await testInfo.attach(`composer-${theme}-${width}-end`, {
-        body: await page.locator('.composerShell').screenshot(),
+        path: endScreenshot,
         contentType: 'image/png',
       });
     }

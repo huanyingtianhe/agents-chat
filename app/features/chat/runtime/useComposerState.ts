@@ -162,7 +162,7 @@ export function useComposerState() {
   return {
     input, inputRef, composerRef, fileInputRef, inputHistoryIndexRef, inputDraftRef, pastedLinksRef,
     attachments, attachmentError, isDraggingAttachment, mounted, setInputProgrammatic,
-    composerInputHandler, addFilesToComposer, removeAttachment, clearAttachments, prepareSubmission,
+    composerInputHandler, resizeComposer, addFilesToComposer, removeAttachment, clearAttachments, prepareSubmission,
     handleAttachmentPaste, handleComposerDragOver, handleComposerDragLeave, handleComposerDrop,
   };
 }

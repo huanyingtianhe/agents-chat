@@ -92,7 +92,7 @@ test('agent message exposes Copy and Copy-with-format buttons that write expecte
   await ensureActiveChat(page);
   await page.waitForTimeout(400);
 
-  const textarea = page.locator('textarea[placeholder^="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.fill('@alpha please reply with formatting');
   await page.locator('button[aria-label="Send message"]').click();
 

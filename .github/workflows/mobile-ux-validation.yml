@@ -87,6 +87,7 @@ jobs:
           npx playwright test --config tests/playwright.config.ts
           --project=desktop-chromium tests/agent-composer-default-model.spec.ts
           tests/chat-selection-loading.spec.ts tests/interaction-coverage.spec.ts
+          tests/composer-mention-filter-cantalk.spec.ts tests/message-copy-with-format.spec.ts
           --timeout=60000 --global-timeout=210000 --max-failures=1
           --trace=retain-on-failure --reporter=line
           --output=artifacts/desktop

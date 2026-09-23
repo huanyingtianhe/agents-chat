@@ -49,7 +49,7 @@ test('composer @-mention dropdown hides agents the user cannot talk to', async (
   await ensureActiveChat(page);
   await page.waitForTimeout(500);
 
-  const textarea = page.locator('textarea[placeholder^="Message Agents Chat"]');
+  const textarea = page.locator('textarea.composerTextarea');
   await textarea.click();
   await textarea.fill('@');
 

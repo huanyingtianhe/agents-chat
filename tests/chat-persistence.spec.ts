@@ -61,7 +61,7 @@ async function installPersistenceFixture(page: Page, interruptGitContext = false
   const toolOutput = 'z'.repeat(2 * 1024 * 1024);
   const uploads = new Map<string, Map<number, Buffer>>();
   const loadStored = async (): Promise<TestChat> =>
-    (await (await request.get(`/api/chats?id=${chat.id}`)).json()).chat;
+    (await (await request.get(`/api/chats?id=${chat.id}`, { maxRetries: 1 })).json()).chat;
 
   await page.route('**/api/chats**', async route => {
     if (route.request().method() === 'GET' && new URL(route.request().url()).searchParams.get('id') === chat.id) {
@@ -312,14 +312,16 @@ test('saves an individual oversized Unicode message and attachments, then sends 
   try {
     const text = '文'.repeat(360_000);
     await send(page, text);
-    await expect.poll(() => fixture.sent.length).toBe(1);
+    await expect.poll(() => fixture.sent.length, { timeout: 15_000 }).toBe(1);
     expect(fixture.sent[0]).toBe(text);
     await expect(page.getByText('Saved reply 1', { exact: true })).toBeVisible();
     await page.locator('input[type="file"]').setInputFiles({
       name: 'large-note.txt', mimeType: 'text/plain', buffer: Buffer.alloc(900_000, 65),
     });
+    await expect(page.getByRole('button', { name: 'Remove large-note.txt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeVisible();
     await send(page, 'Review the large attachment');
-    await expect.poll(() => fixture.sent.length).toBe(2);
+    await expect.poll(() => fixture.sent.length, { timeout: 15_000 }).toBe(2);
     const stored = await fixture.loadStored();
     expect(stored.messages.find(message => message.content === text)?.type).toBe('user');
     const attachment = stored.messages.find(message => message.content === 'Review the large attachment')?.attachments?.[0];

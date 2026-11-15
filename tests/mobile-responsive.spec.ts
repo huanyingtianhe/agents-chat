@@ -286,8 +286,8 @@ test('separates left navigation from management actions', async ({ page }) => {
   await expect(navigation).toBeVisible();
   await navigation.click();
   await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
-  await expect(page.getByRole('tab', { name: 'Chats' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Files' })).toBeVisible();
+  await expect(page.getByText('Chats', { exact: true })).toBeVisible();
+  await expect(page.locator('.participantsSidebar').getByText('Files', { exact: true })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'More actions' }).click();
   await expect(page.locator('.participantsSidebar')).not.toHaveClass(/mobilePanelVisible/);
@@ -308,37 +308,32 @@ test('keeps only one mobile overlay active', async ({ page }) => {
   await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(1);
 });
 
-for (const tab of ['Chats', 'Files']) {
-  test(`sidebar collapse closes and reopens the mobile ${tab} drawer`, async ({ page }) => {
-    const navigation = page.getByRole('button', { name: 'Open navigation' });
-    const sidebar = page.locator('.participantsSidebar');
-    const composer = page.locator('textarea.composerTextarea');
-    await composer.fill('Keep my draft when closing navigation');
-    await navigation.click();
-    await sidebar.getByRole('tab', { name: tab }).click();
-    await expect(sidebar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+test('sidebar collapse closes and reopens mobile navigation', async ({ page }) => {
+  const navigation = page.getByRole('button', { name: 'Open navigation' });
+  const sidebar = page.locator('.participantsSidebar');
+  const composer = page.locator('textarea.composerTextarea');
+  await composer.fill('Keep my draft when closing navigation');
+  await navigation.click();
 
-    await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
 
-    await expect(sidebar).not.toHaveClass(/mobilePanelVisible/);
-    await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
-    await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
-    await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
-    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
-    await expect.poll(() => page.evaluate(() => window.history.state?.agentsChatMobileOverlay ?? false)).toBe(false);
-    await expect(navigation).toBeFocused();
-    await expect.poll(() => page.evaluate(() => localStorage.getItem('acp_chat_sidebar_collapsed_v1'))).toBe('0');
+  await expect(sidebar).not.toHaveClass(/mobilePanelVisible/);
+  await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
+  await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+  await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  await expect.poll(() => page.evaluate(() => window.history.state?.agentsChatMobileOverlay ?? false)).toBe(false);
+  await expect(navigation).toBeFocused();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('acp_chat_sidebar_collapsed_v1'))).toBe('0');
 
-    await navigation.click();
-    await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
-    await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
-    await expect(sidebar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
-    await expect(sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeVisible();
-    await expect(sidebar.locator('.collapsedSidebarControls')).toHaveCount(0);
-    await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
-    await expect(composer).toHaveValue('Keep my draft when closing navigation');
-  });
-}
+  await navigation.click();
+  await expect(sidebar.getByText('Chats', { exact: true })).toBeVisible();
+  await expect(sidebar.getByText('Files', { exact: true })).toHaveCount(0);
+  await expect(sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeVisible();
+  await expect(sidebar.locator('.collapsedSidebarControls')).toHaveCount(0);
+  await sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await expect(composer).toHaveValue('Keep my draft when closing navigation');
+});
 
 test('mobile navigation ignores a saved desktop collapse preference without overwriting it', async ({ page }) => {
   await page.evaluate(() => localStorage.setItem('acp_chat_sidebar_collapsed_v1', '1'));
@@ -348,8 +343,8 @@ test('mobile navigation ignores a saved desktop collapse preference without over
   const sidebar = page.locator('.participantsSidebar');
   const collapse = sidebar.getByRole('button', { name: 'Collapse sidebar', exact: true });
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
-  await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
+  await expect(sidebar.getByText('Chats', { exact: true })).toBeVisible();
+  await expect(sidebar.getByText('Files', { exact: true })).toHaveCount(0);
   await expect(sidebar.locator('.collapsedSidebarControls')).toHaveCount(0);
   await expect(page.locator('.chatLayout')).not.toHaveClass(/sidebarCollapsed/);
   await collapse.click();
@@ -361,15 +356,15 @@ test('mobile navigation ignores a saved desktop collapse preference without over
   await expect(sidebar.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeVisible();
   await expect(page.locator('.chatLayout')).toHaveClass(/sidebarCollapsed/);
   await sidebar.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
-  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
+  await expect(sidebar.getByText('Chats', { exact: true })).toBeVisible();
   await collapse.click();
   await expect(sidebar.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await setTestVisualViewport(page, 844, 0);
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await expect(sidebar.getByRole('tab', { name: 'Chats' })).toBeVisible();
-  await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
+  await expect(sidebar.getByText('Chats', { exact: true })).toBeVisible();
+  await expect(sidebar.getByText('Files', { exact: true })).toHaveCount(0);
   await collapse.click();
   await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
@@ -411,7 +406,7 @@ test('account replaces every persistent-header mobile overlay', async ({ page })
 test('moves focus into overlays and restores persistent top-level openers', async ({ page }) => {
   const navigation = page.getByRole('button', { name: 'Open navigation' });
   await navigation.click();
-  await expect(page.getByRole('tab', { name: 'Chats' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Close navigation' }).click();
   await expect(navigation).toBeFocused();
 
@@ -506,7 +501,7 @@ test('keeps navigation, composer, and overlays usable in landscape', async ({ pa
   }
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  const navigation = page.getByRole('dialog', { name: 'Chats and files navigation' });
+  const navigation = page.getByRole('dialog', { name: 'Chats navigation' });
   await expect(navigation).toBeVisible();
   const navigationBox = await navigation.boundingBox();
   expect(navigationBox).not.toBeNull();
@@ -523,7 +518,7 @@ test('keeps controls and management panels within a narrow phone viewport', asyn
   )).toBe(true);
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await expectDialogFitsVisualViewport(page.getByRole('dialog', { name: 'Chats and files navigation' }));
+  await expectDialogFitsVisualViewport(page.getByRole('dialog', { name: 'Chats navigation' }));
   await page.getByRole('button', { name: 'Close navigation' }).click();
 
   for (const name of ['Agents', 'Nodes', 'Schedules']) {
@@ -547,7 +542,7 @@ test('clears mobile overlay state when resizing to desktop and back', async ({ p
   await setTestVisualViewport(page, 800, 0);
   await expect(page.locator('.mobilePanelBackdrop')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
-  await expect(page.getByRole('complementary', { name: 'Chats and files navigation' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Chats navigation' })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await setTestVisualViewport(page, 844, 0);
@@ -655,7 +650,7 @@ test('closes navigation immediately and restores the current chat after a failed
   await expect(page.getByText('Failed to load chat: Chat unavailable')).toBeVisible();
 });
 
-test('closes the drawer after selecting a file and preserves the Files tree when reopening', async ({ page }) => {
+test('shows the selected file in the drawer and preserves the Files tree', async ({ page }) => {
   await page.route('**/api/markdown**', async (route) => {
     const path = new URL(route.request().url()).searchParams.get('path');
     if (path) {
@@ -680,8 +675,7 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   });
 
   await page.locator('textarea.composerTextarea').fill('draft retained behind file');
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.locator('.mdTreeDir', { hasText: 'notes' }).click();
@@ -712,12 +706,11 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   await expect(page.getByRole('button', { name: 'Split' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Live Edit' })).toHaveCount(0);
   await expect(page.getByText('Use the desktop interface to edit files.')).toBeVisible();
-  await expect(page.locator('textarea.composerTextarea')).toHaveCount(0);
+  await expect(page.locator('.chatMain')).toHaveAttribute('inert', '');
 
-  await page.getByRole('button', { name: /Close/ }).click();
+  await page.getByRole('button', { name: '✕ Close', exact: true }).click();
   await expect(page.locator('textarea.composerTextarea')).toHaveValue('draft retained behind file');
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('dialog', { name: 'Files workspace' })).toBeVisible();
   await expect.poll(() => filesList.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
   await page.getByRole('button', { name: 'notes.txt' }).evaluate((element) => {
     (element as HTMLButtonElement).click();
@@ -725,13 +718,12 @@ test('closes the drawer after selecting a file and preserves the Files tree when
   await expect(page.locator('.mobileMarkdownViewer')).toHaveCount(0);
   await expect(page.locator('.fileContentWithLines')).toBeVisible();
   await expect(page.locator('.fileLineText').first()).toHaveText('# Plain text heading');
-  await page.getByRole('button', { name: /Close/ }).click();
+  await page.getByRole('button', { name: '✕ Close', exact: true }).click();
   await expect(page.locator('textarea.composerTextarea')).toHaveValue('draft retained behind file');
 });
 
 test('searches, refreshes, and previews images from the mobile Files drawer', async ({ page }) => {
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
 
@@ -751,7 +743,7 @@ test('searches, refreshes, and previews images from the mobile Files drawer', as
   await expect(page.getByText('Use the desktop interface to edit files.')).toHaveCount(0);
 });
 
-test('keeps navigation open and reports a failed file preview', async ({ page }) => {
+test('keeps the Files drawer open and reports a failed file preview', async ({ page }) => {
   await page.route('**/api/markdown**', async (route) => {
     const path = new URL(route.request().url()).searchParams.get('path');
     if (path === 'broken.md') {
@@ -765,13 +757,12 @@ test('keeps navigation open and reports a failed file preview', async ({ page })
     await route.fallback();
   });
 
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.getByRole('button', { name: 'broken.md' }).click();
 
-  await expect(page.locator('.participantsSidebar')).toHaveClass(/mobilePanelVisible/);
+  await expect(page.getByRole('dialog', { name: 'Files workspace' })).toBeVisible();
   await expect(page.locator('.fileWorkspaceError')).toContainText('Preview unavailable');
 });
 

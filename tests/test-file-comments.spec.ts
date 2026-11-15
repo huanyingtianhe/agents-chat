@@ -534,7 +534,7 @@ test.describe('File Comments UI', () => {
 
   test('comment sidebar toggle appears in file editor toolbar', async ({ page }) => {
     // Switch to Files tab
-    await page.click('button:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await page.waitForTimeout(500);
 
     // Select an agent if available
@@ -557,7 +557,7 @@ test.describe('File Comments UI', () => {
   });
 
   test('comment sidebar opens and closes', async ({ page }) => {
-    await page.click('button:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await page.waitForTimeout(500);
 
     const agentSelect = page.locator('.mdAgentSelect');
@@ -676,7 +676,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
@@ -836,7 +836,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
@@ -952,7 +952,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     const commentToggle = page.locator('.mdEditorToolbar button[title="Toggle comments"]');
@@ -1108,7 +1108,7 @@ test.describe('File Comments UI', () => {
       await page.waitForSelector('.chatContainer', { timeout: 30000 });
       await expect(page.locator('.message.user', { hasText: 'ordinary current chat' })).toBeVisible();
 
-      await page.click('button.leftSidebarTab:has-text("Files")');
+      await page.getByRole('button', { name: 'Files', exact: true }).click();
       await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await expect(page.locator('.mdEditorFilePath')).toContainText(filePath);
@@ -1227,7 +1227,7 @@ test.describe('File Comments UI', () => {
 
       await page.reload();
       await page.waitForSelector('.chatContainer', { timeout: 30000 });
-      await page.click('button.leftSidebarTab:has-text("Files")');
+      await page.getByRole('button', { name: 'Files', exact: true }).click();
       await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
       await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
@@ -1433,7 +1433,7 @@ test.describe('File Comments UI', () => {
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
 
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await expect(page.locator('.mdEditorFilePath')).toContainText(filePath);
@@ -1634,7 +1634,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
@@ -1798,7 +1798,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
@@ -1935,10 +1935,10 @@ test.describe('File Comments UI', () => {
     try {
       await page.reload();
       await page.waitForSelector('.chatContainer', { timeout: 30000 });
-      await page.click('button.leftSidebarTab:has-text("Files")');
+      await page.getByRole('button', { name: 'Files', exact: true }).click();
       await selectFilesAgent(page, agentId);
       await page.locator('.mdTreeFile', { hasText: filePath }).click();
-      await page.click('button.leftSidebarTab:has-text("Chats")');
+      await page.getByRole('button', { name: 'Close files panel' }).click();
       await page.click('button.chatHistoryItem:has-text("Review: ui-legacy-review.md")');
       await page.fill('textarea.composerTextarea', 'finish legacy review run');
       await page.click('button[aria-label="Send message"]');
@@ -2055,7 +2055,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer', { timeout: 30000 });
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
     await page.locator('.mdEditorToolbar button[title="Toggle comments"]').click();
@@ -2136,7 +2136,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'test-md-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-selection.md' }).click();
 
@@ -2290,7 +2290,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'test-md-multi-select-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-multi-selection.md' }).click();
 
@@ -2380,7 +2380,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'test-md-triple-select-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-triple-selection.md' }).click();
 
@@ -2472,7 +2472,7 @@ test.describe('File Comments UI', () => {
     await page.fill('input[placeholder="Password"]', ADMIN_PASS);
     await page.click('button[type="submit"]');
 
-    await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-expanded', 'true');
     await expect(filesAgentTrigger(page)).toHaveAttribute('data-value', 'restore-agent');
     await expect(page.locator('.mdEditorFilePath')).toContainText('restore.md');
     await expect(page.locator('.mdModeBtn').filter({ hasText: /^Review$/ })).toHaveCount(0);
@@ -2524,9 +2524,9 @@ test.describe('File Comments UI', () => {
       container.scrollTop = Math.min(240, Math.max(40, container.scrollHeight - container.clientHeight - 40));
       return container.scrollTop;
     });
-    await page.click('button.leftSidebarTab:has-text("Files")');
-    await expect(page.locator('.leftSidebarTab.active')).toContainText('Files');
-    await page.click('button.leftSidebarTab:has-text("Chats")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    await page.getByRole('button', { name: 'Close files panel' }).click();
 
     const restoredScrollTop = await page.locator('.chatContainer').evaluate((element) => (element as HTMLElement).scrollTop);
     expect(Math.abs(restoredScrollTop - savedScrollTop)).toBeLessThanOrEqual(2);
@@ -2554,7 +2554,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: 'close.md' }).click();
     await expect(page.locator('.mdEditorFilePath')).toContainText('close.md');
@@ -2598,7 +2598,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await page.waitForSelector('.chatContainer, .emptyHomepage', { timeout: 30000 });
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: 'typography.md' }).click();
     const typography = await page.locator('.mdLiveEditable').evaluate(element => {
@@ -2659,7 +2659,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, agentId);
     await page.locator('.mdTreeFile', { hasText: filePath }).click();
 
@@ -2751,7 +2751,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'html-mode-agent');
     await page.locator('.mdTreeFile', { hasText: 'preview-only.html' }).click();
 
@@ -2832,7 +2832,7 @@ test.describe('File Comments UI', () => {
 
     await page.reload();
     await expect(page.locator('.mdEditorFilePath')).toContainText('switch.md');
-    await page.click('button.leftSidebarTab:has-text("Chats")');
+    await page.getByRole('button', { name: 'Close files panel' }).click();
     await page.click('button.chatHistoryItem:has-text("Switch Back Chat")');
 
     await expect(page.locator('textarea.composerTextarea')).toBeVisible();
@@ -2881,7 +2881,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'live-preserve-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-preserve.md' }).click();
     await page.locator('.mdModeBtn', { hasText: 'Live Edit' }).click();
@@ -2891,9 +2891,9 @@ test.describe('File Comments UI', () => {
     await liveEditor.fill('Changed live text survives switching.');
     await expect(page.locator('.mdDirtyBadge')).toBeVisible();
 
-    await page.click('button.leftSidebarTab:has-text("Chats")');
+    await page.getByRole('button', { name: 'Close files panel' }).click();
     await expect(page.locator('textarea.composerTextarea')).toBeVisible();
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
 
     await expect(page.locator('.mdLiveEditable')).toContainText('Changed live text survives switching.');
     await expect(page.locator('.mdDirtyBadge')).toBeVisible();
@@ -2940,7 +2940,7 @@ test.describe('File Comments UI', () => {
     });
 
     await login(page);
-    await page.click('button.leftSidebarTab:has-text("Files")');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'live-caret-agent');
     await page.locator('.mdTreeFile', { hasText: 'live-caret.md' }).click();
 

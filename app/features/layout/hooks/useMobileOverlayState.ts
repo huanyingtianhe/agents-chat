@@ -6,6 +6,7 @@ export const MOBILE_LAYOUT_QUERY = '(max-width: 900px)';
 
 export type MobileOverlay =
   | 'navigation'
+  | 'files'
   | 'more'
   | 'theme'
   | 'agents'
@@ -36,7 +37,7 @@ export function useMobileOverlayState() {
     }
     const trigger = triggerRef.current;
     triggerRef.current = null;
-    queueMicrotask(() => trigger?.isConnected && trigger.focus());
+    window.requestAnimationFrame(() => trigger?.isConnected && trigger.focus({ preventScroll: true }));
   }, []);
 
   const open = useCallback((overlay: ActiveMobileOverlay, trigger?: HTMLElement) => {

@@ -1,8 +1,6 @@
 'use client';
 
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { mdComponents } from '../markdownHelpers';
+import { ChatMarkdown } from './ChatMarkdown';
 import type { ContentPart } from '../../chat/chatTypes';
 import { MessageToolCall } from './MessageToolCall';
 import { getStatusDisplayText } from '../messageDisplayHelpers';
@@ -36,14 +34,14 @@ export function MessageContentParts({
         if (part.kind === 'user_answer') {
           return (
             <div key={pi} className="userAnswerPart">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{part.text}</ReactMarkdown>
+              <ChatMarkdown>{part.text}</ChatMarkdown>
             </div>
           );
         }
         if (part.kind === 'text') {
           return (
             <div key={pi} className={`messageContent markdownBody ${pending ? 'pending' : ''}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{part.text}</ReactMarkdown>
+              <ChatMarkdown>{part.text}</ChatMarkdown>
             </div>
           );
         }

@@ -21,6 +21,7 @@ export type ChatShellProps = {
   sidebarWidth: number;
   sidebarCollapsed: boolean;
   agentsSidebarOpen: boolean;
+  filesPanelOpen: boolean;
   onSidebarResizeStart: (e: MouseEvent<HTMLDivElement>) => void;
 };
 
@@ -42,6 +43,7 @@ export function ChatShell({
   sidebarWidth,
   sidebarCollapsed,
   agentsSidebarOpen,
+  filesPanelOpen,
   onSidebarResizeStart,
 }: ChatShellProps) {
   const pageRef = useRef<HTMLElement | null>(null);
@@ -113,14 +115,14 @@ export function ChatShell({
         />
       ) : null}
       <div
-        className={`chatLayout${sidebarCollapsed ? ' sidebarCollapsed' : ''}${agentsSidebarOpen ? ' agentsSidebarOpen' : ''}`}
+        className={`chatLayout${sidebarCollapsed ? ' sidebarCollapsed' : ''}${agentsSidebarOpen ? ' agentsSidebarOpen' : ''}${filesPanelOpen ? ' filesPanelOpen' : ''}`}
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
       >
         {sidebar}
         {!sidebarCollapsed && (
           <div className="sidebarResizeHandle" onMouseDown={onSidebarResizeStart} />
         )}
-        <div className="chatMain" aria-hidden={hasModalMobileOverlay || undefined}>
+        <div className="chatMain" aria-hidden={hasModalMobileOverlay || undefined} inert={mobileOverlay === 'files' || undefined}>
           {messages}
           {composer}
         </div>

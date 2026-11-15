@@ -41,6 +41,11 @@ export function useFileWorkspaceState({
   const [mdFileMtime, setMdFileMtime] = useState<string | null>(null);
   const [mdSaving, setMdSaving] = useState(false);
   const [mdDirty, setMdDirty] = useState(false);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [lineTarget, setLineTarget] = useState<{ line: number } | null>(null);
+  const [fileAgentId, setFileAgentId] = useState<string | null>(null);
+  const fileRequestRef = useRef(0);
+  const listRequestRef = useRef(0);
   const [mdEditorOpen, setMdEditorOpen] = useState(false);
   const [mdEditorMode, setMdEditorMode] = useState<MdEditorMode>('live');
   const [mdLiveHtml, setMdLiveHtml] = useState('');
@@ -77,41 +82,48 @@ export function useFileWorkspaceState({
   }, [mdFileQuery, mdFilesList]);
 
   const loadMdFiles = useCallback(async (agentId: string, diff = false) => {
+    const request = ++listRequestRef.current;
     setMdFilesLoading(true);
     setMdFilesError(null);
     try {
       const url = `/api/markdown?agentId=${encodeURIComponent(agentId)}${diff ? '&diff=true' : ''}`;
       const res = await fetch(url);
+      if (request !== listRequestRef.current) return;
       if (res.status === 403) {
         setMdFilesError('unauthorized');
         return;
       }
       const data = await res.json();
+      if (request !== listRequestRef.current) return;
       if (!res.ok || !Array.isArray(data.files)) {
         throw new Error(data.error || 'Unable to load files');
       }
       setMdFilesList(data.files);
       setMdExpandedDirs(new Set());
     } catch (err) {
+      if (request !== listRequestRef.current) return;
       console.error('Failed to load files', err);
       setMdFilesError(err instanceof Error ? err.message : 'Unable to load files');
     } finally {
-      setMdFilesLoading(false);
+      if (request === listRequestRef.current) setMdFilesLoading(false);
     }
   }, []);
 
   const openMdFileForAgent = useCallback(async (
     agentId: string,
     filePath: string,
-    options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number },
+    options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number; targetLine?: number },
   ) => {
     if (!options?.skipDirtyConfirm && mdDirty) {
       if (!confirm('You have unsaved changes. Discard?')) return;
     }
+    const request = ++fileRequestRef.current;
+    setFileLoading(true);
     setMdFileError(null);
     try {
       const res = await fetch(`/api/markdown?agentId=${encodeURIComponent(agentId)}&path=${encodeURIComponent(filePath)}`);
       const data = await res.json();
+      if (request !== fileRequestRef.current) return;
       if (!res.ok || data.content === undefined) {
         throw new Error(data.error || `Unable to preview ${filePath}`);
       }
@@ -125,6 +137,16 @@ export function useFileWorkspaceState({
               ? 'markdown'
               : 'text';
       const restoreScrollTop = options?.restoreScrollTop ?? 0;
+      if (agentId !== mdSelectedAgentId) {
+        setMdSelectedAgentId(agentId);
+        setMdFilesList([]);
+        setMdFileQuery('');
+        void loadMdFiles(agentId, mdDiffOnly);
+      }
+      const targetLine = kind === 'image' ? undefined : options?.targetLine;
+      setFileAgentId(agentId);
+      setLineTarget(targetLine ? { line: targetLine } : null);
+      setMdConflict(null);
       setMdSelectedFile(filePath);
       setMdFileContent(data.content);
       setMdEditContent(data.content);
@@ -134,12 +156,15 @@ export function useFileWorkspaceState({
       setMdLiveHtml(isMarkdownFile(filePath) ? markdownToHtml(data.content) : '');
       setMdEditorMode(current => normalizeFileEditorMode(options?.editorMode ?? current, filePath));
       setMdEditorOpen(true);
-      await onFileOpened?.({ agentId, filePath, restoreScrollTop });
+      await onFileOpened?.({ agentId, filePath, restoreScrollTop, targetLine });
     } catch (err) {
+      if (request !== fileRequestRef.current) return;
       const message = err instanceof Error ? err.message : String(err);
       setMdFileError(message);
+    } finally {
+      if (request === fileRequestRef.current) setFileLoading(false);
     }
-  }, [mdDirty, onFileOpened]);
+  }, [loadMdFiles, mdDiffOnly, mdDirty, mdSelectedAgentId, onFileOpened]);
 
   const openMdFile = useCallback(async (filePath: string) => {
     if (!mdSelectedAgentId) return;
@@ -192,13 +217,13 @@ export function useFileWorkspaceState({
     if (!mounted || !fileWorkspaceStorageReadRef.current) return;
     window.localStorage.setItem(STORAGE_FILE_WORKSPACE, JSON.stringify({
       tab: leftSidebarTab,
-      agentId: mdSelectedAgentId,
+      agentId: mdSelectedFile ? fileAgentId : mdSelectedAgentId,
       filePath: mdSelectedFile,
       diffOnly: mdDiffOnly,
       editorMode: mdEditorMode,
       scrollTop: workspaceScrollTop,
     } satisfies FileWorkspaceState));
-  }, [leftSidebarTab, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, workspaceScrollTop, mounted]);
+  }, [leftSidebarTab, fileAgentId, mdSelectedAgentId, mdSelectedFile, mdDiffOnly, mdEditorMode, workspaceScrollTop, mounted]);
 
   const toggleMdDir = useCallback((dirPath: string) => {
     setMdExpandedDirs(prev => {
@@ -210,12 +235,16 @@ export function useFileWorkspaceState({
   }, []);
 
   const selectMdAgent = useCallback((agentId: string | null) => {
+    ++listRequestRef.current;
     setMdFileError(null);
+    setMdFilesError(null);
+    setMdFilesLoading(false);
     setMdSelectedAgentId(agentId);
     setMdFilesList([]);
     setMdFileQuery('');
-    if (agentId) void loadMdFiles(agentId, mdDiffOnly);
-  }, [loadMdFiles, mdDiffOnly]);
+    const agent = agents.find(item => item.id === agentId);
+    if (agent && (agent.relay || agent.cwd?.trim())) void loadMdFiles(agent.id, mdDiffOnly);
+  }, [agents, loadMdFiles, mdDiffOnly]);
 
   const refreshMdFiles = useCallback(async () => {
     if (!mdSelectedAgentId) return;
@@ -254,7 +283,7 @@ export function useFileWorkspaceState({
   }, [leftSidebarTab, onBeforeTabChange]);
 
   const saveMdFile = useCallback(async (contentOverride?: string, mtimeOverride?: string | null) => {
-    if (!mdSelectedAgentId || !mdSelectedFile) return;
+    if (!fileAgentId || !mdSelectedFile) return;
     const content = contentOverride ?? syncLiveToMarkdown();
     const mtimeToSave = mtimeOverride !== undefined ? mtimeOverride : mdFileMtime;
     setMdSaving(true);
@@ -262,7 +291,7 @@ export function useFileWorkspaceState({
       const res = await fetch('/api/markdown', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: mdSelectedAgentId, path: mdSelectedFile, content, mtime: mtimeToSave }),
+        body: JSON.stringify({ agentId: fileAgentId, path: mdSelectedFile, content, mtime: mtimeToSave }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -273,7 +302,7 @@ export function useFileWorkspaceState({
         setMdConflict(null);
         setMdConflictResolvedContent('');
         setMdLiveHtml(isMarkdownFile(mdSelectedFile) ? markdownToHtml(content) : '');
-        void loadMdFiles(mdSelectedAgentId, mdDiffOnly);
+        if (fileAgentId === mdSelectedAgentId) void loadMdFiles(fileAgentId, mdDiffOnly);
       } else if (data.error === 'conflict') {
         const serverContent = typeof data.serverContent === 'string' ? data.serverContent : mdFileContent;
         const serverMtime = typeof data.serverMtime === 'string' ? data.serverMtime : null;
@@ -288,7 +317,7 @@ export function useFileWorkspaceState({
     } finally {
       setMdSaving(false);
     }
-  }, [loadMdFiles, mdDiffOnly, mdFileContent, mdFileMtime, mdSelectedAgentId, mdSelectedFile, syncLiveToMarkdown]);
+  }, [loadMdFiles, mdDiffOnly, mdFileContent, mdFileMtime, fileAgentId, mdSelectedAgentId, mdSelectedFile, syncLiveToMarkdown]);
 
   const applyMdContent = useCallback((content: string, mtime: string | null, dirty: boolean) => {
     setMdFileContent(content);
@@ -323,6 +352,10 @@ export function useFileWorkspaceState({
   }, [mdConflict, mdConflictResolvedContent, mdFileContent, saveMdFile]);
 
   const closeMdEditor = useCallback(() => {
+    ++fileRequestRef.current;
+    setFileLoading(false);
+    setLineTarget(null);
+    setFileAgentId(null);
     setMdEditorOpen(false);
     setMdSelectedFile(null);
     setMdFileContent('');
@@ -378,6 +411,9 @@ export function useFileWorkspaceState({
     mdDirty,
     setMdDirty,
     mdEditorOpen,
+    fileLoading,
+    lineTarget,
+    fileAgentId,
     mdEditorMode,
     setMdEditorMode,
     mdLiveHtml,

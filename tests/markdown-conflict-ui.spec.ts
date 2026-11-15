@@ -62,7 +62,7 @@ test('Files editor shows conflict choices and manual diff resolver', async ({ pa
   });
 
   await login(page);
-  const filesTab = page.locator('button.leftSidebarTab', { hasText: 'Files' });
+  const filesTab = page.getByRole('button', { name: 'Files', exact: true });
   await expect(async () => {
     await filesTab.click();
     await expect(filesAgentTrigger(page)).toBeVisible({ timeout: 1000 });

@@ -429,15 +429,12 @@ test('keeps the same text in a tall horizontally scrollable table bottom-anchore
 
 test('restores the historical reading point after visiting a file', async ({ page }) => {
   const point = await captureHistoricalPoint(page);
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.getByRole('button', { name: 'README.md' }).click();
   await expect(page.locator('.mobileMarkdownViewer')).toBeVisible();
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Chats' }).click();
-  await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 380, y: 100 } });
+  await page.getByRole('button', { name: 'Close files panel' }).click();
   await expect(page.locator('.chatContainer')).toBeVisible();
   await settleLayout(page);
   await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);

@@ -14,12 +14,18 @@ export function remarkFileReferences() {
         if (part.type === 'text') {
           const result: PhrasingContent[] = [];
           let start = 0;
-          for (const match of part.value.matchAll(/[^\s<>"'(),;]+(?:#L\d+(?:-L\d+)?|:\d+(?::\d+)?)(?=$|[\s<>"'(),;.!?])/g)) {
-            if (!parseFileReference(match[0])) continue;
+          // Consume each token once. Searching for a suffix from every character
+          // stalls on long unbroken chat messages with no file references.
+          for (const match of part.value.matchAll(/[^\s<>"'(),;]+/g)) {
+            const token = match[0];
+            let end = token.length;
+            while (end > 0 && '.!?'.includes(token[end - 1])) end--;
+            const reference = token.slice(0, end);
+            if (!/\d$/.test(reference) || !parseFileReference(reference)) continue;
             const index = match.index;
             if (index > start) result.push({ type: 'text', value: part.value.slice(start, index) });
-            result.push({ type: 'link', url: match[0], children: [{ type: 'text', value: match[0] }] });
-            start = index + match[0].length;
+            result.push({ type: 'link', url: reference, children: [{ type: 'text', value: reference }] });
+            start = index + reference.length;
           }
           if (start) {
             if (start < part.value.length) result.push({ type: 'text', value: part.value.slice(start) });

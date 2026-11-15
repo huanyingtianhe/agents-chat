@@ -19,11 +19,12 @@
 .filesRightTree { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px; overflow: hidden; }
 .filesRightTree[hidden] { display: none; }
 .filesRightBody.hasFile .filesRightTree { border-right: 1px solid var(--border); }
-.filesRightPanel .mdEditorToolbar { flex-wrap: wrap; gap: 6px; padding: 8px; }
-.filesRightPanel .mdEditorToolbarLeft { flex-basis: 100%; }
-.filesRightPanel .mdEditorToolbarRight { flex-wrap: wrap; flex-shrink: 1; }
+.filesRightPanel .mdEditorToolbar { gap: 6px; padding: 8px; }
+.filesRightPanel .mdEditorToolbarRight { gap: 4px; }
+.filesRightPanel .mdEditorToolbarRight .mdEditorBtn { padding-inline: 5px; }
 .filesRightPanel .mdEditorInline { min-width: 0; min-height: 0; }
-.filesRightPanel .commentSidebar { width: min(260px, 85%); min-width: 0; position: absolute; inset: 0 0 0 auto; z-index: 4; box-shadow: var(--shadow); }
+.filesRightPanel .commentSidebar { width: clamp(145px, 37%, 260px); min-width: 0; flex-shrink: 0; }
+.filesRightPanel .commentSidebarHeader { gap: 4px; padding-inline: 6px; }
 .filesRightPanel .mdEditorSimple:has([data-file-line-target]), .filesRightPanel .mdEditorSimple:has(> [role="status"]) { flex-direction: column; }
 .filesRightPanel [data-file-line-target] { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
 .filesLoading { padding: 6px 12px; font-size: 12px; color: var(--text-soft); }
@@ -54,6 +55,10 @@
   .filesRightBody.hasFile { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .filesRightBody.hasFile .filesRightTree { max-height: 30dvh; border-right: 0; }
   .filesRightBody.hasFile .mdEditorInline { grid-row: 2; }
+  .filesRightPanel .mdEditorToolbar { flex-wrap: wrap; }
+  .filesRightPanel .mdEditorToolbarLeft { flex-basis: 100%; }
+  .filesRightPanel .mdEditorToolbarRight { flex-wrap: wrap; flex-shrink: 1; }
+  .filesRightPanel .commentSidebar { width: min(260px, 85%); }
 }
 .fileWorkspaceError{margin:8px;padding:9px 10px;border:1px solid color-mix(in srgb, var(--danger) 55%, var(--border));border-radius:8px;background:color-mix(in srgb, var(--danger) 10%, var(--panel-bg));color:var(--danger);font-size:12px;line-height:1.4;}
 .mdFilesTab .remoteAgentSelect{font-size:12px;padding:8px 10px;}

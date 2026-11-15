@@ -436,6 +436,7 @@
   gap: 12px;
 }
 .chatPageRoot .headerInlineActions .ghostButton,
+.chatPageRoot .header .filesPanelToggle,
 .chatPageRoot .headerOverflowBtn {
   box-sizing: border-box;
   width: var(--control-height);

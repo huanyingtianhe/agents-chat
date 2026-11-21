@@ -8,6 +8,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { createFileComment, deleteFileComment, updateFileCommentStatus } from '../lib/chatStore';
 import { settleChatLayout } from './helpers/chatLayout';
+import { chatSaveAcknowledgement } from './helpers/chatSaveFixture';
 import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
@@ -2492,30 +2493,23 @@ test.describe('File Comments UI', () => {
     });
     await page.route('**/api/comments**', route => route.fulfill({ json: { ok: true, comments: [] } }));
 
-    await page.evaluate(async () => {
-      await fetch('/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat: {
-            id: 'scroll-preservation-chat',
-            name: 'Scroll Preservation Chat',
-            ts: Date.now(),
-            messages: Array.from({ length: 30 }, (_, index) => ({
-              id: `scroll-message-${index}`,
-              type: 'user',
-              content: `Message ${index}`,
-              ts: Date.now() + index,
-            })),
-            agentSessions: {},
-          },
-        }),
-      });
-      await fetch('/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'set-last-chat', chatId: 'scroll-preservation-chat' }),
-      });
+    const summary = { id: 'scroll-preservation-chat', name: 'Scroll Preservation Chat', ts: 1000 };
+    const fixture = {
+      ...summary,
+      messages: Array.from({ length: 30 }, (_, index) => ({
+        id: `scroll-message-${index}`,
+        type: 'user',
+        content: `Message ${index}`,
+        ts: 1001 + index,
+      })),
+      agentSessions: {},
+    };
+    await page.route('**/api/chats**', async (route) => {
+      const request = route.request();
+      const id = new URL(request.url()).searchParams.get('id');
+      await route.fulfill({ json: request.method() === 'GET'
+        ? id ? { ok: true, chat: fixture } : { ok: true, chats: [summary], lastChatId: summary.id }
+        : chatSaveAcknowledgement(request.postDataJSON()) });
     });
     await page.reload();
     const chat = page.locator('.chatContainer');

@@ -7,6 +7,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 import { createFileComment, deleteFileComment, updateFileCommentStatus } from '../lib/chatStore';
+import { settleChatLayout } from './helpers/chatLayout';
 import { selectFilesAgent, filesAgentTrigger } from './themed-picker-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3010';
@@ -2517,19 +2518,24 @@ test.describe('File Comments UI', () => {
       });
     });
     await page.reload();
-    await page.waitForSelector('.chatContainer', { timeout: 30000 });
+    const chat = page.locator('.chatContainer');
+    await expect(chat.locator('.message')).toHaveCount(30);
+    await settleChatLayout(page);
 
-    const savedScrollTop = await page.locator('.chatContainer').evaluate((element) => {
+    const savedScrollTop = await chat.evaluate((element) => {
       const container = element as HTMLElement;
       container.scrollTop = Math.min(240, Math.max(40, container.scrollHeight - container.clientHeight - 40));
       return container.scrollTop;
     });
+    await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible();
     await page.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-expanded', 'true');
     await page.getByRole('button', { name: 'Close files panel' }).click();
 
-    const restoredScrollTop = await page.locator('.chatContainer').evaluate((element) => (element as HTMLElement).scrollTop);
-    expect(Math.abs(restoredScrollTop - savedScrollTop)).toBeLessThanOrEqual(2);
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await settleChatLayout(page);
+    await expect.poll(() => chat.evaluate((element, saved) => Math.abs(element.scrollTop - saved), savedScrollTop))
+      .toBeLessThanOrEqual(2);
   });
 
   test('only confirms closing Markdown when it has unsaved changes', async ({ page }) => {

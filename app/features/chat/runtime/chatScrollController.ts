@@ -63,23 +63,13 @@ export function createChatScrollController(
     notify();
   }
 
-  function hasIndependentScroll(current: ScrollGeometry) {
-    if (jumping) return false;
-    const top = container.scrollTop;
-    // Allow an extra CSS pixel when identifying transient drift during reflow.
-    // The final correction still targets the bottom of the scroll range.
-    if (following && geometryChanged(geometry, current)
-      && isNearBottom(top + 1, current.contentHeight, current.height)) return false;
-    return isIndependentScroll(geometry, current, lastTop, top);
-  }
-
   function correctLayout() {
     correctionFrame = 0;
     if (disposed || suspended || multiTouch || userIntent || container.clientHeight === 0) return;
     const current = measure();
     const maximum = Math.max(0, current.contentHeight - current.height);
     // WebKit may deliver the scroll event after the resize callback.
-    if (hasIndependentScroll(current)) {
+    if (!jumping && isIndependentScroll(geometry, current, lastTop, container.scrollTop)) {
       captureUserPosition();
       return;
     }
@@ -143,8 +133,17 @@ export function createChatScrollController(
     }
     const current = measure();
     if (geometryChanged(geometry, current)) {
-      if (hasIndependentScroll(current)) captureUserPosition();
-      else scheduleCorrection();
+      const top = container.scrollTop;
+      if (!jumping && isIndependentScroll(geometry, current, lastTop, top)) {
+        captureUserPosition();
+      } else {
+        // A second reflow can expand the scroll range before the correction runs.
+        // Track the observed clamp so it cannot look like a new scroll gesture.
+        geometry = current;
+        lastTop = top;
+        expectedTop = null;
+        scheduleCorrection();
+      }
       return;
     }
     if (jumping) {

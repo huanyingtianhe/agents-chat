@@ -63,13 +63,23 @@ export function createChatScrollController(
     notify();
   }
 
+  function hasIndependentScroll(current: ScrollGeometry) {
+    if (jumping) return false;
+    const top = container.scrollTop;
+    // Allow an extra CSS pixel when identifying transient drift during reflow.
+    // The final correction still targets the bottom of the scroll range.
+    if (following && geometryChanged(geometry, current)
+      && isNearBottom(top + 1, current.contentHeight, current.height)) return false;
+    return isIndependentScroll(geometry, current, lastTop, top);
+  }
+
   function correctLayout() {
     correctionFrame = 0;
     if (disposed || suspended || multiTouch || userIntent || container.clientHeight === 0) return;
-    const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
-    // A resize can move the viewport through intermediate scroll extents on
-    // WebKit. Keep following the latest message unless a user gesture takes over.
-    if (!following && isIndependentScroll(geometry, measure(), lastTop, container.scrollTop)) {
+    const current = measure();
+    const maximum = Math.max(0, current.contentHeight - current.height);
+    // WebKit may deliver the scroll event after the resize callback.
+    if (hasIndependentScroll(current)) {
       captureUserPosition();
       return;
     }
@@ -133,7 +143,7 @@ export function createChatScrollController(
     }
     const current = measure();
     if (geometryChanged(geometry, current)) {
-      if (!following && isIndependentScroll(geometry, current, lastTop, container.scrollTop)) captureUserPosition();
+      if (hasIndependentScroll(current)) captureUserPosition();
       else scheduleCorrection();
       return;
     }

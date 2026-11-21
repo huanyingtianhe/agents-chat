@@ -132,8 +132,7 @@ test('shared Markdown inherits the policy across orientation', async ({ page }) 
 test('file Markdown inherits the policy without changing the viewer layout', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await loginMobileFixture(page);
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.getByRole('button', { name: 'README.md' }).click();

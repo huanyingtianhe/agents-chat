@@ -5204,7 +5204,7 @@ test.describe('Theme', () => {
       expectedSelectionStyle,
     ]);
 
-    await page.getByRole('tab', { name: /Files/ }).click();
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await selectFilesAgent(page, 'selection-agent');
     await page.locator('.mdTreeFile', { hasText: 'selection.md' }).click();
     await expect(page.locator('.mdLiveEditable')).toBeVisible();

@@ -9,6 +9,7 @@ export type FileOpenedPayload = {
   agentId: string;
   filePath: string;
   restoreScrollTop: number;
+  targetLine?: number;
 };
 
 export type UseFileWorkspaceStateDeps = {
@@ -43,6 +44,9 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   mdDirty: boolean;
   setMdDirty: (dirty: boolean) => void;
   mdEditorOpen: boolean;
+  fileLoading: boolean;
+  lineTarget: { line: number } | null;
+  fileAgentId: string | null;
   mdEditorMode: MdEditorMode;
   setMdEditorMode: (mode: MdEditorMode | ((mode: MdEditorMode) => MdEditorMode)) => void;
   mdLiveHtml: string;
@@ -63,7 +67,7 @@ export type UseFileWorkspaceStateResult = FileWorkspaceController & {
   mdFileTree: FileTreeNode[];
   loadMdFiles: (agentId: string, diff?: boolean) => Promise<void>;
   refreshMdFiles: () => Promise<void>;
-  openMdFileForAgent: (agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number }) => Promise<void>;
+  openMdFileForAgent: (agentId: string, filePath: string, options?: { skipDirtyConfirm?: boolean; editorMode?: MdEditorMode; restoreScrollTop?: number; targetLine?: number }) => Promise<void>;
   openMdFile: (filePath: string) => Promise<void>;
   selectMdAgent: (agentId: string | null) => void;
   toggleMdDiffOnly: () => void;

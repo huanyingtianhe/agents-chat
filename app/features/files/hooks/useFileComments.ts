@@ -76,13 +76,13 @@ export function useFileComments(workspace: UseFileWorkspaceStateResult, deps: Us
     setCommentSidebarOpen,
     getCommentsByLine,
   });
-  const resetForFileOpen = useCallback((agentId: string, filePath: string, restoreScrollTop = 0) => {
-    setCommentSourceScrollTop(restoreScrollTop);
+  const resetForFileOpen = useCallback((agentId: string, filePath: string, restoreScrollTop?: number) => {
+    setCommentSourceScrollTop(restoreScrollTop ?? 0);
     const applyScroll = () => {
       selection.mdLiveContainerRef.current?.scrollTo({ top: restoreScrollTop });
       selection.fileContentRef.current?.scrollTo({ top: restoreScrollTop });
     };
-    window.requestAnimationFrame(() => {
+    if (restoreScrollTop !== undefined) window.requestAnimationFrame(() => {
       applyScroll();
       window.requestAnimationFrame(() => {
         applyScroll();
@@ -97,14 +97,14 @@ export function useFileComments(workspace: UseFileWorkspaceStateResult, deps: Us
     void loadFileComments(agentId, filePath);
   }, [loadFileComments, selection]);
   const createComment = useCallback(async (range: CommentAddRange, content: string) => {
-    if (!workspace.mdSelectedAgentId || !workspace.mdSelectedFile || !content.trim()) return;
+    if (!workspace.fileAgentId || !workspace.mdSelectedFile || !content.trim()) return;
     try {
       const res = await fetch('/api/comments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'create',
-          agentId: workspace.mdSelectedAgentId,
+          agentId: workspace.fileAgentId,
           filePath: workspace.mdSelectedFile,
           rangeStartLine: range.startLine,
           rangeEndLine: range.endLine,
@@ -124,13 +124,13 @@ export function useFileComments(workspace: UseFileWorkspaceStateResult, deps: Us
       setShowCommentInput(false);
       setCommentAddRange(null);
       selection.clearLiveSelectionDraft();
-      await loadFileComments(workspace.mdSelectedAgentId, workspace.mdSelectedFile);
+      await loadFileComments(workspace.fileAgentId, workspace.mdSelectedFile);
       if (!commentSidebarOpen) setCommentSidebarOpen(true);
       if (typeof data.id === 'string') setSelectedCommentId(data.id);
     } catch {
       // Ignore comment save failures; the UI remains editable.
     }
-  }, [commentSidebarOpen, loadFileComments, selection, workspace.mdSelectedAgentId, workspace.mdSelectedFile]);
+  }, [commentSidebarOpen, loadFileComments, selection, workspace.fileAgentId, workspace.mdSelectedFile]);
   const handleCreateComment = useCallback(async () => {
     if (!commentAddRange) return;
     await createComment(commentAddRange, commentInput);
@@ -138,20 +138,20 @@ export function useFileComments(workspace: UseFileWorkspaceStateResult, deps: Us
   const handleRejectComment = useCallback(async (commentId: string) => {
     try {
       await fetch('/api/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reject', commentId }) });
-      if (workspace.mdSelectedAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.mdSelectedAgentId, workspace.mdSelectedFile);
+      if (workspace.fileAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.fileAgentId, workspace.mdSelectedFile);
     } catch {
       // Ignore network errors for comment mutations.
     }
-  }, [loadFileComments, workspace.mdSelectedAgentId, workspace.mdSelectedFile]);
+  }, [loadFileComments, workspace.fileAgentId, workspace.mdSelectedFile]);
   const handleDeleteComment = useCallback(async (commentId: string) => {
     try {
       await fetch('/api/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', commentId }) });
       if (selectedCommentId === commentId) setSelectedCommentId(null);
-      if (workspace.mdSelectedAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.mdSelectedAgentId, workspace.mdSelectedFile);
+      if (workspace.fileAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.fileAgentId, workspace.mdSelectedFile);
     } catch {
       // Ignore network errors for comment mutations.
     }
-  }, [loadFileComments, selectedCommentId, workspace.mdSelectedAgentId, workspace.mdSelectedFile]);
+  }, [loadFileComments, selectedCommentId, workspace.fileAgentId, workspace.mdSelectedFile]);
   const handleReplyComment = useCallback(async (commentId: string) => {
     if (!replyInput.trim()) return;
     try {
@@ -162,11 +162,11 @@ export function useFileComments(workspace: UseFileWorkspaceStateResult, deps: Us
       });
       setReplyInput('');
       setReplyingToCommentId(null);
-      if (workspace.mdSelectedAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.mdSelectedAgentId, workspace.mdSelectedFile);
+      if (workspace.fileAgentId && workspace.mdSelectedFile) void loadFileComments(workspace.fileAgentId, workspace.mdSelectedFile);
     } catch {
       // Ignore network errors for comment mutations.
     }
-  }, [loadFileComments, replyInput, workspace.mdSelectedAgentId, workspace.mdSelectedFile]);
+  }, [loadFileComments, replyInput, workspace.fileAgentId, workspace.mdSelectedFile]);
   const openCommentReviewChat = useCallback((chatId: string) => {
     void deps.onOpenReviewChat(chatId);
   }, [deps]);

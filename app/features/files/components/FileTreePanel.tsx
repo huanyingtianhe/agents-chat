@@ -14,6 +14,10 @@ type FileTreePanelProps = {
 };
 
 export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreePanelProps) {
+  const fileAgents = agents.filter(agent => agent.id !== schedulerAgentId);
+  const selectedAgent = fileAgents.find(agent => agent.id === workspace.mdSelectedAgentId);
+  const needsWorkingDirectory = selectedAgent && !selectedAgent.relay && !selectedAgent.cwd?.trim();
+
   const renderNodes = (nodes: FileTreeNode[], depth: number): ReactNode[] => {
     return nodes.map(node => {
       if (node.isDir) {
@@ -55,16 +59,23 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
           <SelectPicker
             options={[
               { value: '', label: 'Select agent…' },
-              ...agents
-                .filter(a => (a.cwd || a.relay) && a.id !== schedulerAgentId)
-                .map(a => ({ value: a.id, label: `${a.canTalk === false ? '🔒 ' : ''}${a.relay ? '🌐 ' : ''}${a.name || a.id}` })),
+              ...fileAgents.map(a => ({
+                value: a.id,
+                label: `${a.canTalk === false ? '🔒 ' : ''}${a.relay ? '🌐 ' : ''}${a.name || a.id}`,
+                hint: !a.relay && !a.cwd?.trim() ? 'Working directory required' : undefined,
+              })),
             ]}
             value={workspace.mdSelectedAgentId || ''}
             ariaLabel="Files agent"
             onChange={(v) => workspace.selectMdAgent(v || null)}
           />
         </div>
-        {workspace.mdSelectedAgentId ? (
+        {needsWorkingDirectory && (
+          <div className="fileWorkspaceError" role="status">
+            Set a Working Directory for {selectedAgent.name || selectedAgent.id} in Agent settings to browse its files.
+          </div>
+        )}
+        {workspace.mdSelectedAgentId && !needsWorkingDirectory ? (
           <>
             <div className="mdFileSearchRow">
               <input
@@ -96,7 +107,7 @@ export function FileTreePanel({ workspace, agents, schedulerAgentId }: FileTreeP
           </>
         ) : null}
       </div>
-      <div className="mdFilesList">
+      <div className="mdFilesList" hidden={Boolean(needsWorkingDirectory)}>
         {workspace.mdFilesLoading && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>Loading…</div>}
         {!workspace.mdFilesLoading && workspace.mdFilesError === 'unauthorized' && (
           <div className="muted" style={{ padding: 16, textAlign: 'center' }}>

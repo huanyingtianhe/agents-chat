@@ -15,6 +15,8 @@ export type PageHeaderProps = {
   onSignOut: () => void;
   themeMenu: ReactNode;
   showChatsPanel: boolean;
+  showFilesPanel: boolean;
+  onToggleFiles: (trigger: HTMLElement) => void;
   showAgentsPanel: boolean;
   showNodesPanel: boolean;
   showSchedulesPanel: boolean;
@@ -42,6 +44,8 @@ export function PageHeader({
   onSignOut,
   themeMenu,
   showChatsPanel,
+  showFilesPanel,
+  onToggleFiles,
   showAgentsPanel,
   showNodesPanel,
   showSchedulesPanel,
@@ -169,6 +173,9 @@ export function PageHeader({
         <h1>🤖 Agents Chat</h1>
       </div>
       <div className="headerRight">
+        <button type="button" className={`ghostButton filesPanelToggle ${showFilesPanel ? 'activeGhost' : ''}`}
+          aria-expanded={showFilesPanel} aria-label="Files" title="Files"
+          onClick={event => onToggleFiles(event.currentTarget)}>📄</button>
         <div className="headerInlineActions">
           {themeMenu}
           <button className={`ghostButton ${showAgentsPanel ? 'activeGhost' : ''}`} onClick={() => onToggleAgents()} title="Agents">🤖</button>

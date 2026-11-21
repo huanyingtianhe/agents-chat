@@ -66,9 +66,10 @@ export function createChatScrollController(
   function correctLayout() {
     correctionFrame = 0;
     if (disposed || suspended || multiTouch || userIntent || container.clientHeight === 0) return;
-    const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    const current = measure();
+    const maximum = Math.max(0, current.contentHeight - current.height);
     // WebKit may deliver the scroll event after the resize callback.
-    if (!jumping && isIndependentScroll(geometry, measure(), lastTop, container.scrollTop)) {
+    if (!jumping && isIndependentScroll(geometry, current, lastTop, container.scrollTop)) {
       captureUserPosition();
       return;
     }
@@ -132,8 +133,17 @@ export function createChatScrollController(
     }
     const current = measure();
     if (geometryChanged(geometry, current)) {
-      if (isIndependentScroll(geometry, current, lastTop, container.scrollTop)) captureUserPosition();
-      else scheduleCorrection();
+      const top = container.scrollTop;
+      if (!jumping && isIndependentScroll(geometry, current, lastTop, top)) {
+        captureUserPosition();
+      } else {
+        // A second reflow can expand the scroll range before the correction runs.
+        // Track the observed clamp so it cannot look like a new scroll gesture.
+        geometry = current;
+        lastTop = top;
+        expectedTop = null;
+        scheduleCorrection();
+      }
       return;
     }
     if (jumping) {

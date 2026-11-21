@@ -49,6 +49,14 @@
 .chatPageRoot .chatLayout.sidebarCollapsed.agentsSidebarOpen {
   grid-template-columns: 58px minmax(0, 1fr) 280px;
 }
+@media (min-width: 901px) {
+  .chatPageRoot .chatLayout.filesPanelOpen {
+    grid-template-columns: var(--sidebar-width, 280px) 4px minmax(0, 1fr) min(48vw, 760px);
+  }
+  .chatPageRoot .chatLayout.sidebarCollapsed.filesPanelOpen {
+    grid-template-columns: 58px minmax(0, 1fr) min(48vw, 760px);
+  }
+}
 .chatPageRoot .participantsSidebar {
   border-right: 1px solid var(--border);
   background: var(--panel-bg);
@@ -428,6 +436,7 @@
   gap: 12px;
 }
 .chatPageRoot .headerInlineActions .ghostButton,
+.chatPageRoot .header .filesPanelToggle,
 .chatPageRoot .headerOverflowBtn {
   box-sizing: border-box;
   width: var(--control-height);

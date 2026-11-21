@@ -1,9 +1,7 @@
 'use client';
 
 import { memo, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { mdComponents } from '../markdownHelpers';
+import { ChatMarkdown, MessageAgentContext } from './ChatMarkdown';
 import type { Agent } from '../../agents/agentTypes';
 import type { ChatMessage, AgentUserRequestResponse } from '../../chat/chatTypes';
 import type { FailedSendState } from '../../chat/components/FailedSendControls';
@@ -86,6 +84,7 @@ export const MessageBubble = memo(function MessageBubble({
   };
 
   return (
+    <MessageAgentContext.Provider value={message.agentId}>
     <div data-message-id={message.id} className={`message ${message.type} ${message.pending ? 'streamingMessage' : ''} ${message.summary ? 'summaryCard' : ''}`}>
       {message.type !== 'user' && (
         <div className="messageHeader">
@@ -166,7 +165,7 @@ export const MessageBubble = memo(function MessageBubble({
             <>
               <FailedSendNotice failure={failedSend} />
               <div ref={markdownContentRef} className={`messageContent markdownBody ${message.pending ? 'pending' : ''} ${isLong && isCollapsed ? 'collapsed' : ''}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{message.content}</ReactMarkdown>
+                <ChatMarkdown>{message.content}</ChatMarkdown>
               </div>
               <AttachmentList attachments={message.attachments} mode="message" onPreview={onOpenImage} />
               {message.pending && message.content && (
@@ -219,6 +218,7 @@ export const MessageBubble = memo(function MessageBubble({
         </>
       )}
     </div>
+    </MessageAgentContext.Provider>
   );
 });
 

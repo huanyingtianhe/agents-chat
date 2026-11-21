@@ -1,5 +1,6 @@
 'use client';
 
+import { useLayoutEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { markdownToHtml, mdComponents } from '../../messages/markdownHelpers';
@@ -18,6 +19,17 @@ type FileEditorPanelProps = {
 
 export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly }: FileEditorPanelProps) {
   const filePath = workspace.mdSelectedFile;
+  const { lineTarget, mdEditContent } = workspace;
+  const { fileContentRef } = selection;
+  useLayoutEffect(() => {
+    if (!lineTarget) return;
+    const container = fileContentRef.current;
+    const row = container?.querySelector<HTMLElement>(`[data-line-num="${lineTarget.line}"]`);
+    if (!container || !row) return;
+    container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top
+      - (container.clientHeight - row.offsetHeight) / 2;
+  }, [lineTarget, fileContentRef]);
+
   if (!filePath) return null;
   const imagePreview = workspace.mdFileKind === 'image';
 
@@ -69,6 +81,7 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
         key={idx}
         className={`fileLine ${isHighlighted ? 'highlighted' : ''} ${commentsForLine.length > 0 && !isHighlighted ? 'has-comment' : ''}`}
         data-line-num={lineNum}
+        data-file-line-target={lineTarget?.line === lineNum || undefined}
       >
         <span className="fileLineGutter"><span className="fileLineNum">{lineNum}</span></span>
         <span className="fileLineText">{renderReviewFileLineText(line, lineNum, selectedComment)}</span>
@@ -160,7 +173,7 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
           {workspace.mdDirty && <span className="mdDirtyBadge">● Unsaved</span>}
         </div>
         <div className="mdEditorToolbarRight">
-          {!mobileReadOnly && isMarkdownFile(filePath) && (
+          {!lineTarget && !mobileReadOnly && isMarkdownFile(filePath) && (
             <div className="mdModeToggle">
               <button className={`mdModeBtn ${workspace.mdEditorMode === 'split' ? 'active' : ''}`} onClick={() => {
                 if (workspace.mdEditorMode === 'live') {
@@ -175,7 +188,7 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
               }}>Live Edit</button>
             </div>
           )}
-          {!mobileReadOnly && isHtmlFile(filePath) && (
+          {!lineTarget && !mobileReadOnly && isHtmlFile(filePath) && (
             <>
               <span className="mdPreviewBadge">Rendered HTML</span>
               <div className="mdModeToggle">
@@ -194,7 +207,7 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
           ) : <span className="mdPreviewBadge">Image preview</span>}
           {mobileReadOnly && !imagePreview ? (
             <span className="mobileDesktopHint">Use the desktop interface to edit files.</span>
-          ) : !mobileReadOnly && !imagePreview ? (
+          ) : !lineTarget && !mobileReadOnly && !imagePreview ? (
             <button className="mdEditorBtn save" onClick={() => void workspace.saveMdFile()} disabled={workspace.mdSaving || !workspace.mdDirty}>
               {workspace.mdSaving ? 'Saving…' : '💾 Save'}
             </button>
@@ -211,6 +224,15 @@ export function FileEditorPanel({ workspace, comments, selection, mobileReadOnly
       {(mobileReadOnly || !workspace.mdConflict) && (imagePreview ? (
         <div className="mdImagePreviewWrap">
           <img className="mdImagePreview" src={workspace.mdFileContent} alt={filePath} />
+        </div>
+      ) : lineTarget ? (
+        <div className="mdEditorSimple">
+          {lineTarget.line > mdEditContent.split('\n').length && (
+            <div className="fileWorkspaceError" role="status">Line {lineTarget.line} is outside this file.</div>
+          )}
+          <div className="fileContentWithLines" ref={selection.fileContentRef} onMouseUp={selection.handleTextSelection} onScroll={selection.handleFileContentScroll}>
+            {renderFileLines()}
+          </div>
         </div>
       ) : mobileReadOnly && isMarkdownFile(filePath) ? (
         <div className="mobileMarkdownViewer">

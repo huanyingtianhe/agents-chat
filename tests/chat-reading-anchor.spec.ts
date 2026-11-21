@@ -177,6 +177,27 @@ test('keeps latest messages at the bottom through orientation round trips', asyn
   }
 });
 
+test('keeps following after a scroll clamp in an intermediate viewport layout', async ({ page }) => {
+  const chat = page.locator('.chatContainer');
+  const clamp = await chat.evaluate((element) => {
+    const shell = document.querySelector<HTMLElement>('.page')!;
+    const height = shell.clientHeight;
+    const before = element.scrollTop;
+
+    shell.style.setProperty('--app-viewport-height', `${height + 30}px`);
+    const clamped = element.scrollTop;
+    // Deliver the intermediate scroll before the final layout reaches ResizeObserver.
+    element.dispatchEvent(new Event('scroll'));
+    shell.style.setProperty('--app-viewport-height', `${height - 30}px`);
+
+    return before - clamped;
+  });
+  expect(clamp).toBeGreaterThan(4);
+  await expect.poll(() => chat.evaluate((element) =>
+    element.scrollHeight - element.clientHeight - element.scrollTop,
+  )).toBeLessThanOrEqual(4);
+});
+
 test('keeps latest messages at the bottom while the composer is remeasured', async ({ page }) => {
   const chat = page.locator('.chatContainer');
   const composer = page.locator('textarea.composerTextarea');
@@ -251,7 +272,8 @@ test('accepts real wheel input while a viewport transition is settling', async (
   await page.setViewportSize(landscape);
   const box = await page.locator('.chatContainer').boundingBox();
   if (!box) throw new Error('Missing scroll viewport');
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // The viewport can shrink past the old midpoint before the wheel is dispatched.
+  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(24, box.height / 2));
   await page.mouse.wheel(0, -200);
   await expect.poll(async () => (await readHistoricalPoint(page)).offset).toBeLessThan(original.offset - 20);
   await settleLayout(page);
@@ -429,15 +451,12 @@ test('keeps the same text in a tall horizontally scrollable table bottom-anchore
 
 test('restores the historical reading point after visiting a file', async ({ page }) => {
   const point = await captureHistoricalPoint(page);
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.getByRole('button', { name: 'Files agent' }).click();
   await page.getByRole('option', { name: 'Alpha Agent' }).click();
   await page.getByRole('button', { name: 'README.md' }).click();
   await expect(page.locator('.mobileMarkdownViewer')).toBeVisible();
-  await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('tab', { name: 'Chats' }).click();
-  await page.getByRole('button', { name: 'Close active panel' }).click({ position: { x: 380, y: 100 } });
+  await page.getByRole('button', { name: 'Close files panel' }).click();
   await expect(page.locator('.chatContainer')).toBeVisible();
   await settleLayout(page);
   await expect.poll(() => historicalPointError(page, point)).toBeLessThanOrEqual(2);
